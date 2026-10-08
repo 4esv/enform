@@ -126,6 +126,7 @@ The cast are people, not roles. Their grants give their capabilities.
 | Priya | Department coordinator. Owns the overload flow. | On `course-overload`: `flow.edit`, `flow.dryrun`, `instance.read`, `instance.timeline`, `task.reassign` |
 | Sam | Student. | `instance.start` on `course-overload`, through the group `All-Students` |
 | Dr. Okafor | Advisor of Sam. | Target of step `advisor` by field. `step.outcome:approve` and `step.outcome:send_back` on that step. |
+| Dr. Lin | Chair of Computer Science. | Member of `CS-Chairs`. `step.outcome:approve` and `step.outcome:send_back` on step `chair`. |
 | Lee, Ana | Registrar staff. Peers. | Members of team `registrar-office`. `step.outcome:approve` and `step.outcome:reject` on step `registrar`. |
 | Jordan | Registrar reviewer. | Member of `registrar-office`. `step.outcome:send_back` only. Jordan is a reviewer, not an approver. |
 
@@ -183,6 +184,7 @@ enform flow publish course-overload            # version 1, hash a1b2c3
 enform grant add group:All-Students   instance.start         flow:course-overload
 enform grant add user:lee             step.outcome:approve,step.outcome:reject flow:course-overload/step:registrar
 enform grant add user:ana             step.outcome:approve,step.outcome:reject flow:course-overload/step:registrar
+enform grant add group:CS-Chairs      step.outcome:approve,step.outcome:send_back flow:course-overload/step:chair
 enform grant add user:jordan          step.outcome:send_back flow:course-overload/step:registrar
 enform grant add user:priya           flow.edit,flow.dryrun,instance.read,instance.timeline,task.reassign flow:course-overload
 enform grant list flow:course-overload
