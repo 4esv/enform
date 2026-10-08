@@ -42,7 +42,7 @@ The MVP is complete when one real multi-step flow operates in production and mee
 
 ## 2. Axioms
 
-Axioms state the reasons. Invariants (section 4) enforce the axioms and make them testable. Requirements (section 5) state what to build. Each requirement traces to one or more axioms.
+Axioms state the reasons. Invariants (section 4) enforce the axioms and make them testable. Requirements (section 5) state what to build. Each requirement traces to one or more axioms or invariants.
 
 | ID | Axiom | Meaning |
 |---|---|---|
@@ -83,26 +83,26 @@ These terms are normative. Code, documentation, API and interface use them with 
 
 ## 4. Invariants
 
-An invariant is a property that is always true. Each invariant has a test suite named `invariants/I<n>-<slug>`. CI fails if an invariant has no suite, or if a suite is skipped.
+An invariant is a property that is always true. Each invariant has a test suite, named in the table. CI fails if an invariant has no suite, or if a suite is skipped.
 
-| ID | Invariant | Axioms |
-|---|---|---|
-| I1 | Idempotent operations. Each change is an operation with an ID that the client creates. If the engine applies an operation two times, the result is the same as one time. | A2, A7 |
-| I2 | Transactional outbox. A state change and the side effects that it causes commit in one database transaction. Both commit, or neither commits. | A2, A4 |
-| I3 | Idempotent side effects. Each side effect has a deterministic key: instance, step, rule and occurrence. It executes a maximum of one time, also after a retry, crash or redelivery. | A2 |
-| I4 | Append-only log. The engine does not update or delete events. The only exception is a redaction event (D5). The engine can rebuild all derived state from the log. | A2, A8 |
-| I5 | No blocking locks. A read or an edit never waits for another user. Only step completion is serialized, with an optimistic version check. | A1 |
-| I6 | Determinism. The same definition, events, clock and ID source give the same result. The clock and the ID generator are injected. No code reads the system clock directly. | A6 |
-| I7 | Dry-run parity. Dry runs and live runs use the same code path. Only the side-effect sink and the clock are different. The same scenarios run in both modes and must give the same side-effect intents. | A6 |
-| I8 | Authorization everywhere. The server authorizes every read and write. This includes realtime broadcasts, exports and PDFs. A subscriber never receives an event that it cannot see. | A3 |
-| I9 | Canonical round trip. Conversion of a definition from file to operations and back to file gives an identical file, byte for byte. | A3 |
-| I10 | No silent routing loss. If the targets of a task resolve to nobody, the task goes to the Unroutable queue. The flow owner gets an alert. | A4, A8 |
-| I11 | Encrypted local drafts. Drafts in the browser are encrypted with a key that the session controls. Sign-out or idle timeout deletes them. | A7 |
-| I12 | Public API only. The interface uses only the generated public API client. A lint rule enforces this. | A3, A9 |
-| I13 | Stamped instances. Each instance records its definition version and the resolved assignees with a membership snapshot. It also records a log of connector calls: operation, time and outcome. It does not record response bodies. | A8 |
-| I14 | Attributed configuration. Each change that affects behavior is an attributed, versioned operation on the log. This includes definitions, connectors, grants, teams, templates and settings. | A8 |
-| I15 | No acknowledged edit is lost. If the interface shows "Saved on this device", the edit gets to the server, or it stays recoverable on the device until a deliberate deletion. The interface always shows the difference between "Saved on this device" and "Synced". | A4, A7 |
-| I16 | No false confirmation. The interface never shows an unconfirmed state as confirmed. An optimistic update shows as pending until the server acknowledges it. | A4 |
+| ID | Invariant | Axioms | Suite |
+|---|---|---|---|
+| I1 | Idempotent operations. Each change is an operation with an ID that the client creates. If the engine applies an operation two times, the result is the same as one time. | A2, A7 | `invariants/I1-idempotent-ops` |
+| I2 | Transactional outbox. A state change and the side effects that it causes commit in one database transaction. Both commit, or neither commits. | A2, A4 | `invariants/I2-transactional-outbox` |
+| I3 | Idempotent side effects. Each side effect has a deterministic key: instance, step, rule and occurrence. It executes a maximum of one time, also after a retry, crash or redelivery. | A2 | `invariants/I3-idempotent-side-effects` |
+| I4 | Append-only log. The engine does not update or delete events. The only exception is a redaction event (D5). The engine can rebuild all derived state from the log. | A2, A8 | `invariants/I4-append-only-log` |
+| I5 | No blocking locks. A read or an edit never waits for another user. Only step completion is serialized, with an optimistic version check. | A1 | `invariants/I5-no-blocking-locks` |
+| I6 | Determinism. The same definition, events, clock and ID source give the same result. The clock and the ID generator are injected. No code reads the system clock directly. | A6 | `invariants/I6-determinism` |
+| I7 | Dry-run parity. Dry runs and live runs use the same code path. Only the side-effect sink and the clock are different. The same scenarios run in both modes and must give the same side-effect intents. | A6 | `invariants/I7-dry-run-parity` |
+| I8 | Authorization everywhere. The server authorizes every read and write. This includes realtime broadcasts, exports and PDFs. A subscriber never receives an event that it cannot see. | A3 | `invariants/I8-authorization-everywhere` |
+| I9 | Canonical round trip. Conversion of a definition from file to operations and back to file gives an identical file, byte for byte. | A3 | `invariants/I9-canonical-round-trip` |
+| I10 | No silent routing loss. If the targets of a task resolve to nobody, the task goes to the Unroutable queue. The flow owner gets an alert. | A4, A8 | `invariants/I10-no-silent-routing-loss` |
+| I11 | Encrypted local drafts. Drafts in the browser are encrypted with a key that the session controls. Sign-out or idle timeout deletes them. | A7 | `invariants/I11-encrypted-local-drafts` |
+| I12 | Public API only. The interface uses only the generated public API client. A lint rule enforces this. | A3, A9 | `invariants/I12-public-api-only` |
+| I13 | Stamped instances. Each instance records its definition version and the resolved assignees with a membership snapshot. It also records a log of connector calls: operation, time and outcome. It does not record response bodies. | A8 | `invariants/I13-stamped-instances` |
+| I14 | Attributed configuration. Each change that affects behavior is an attributed, versioned operation on the log. This includes definitions, connectors, grants, teams, templates and settings. | A8 | `invariants/I14-attributed-configuration` |
+| I15 | No acknowledged edit is lost. If the interface shows "Saved on this device", the edit gets to the server, or it stays recoverable on the device until a deliberate deletion. The interface always shows the difference between "Saved on this device" and "Synced". | A4, A7 | `invariants/I15-no-acknowledged-edit-lost` |
+| I16 | No false confirmation. The interface never shows an unconfirmed state as confirmed. An optimistic update shows as pending until the server acknowledges it. | A4 | `invariants/I16-no-false-confirmation` |
 
 ## 5. In scope
 
@@ -133,19 +133,19 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 
 | ID | Requirement | Traces to |
 |---|---|---|
-| FM-1 | Controls: text, long text, number, money, date, select, multi-select, checkbox, radio, yes/no, email, phone, file upload, user picker, static text, repeating section. | |
-| FM-2 | Conditions on data, step and user can show, hide, collapse, require or lock sections and fields. | |
+| FM-1 | Controls: text, long text, number, money, date, select, multi-select, checkbox, radio, yes/no, email, phone, file upload, user picker, static text, repeating section. | A3 |
+| FM-2 | Conditions on data, step and user can show, hide, collapse, require or lock sections and fields. | A9 |
 | FM-3 | Each step sets which fields are visible and which fields are editable. | I8 |
 | FM-4 | The server runs all rules and validation again at each submission. The server does not trust client state. | I8 |
 | FM-5 | All rules use one expression format. Authors use a visual condition builder, or TypeScript in a sandbox. The sandbox has CPU, memory and time limits and no network access. | A3, I6 |
-| FM-6 | Connector `read` operations can supply option lists and default values. | |
+| FM-6 | Connector `read` operations can supply option lists and default values. | A3 |
 
 ### 5.4 Workflow (WF)
 
 | ID | Requirement | Traces to |
 |---|---|---|
-| WF-1 | Steps are linear, with conditional branches and skip conditions. An instance has one active step at a time. | |
-| WF-2 | Step outcomes are configurable: approve, reject, send back, or custom. Each outcome maps to a transition. | |
+| WF-1 | Steps are linear, with conditional branches and skip conditions. An instance has one active step at a time. | A9 |
+| WF-2 | Step outcomes are configurable: approve, reject, send back, or custom. Each outcome maps to a transition. | A9 |
 | WF-3 | Send back moves the instance to an earlier step. It requires a comment. The log records it as a revision. | A2 |
 | WF-4 | The starter can withdraw an instance, unless the flow prevents it. | A2 |
 | WF-5 | A compensating event can undo each manual action: edit, claim, release, takeover, reassign, outcome, withdraw, cancel. Each flow sets the limits for undo. | A2, I4 |
@@ -154,8 +154,8 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 
 | ID | Requirement | Traces to |
 |---|---|---|
-| AS-1 | Target types: user, directory group, team, or dynamic. Dynamic targets are `starter`, `field:<key>` and `manager-of:starter`. | |
-| AS-2 | Completion policy: the first person to claim the task owns it. | |
+| AS-1 | Target types: user, directory group, team, or dynamic. Dynamic targets are `starter`, `field:<key>` and `manager-of:starter`. | A1 |
+| AS-2 | Completion policy: the first person to claim the task owns it. | A1 |
 | AS-3 | Any eligible target can take over a claimed task. Each step sets when: always, after an idle period, or never. The person who takes over must give a reason. | A1, A8 |
 | AS-4 | Groups and teams resolve live, when a person views or claims the task. Dynamic targets resolve one time, when the engine creates the task. The instance records both. | I13 |
 | AS-5 | The Unroutable queue operates as I10 states. | I10 |
@@ -176,8 +176,8 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | AC-1 | Authorization is a pure function of grants, scope and resource. Only the engine evaluates it. | A9, I8 |
 | AC-2 | Grant changes are attributed, versioned operations. | I14 |
 | AC-3 | The GUI can show named presets, such as "Approver". A preset expands to scopes when the grant is made. The engine stores only scopes. Presets have no meaning in the engine. | A9 |
-| AC-4 | A target of a step can claim the tasks of that step. Scopes of the form `step.outcome:<name>` control which outcomes that person can choose. Thus reviewers and approvers can share one step. | |
-| AC-5 | A starter can always read their own instances. A starter can withdraw an instance if the flow allows it. | |
+| AC-4 | A target of a step can claim the tasks of that step. Scopes of the form `step.outcome:<name>` control which outcomes that person can choose. Thus reviewers and approvers can share one step. | A9 |
+| AC-5 | A starter can always read their own instances. A starter can withdraw an instance if the flow allows it. | A4 |
 
 **Scopes**
 
@@ -206,12 +206,12 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | ID | Requirement | Traces to |
 |---|---|---|
 | SE-1 | Email goes through an outbox. A worker sends it, with retries and backoff. Each message shows one status: queued, sent, failed or bounced. A flow owner can send it again. | I2, I3, A4 |
-| SE-2 | Each event type has an email template with variables and a preview. Event types: task assigned, sent back, completed, reminder, escalation. | |
-| SE-3 | Reminders occur at configured intervals before and after the due time. | |
+| SE-2 | Each event type has an email template with variables and a preview. Event types: task assigned, sent back, completed, reminder, escalation. | A4 |
+| SE-3 | Reminders occur at configured intervals before and after the due time. | A1 |
 | SE-4 | At the deadline, an escalation notifies a person or adds targets. It does not remove the current owner. | A1 |
 | SE-5 | Timers are durable jobs. The engine creates and cancels them in the same transaction as their task. | I2, I3 |
 | SE-6 | Administrators configure connectors. Each connector operation is declared `read` or `write`. The default is `write` (D4). Calls have timeouts and idempotency keys. Writes have retries. | I3, I7 |
-| SE-7 | A SQL connector gives named, parameterized queries for SQL Server and PostgreSQL. Flows do not contain raw SQL. | |
+| SE-7 | A SQL connector gives named, parameterized queries for SQL Server and PostgreSQL. Flows do not contain raw SQL. | A3 |
 
 ### 5.8 Realtime and resilience (RT)
 
@@ -233,7 +233,7 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | DR-3 | Emails go to a preview inbox. They are not sent. | I7 |
 | DR-4 | The clock is simulated. The author can move time forward so that timers fire. | I6 |
 | DR-5 | The author can run a step as a test identity. This requires `org.impersonate`. The log records each use. | I8, I14 |
-| DR-6 | Dry-run records expire automatically. They do not show in live views. | |
+| DR-6 | Dry-run records expire automatically. They do not show in live views. | A6 |
 
 ### 5.10 Visibility and timeline (VT)
 
@@ -385,7 +385,7 @@ Before 1.0.0, a breaking change increments the minor version. `feat` and `fix` i
 3. Each issue and each pull request cites the requirement or invariant IDs that it serves. Work that cites no ID is out of scope.
 4. IDs are permanent. To remove a requirement, mark it **Withdrawn** and add a ledger entry. Do not reuse the ID.
 5. Do not include unrelated changes. Put each unrelated change in its own pull request, with its own ID.
-6. `STORIES.md` defines the acceptance tests. A requirement is complete only when each story that cites it passes. The engine path (CLI and API) passes first. The interface path passes second.
+6. `STORIES.md` defines the acceptance tests. A requirement is complete only when each story that cites it passes. The engine path (CLI and API) passes first. The interface path passes second. A requirement that no story cites is complete when its requirement test passes.
 7. A story does not add scope. If a story needs something that section 5 does not contain, amend this document first.
 
 ## 11. Engineering practice
@@ -442,7 +442,7 @@ A requirement is done when all items are true:
 - [ ] The generated fuzzy paths of those stories pass all invariant oracles.
 - [ ] The evidence table of `STORIES.md` is updated.
 - [ ] User documentation and API reference are updated.
-- [ ] The changelog has an entry, if users can see the change.
+- [ ] The changelog has an entry, if the change is a `feat`, `fix`, `perf` or a breaking change (9.5).
 - [ ] An ADR exists, if the change made a decision that is costly to reverse.
 
 ## 12. Decisions
@@ -468,3 +468,4 @@ This ledger is append-only. The newest entry is last.
 |---|---|---|---|
 | 2026-10-08 | Initial scope accepted. | All | Charter for `0.0.0`. |
 | 2026-10-08 | Section 8: ID-2 and ID-3 move to `0.2.0`; WF-4 and AC-5 to `0.3.0`; RT-6 to `0.6.0`. ID-5, DX-1 to DX-4, I2, I3, I5, I8 to I10, I12 and I13 get a milestone. The web interface starts at `0.4.0`. | ID-2, ID-3, ID-5, WF-4, AC-5, RT-6, DX-1 to DX-4, I2, I3, I5, I8, I9, I10, I12, I13 | Each milestone must demonstrate its row with its own issues (#98). |
+| 2026-10-08 | A requirement that no story cites is complete when its requirement test passes; CI accepts that. Requirements trace to axioms or invariants; empty cells filled. Suite and story slugs fixed. Refs added to S01, S02, S03, S09, S15. S07 skips `cli` with a reason. S11 shows revisions in the timeline. 11.6 uses the changelog trigger of 9.5. | All | Sixteen requirements had no story and no completion rule (#99). |
