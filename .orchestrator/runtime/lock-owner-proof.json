@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "proof": {
+    "pid": 79562,
+    "host": "Paolo.local",
+    "startedAt": "2026-10-08T23:57:05.009Z"
+  },
+  "lock_session_id": "7ee39e92-62b1-4402-9fdb-7b6cce81d60e",
+  "semantic_session_id": "main-2026-10-08-session-54",
+  "repo_root": "/Users/axel/Code/projects/enform",
+  "written_at": "2026-10-08T23:57:05.010Z"
+}

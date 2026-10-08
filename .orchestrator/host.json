@@ -1,0 +1,11 @@
+{
+  "host_class": "macos-arm64-m3pro",
+  "os": "darwin",
+  "os_version": "27.0",
+  "cpu_cores": 11,
+  "ram_total_gb": 18,
+  "hostname_hash": "5e4959881bee5eaceb7b5e9637e7853bfa852e78c7e986a882ef59cd10b47d13",
+  "is_ssh": false,
+  "platform": "pi",
+  "first_seen": "2026-10-08T23:57:04.906Z"
+}

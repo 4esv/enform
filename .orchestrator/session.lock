@@ -1,0 +1,11 @@
+{
+  "session_id": "7ee39e92-62b1-4402-9fdb-7b6cce81d60e",
+  "started_at": "2026-10-08T23:57:05.009Z",
+  "last_heartbeat": "2026-10-08T23:57:05.523Z",
+  "mode": "session",
+  "pid": 79562,
+  "host": "Paolo.local",
+  "host_id": "paolo",
+  "ttl_hours": 4,
+  "semantic_session_id": "main-2026-10-08-session-54"
+}
