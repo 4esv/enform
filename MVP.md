@@ -138,7 +138,7 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 | FM-2 | Conditions on data, step and user can show, hide, collapse, require or lock sections and fields. | A9 |
 | FM-3 | Each step sets which fields are visible and which fields are editable. | I8 |
 | FM-4 | The server runs all rules and validation again at each submission. The server does not trust client state. | I8 |
-| FM-5 | All rules use one expression format. Authors use a visual condition builder, or TypeScript in a sandbox. The sandbox has CPU, memory and time limits and no network access. | A3, I6 |
+| FM-5 | All rules use one expression format: a JSON expression tree (ADR 0008). The visual condition builder writes it. A TypeScript rule is one node type of the tree. It runs in a sandbox with CPU, memory and time limits and no network access. | A3, I6 |
 | FM-6 | Connector `read` operations can supply option lists and default values. | A3 |
 
 ### 5.4 Workflow (WF)
@@ -473,3 +473,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | Glossary: a flow owner is a principal with `task.reassign` on the flow. | I10, SE-1 | I10, SE-1, S06 and S08 used a term that nothing defined (#100). |
 | 2026-10-08 | SE-2 adds the event types unroutable, taken over, withdrawn or cancelled, undone. | SE-2, I10 | S08, S10, S13 and S16 notify people; SE-2 had no template for it (#101). |
 | 2026-10-08 | `STORIES.md` cast: Dr. Lin, chair, member of `CS-Chairs`. | AS-1, WF-1 | The Actor operator needs a person for each step (#102). |
+| 2026-10-08 | FM-5: the one format is a JSON expression tree. A TypeScript rule is a node of it, run in the sandbox. | FM-5 | FM-5 and S05 pointed at different formats (#103). ADR 0008 records the decision. |
