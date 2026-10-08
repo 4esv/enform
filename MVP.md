@@ -475,3 +475,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | `STORIES.md` cast: Dr. Lin, chair, member of `CS-Chairs`. | AS-1, WF-1 | The Actor operator needs a person for each step (#102). |
 | 2026-10-08 | FM-5: the one format is a JSON expression tree. A TypeScript rule is a node of it, run in the sandbox. | FM-5 | FM-5 and S05 pointed at different formats (#103). ADR 0008 records the decision. |
 | 2026-10-08 | D7 names the pilot flow: `information-request`. | D7 | The real flow sets the limits of the MVP (#104). |
+| 2026-10-08 | Reviewer-only work is a named variant of S09 and S11. No S17. | AC-4, WF-2 | S02 and S11 already test the reviewer's limits (#105). |
