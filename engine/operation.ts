@@ -38,6 +38,23 @@ export type Event = {
 export type Log = readonly Event[]
 
 /**
+ * The type of a redaction event (Issue #10, I4, D5). I4 forbids updating or
+ * deleting an event; a redaction is the only exception, and it is itself an
+ * appended event. It requires `org.redact` (MVP.md 5.6), it is attributed, and
+ * it is not reversible. This is the shape only: the redaction logic arrives
+ * with the story that needs it.
+ */
+export const REDACT_TYPE = 'log.redacted@1'
+
+/** The payload of a redaction event: which event it covers and why (D5). */
+export type RedactionPayload = {
+  /** The `seq` of the event that the redaction covers. */
+  readonly targetSeq: number
+  /** Why the redaction happened, for the audit trail. */
+  readonly reason: string
+}
+
+/**
  * Create a client operation from an injected clock and ID generator (I6). Two
  * operations with the same ID are the same change, however often they arrive.
  */

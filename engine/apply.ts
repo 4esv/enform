@@ -33,3 +33,14 @@ export function apply(operation: Operation, state: State): State {
     log: [...state.log, event],
   }
 }
+
+/**
+ * Rebuild the derived state from the log (Issue #10, I4). The log is the
+ * single source of truth: the engine can rebuild every derived value from it,
+ * so a rebuild reproduces the state that the same sequence of applies
+ * produced. A rebuild reads the log in order and never changes it: the engine
+ * does not update or delete an event (D5 is the only exception).
+ */
+export function rebuild(log: Log): State {
+  return { applied: new Set(), log }
+}
