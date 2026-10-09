@@ -71,6 +71,7 @@ These terms are normative. Code, documentation, API and interface use them with 
 | Task | The unit of work that a step creates on an instance. |
 | Target | The recipient of a task: a user, a directory group, a team, or a dynamic rule. |
 | Team | A named set of users and groups. enform stores and maintains it. |
+| Flow owner | A principal with `task.reassign` on the flow. Owners get the alerts of I10 and can send email again (SE-1). |
 | Claim | To take ownership of a task. To view a task does not claim it. |
 | Grant | A record of `(principal, scope, resource)`. Grants are the only source of permission. |
 | Scope | One permission that a grant gives, for example `instance.start`. |
@@ -193,7 +194,7 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | `instance.edit` | flow | Edit instance data outside the step sequence. Requires a reason. |
 | `instance.cancel` | flow | Cancel any instance. Requires a reason. |
 | `instance.timeline` | flow | Read complete timelines, with configuration changes included. |
-| `task.reassign` | flow, step | Reassign or release any task, also if the actor is not a target. |
+| `task.reassign` | flow, step | Reassign or release any task, also if the actor is not a target. On a flow, makes the principal a flow owner (section 3). |
 | `step.outcome:<name>` | flow, step | Choose the named outcome on a task that the actor holds. |
 | `org.connectors` | org | Manage connectors. |
 | `org.teams` | org | Manage teams. |
@@ -469,3 +470,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | Initial scope accepted. | All | Charter for `0.0.0`. |
 | 2026-10-08 | Section 8: ID-2 and ID-3 move to `0.2.0`; WF-4 and AC-5 to `0.3.0`; RT-6 to `0.6.0`. ID-5, DX-1 to DX-4, I2, I3, I5, I8 to I10, I12 and I13 get a milestone. The web interface starts at `0.4.0`. | ID-2, ID-3, ID-5, WF-4, AC-5, RT-6, DX-1 to DX-4, I2, I3, I5, I8, I9, I10, I12, I13 | Each milestone must demonstrate its row with its own issues (#98). |
 | 2026-10-08 | A requirement that no story cites is complete when its requirement test passes; CI accepts that. Requirements trace to axioms or invariants; empty cells filled. Suite and story slugs fixed. Refs added to S01, S02, S03, S09, S15. S07 skips `cli` with a reason. S11 shows revisions in the timeline. 11.6 uses the changelog trigger of 9.5. | All | Sixteen requirements had no story and no completion rule (#99). |
+| 2026-10-08 | Glossary: a flow owner is a principal with `task.reassign` on the flow. | I10, SE-1 | I10, SE-1, S06 and S08 used a term that nothing defined (#100). |
