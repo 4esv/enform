@@ -42,5 +42,5 @@ export function apply(operation: Operation, state: State): State {
  * does not update or delete an event (D5 is the only exception).
  */
 export function rebuild(log: Log): State {
-  return { applied: new Set(), log }
+  return { applied: new Set(log.map((event) => event.operationId)), log }
 }

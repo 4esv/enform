@@ -59,7 +59,7 @@ function assertAppendOnly(
   expect(grown.log).toHaveLength(before.length + 1)
 }
 
-test.fails('#10 an append keeps the past events and a rebuild reproduces the state (I4)', () => {
+test('#10 an append keeps the past events and a rebuild reproduces the state (I4)', () => {
   const { state, next } = sample()
   expect(state.log).toHaveLength(3)
   assertAppendOnly(state, next)
