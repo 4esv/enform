@@ -75,6 +75,14 @@ export type Instance = {
    */
   readonly done?: boolean
   /**
+   * The revision of each step that a send back has revisited (WF-3, S11). It
+   * maps a step key to the revision that the instance is on for that step: the
+   * first time the engine enters a step is revision 1, and each send back to
+   * that step records the next revision. It is absent until a send back records
+   * one.
+   */
+  readonly revisions?: Readonly<Record<string, number>>
+  /**
    * The log position that this view of the instance was read at (S09, I5). The
    * engine reads it from the log length (`version` in concurrency.ts), and an
    * action carries it as the version that the actor based its action on. It is
