@@ -20,7 +20,7 @@ test('#24 the api-mode runner reaches the golden end state (S01)', async () => {
 // of I14. The pipeline must reject it. The check is marked expected to fail
 // until the pipeline is implemented.
 
-test.fails('#28 the oracles fail a run whose behavior event has no actor', () => {
+test('#28 the oracles fail a run whose behavior event has no actor', () => {
   const expected = goldenView(golden)
   const unattributed: State = {
     applied: new Set(expected.applied),

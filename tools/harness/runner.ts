@@ -1,12 +1,14 @@
 import { emptyState } from '../../engine/apply.js'
 import { createOperation } from '../../engine/operation.js'
-import { goldenView, type Scenario, toView } from './scenario.js'
+import { oracles } from './oracles.js'
+import type { Scenario } from './scenario.js'
 import { startApi } from './server.js'
 
 // Issue #24, STORIES.md Test method: the golden-path runner. In api mode each
 // step is an HTTP request against the in-process server; the end state is the
-// server's, compared to the deterministic engine replay (I6). A golden path
-// is deterministic, so the runner never retries.
+// server's. Issue #28 runs the oracle pipeline over the end state: the
+// invariants, the golden end state, then the timeline. A golden path is
+// deterministic, so the runner never retries.
 
 export async function runGolden(scenario: Scenario): Promise<void> {
   const api = startApi(emptyState)
@@ -28,11 +30,7 @@ export async function runGolden(scenario: Scenario): Promise<void> {
       })
       if (response.status !== 201) throw new Error(`step ${i + 1} failed: HTTP ${response.status}`)
     }
-    const actual = toView(api.state())
-    const golden = goldenView(scenario)
-    if (JSON.stringify(actual) !== JSON.stringify(golden)) {
-      throw new Error('the api-mode end state differs from the golden end state')
-    }
+    oracles(api.state(), scenario)
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve()))
