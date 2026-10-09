@@ -1,6 +1,11 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
-import { type ActorId, createOperation, type Event } from '../../engine/operation.js'
-import type { OutboxEntry } from '../../engine/outbox.js'
+import {
+  type ActorId,
+  createOperation,
+  type Event,
+  type Operation,
+} from '../../engine/operation.js'
+import { createOutboxOperation, type OutboxEntry } from '../../engine/outbox.js'
 
 // Issue #24, STORIES.md Test method: one executable scenario per story. Its
 // steps are "a person acts, then a condition must be true". The runner
@@ -38,18 +43,25 @@ export function toView(state: State): StateView {
   return { applied: [...state.applied], log: state.log }
 }
 
+/**
+ * The operation that one step appends (I2): a step with side effects carries
+ * them in the same operation, so one `apply` commits the state change and its
+ * side effects together. A step with no side effect keeps its payload.
+ */
+export function stepOperation(step: Step, index: number): Operation {
+  const deps = { clock: () => index + 1, ids: () => `op-${index + 1}` }
+  const outbox = step.outbox ?? []
+  return outbox.length > 0
+    ? createOutboxOperation(step.type, step.payload, outbox, deps, step.actor)
+    : createOperation(step.type, step.payload, deps, step.actor)
+}
+
 // The engine-side replay of the steps (I6): the golden end state that a run
 // must reproduce. The clock is the step index and the IDs are `op-N`.
 export function goldenView(value: Scenario): StateView {
   let state = emptyState
   value.steps.forEach((step, i) => {
-    const operation = createOperation(
-      step.type,
-      step.payload,
-      { clock: () => i + 1, ids: () => `op-${i + 1}` },
-      step.actor
-    )
-    state = apply(operation, state)
+    state = apply(stepOperation(step, i), state)
   })
   return toView(state)
 }

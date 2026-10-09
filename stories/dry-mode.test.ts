@@ -36,7 +36,7 @@ const publishing = scenario({
   ],
 })
 
-test.fails('#26 the dry run gives the same side-effect intents as api mode (I7)', async () => {
+test('#26 the dry run gives the same side-effect intents as api mode (I7)', async () => {
   const declared = publishing.steps.flatMap((step) => step.outbox ?? [])
   expect(declared.length, 'the scenario declares no side effect to compare').toBeGreaterThan(0)
   const api = await runSteps(publishing, { mode: 'api' })
