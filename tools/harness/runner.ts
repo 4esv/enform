@@ -8,13 +8,14 @@ import { startApi } from './server.js'
 // Issue #24, STORIES.md Test method: the golden-path runner. A scenario runs
 // in one mode. In api mode each step is an HTTP request against the in-process
 // server; in dry mode the same steps run as a dry run and the side-effect
-// intents must equal those of api mode (Issue #26, I7). Issue #28 runs the
-// oracle pipeline over the end state: the invariants, the golden end state,
-// then the timeline. A golden path is deterministic, so the runner never
-// retries.
+// intents must equal those of api mode (Issue #26, I7); in cli mode each step
+// runs through the harness CLI with `--json` (Issue #25) and the end state
+// must equal api mode's. Issue #28 runs the oracle pipeline over the end
+// state: the invariants, the golden end state, then the timeline. A golden
+// path is deterministic, so the runner never retries.
 
-/** The run modes of a scenario (STORIES.md, Golden path): api now; cli and gui arrive later. */
-export type Mode = 'api' | 'dry'
+/** The run modes of a scenario (STORIES.md, Golden path): api, cli and dry; gui arrives later. */
+export type Mode = 'api' | 'dry' | 'cli'
 
 /** How many times to deliver each step's operation (same ID). */
 export type Deliveries = (stepIndex: number) => number
@@ -37,10 +38,12 @@ const ONCE: Deliveries = () => 1
 /**
  * Run a scenario in one mode (STORIES.md, Golden path). Dry mode returns the
  * side-effect intents of the same steps (I7); api mode returns the server's
- * end state and the side effects that its log carries (I2).
+ * end state and the side effects that its log carries (I2); cli mode returns
+ * the same end state as api mode through the harness CLI.
  */
 export async function runSteps(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
   if (options.mode === 'dry') return dryRun(scenario)
+  if (options.mode === 'cli') return cliRun(scenario)
   return apiRun(scenario, options.deliveries ?? ONCE)
 }
 
@@ -62,6 +65,16 @@ function dryRun(scenario: Scenario): RunOutcome {
     { clock: () => 0, ids: () => '', sink: 'dry' }
   )
   return { state: run.state, intents: run.intents }
+}
+
+/**
+ * cli mode (Issue #25, STORIES.md Golden path): run every step through the
+ * harness CLI. Scaffold for issue #25: the CLI is not wired yet, so the mode
+ * returns the empty outcome. The next commit runs each step through `cli.ts`
+ * and threads the state between steps.
+ */
+async function cliRun(_scenario: Scenario): Promise<RunOutcome> {
+  return { state: emptyState, intents: [] }
 }
 
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */
