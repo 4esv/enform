@@ -31,11 +31,8 @@ import {
 // re-resolution shows the task to her with no new publication (AS-4). Each
 // instance records the resolved assignees and the membership snapshot (I13).
 // The path is deterministic (I6).
-//
-// SCAFFOLD (issue #45, commit 1): the resolver is stubbed, so this check is
-// expected to fail until the change that closes the issue unmarks it.
 
-test.fails('#45 a task routes to the current people or to Unroutable (S08)', () => {
+test('#45 a task routes to the current people or to Unroutable (S08)', () => {
   const dir = directory(INITIAL_DIRECTORY)
   const advisorStep = definition.steps[0]
   const registrarStep = definition.steps[1]

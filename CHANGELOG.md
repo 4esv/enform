@@ -33,6 +33,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine versions a flow: publishing a structural change creates an immutable v2, submitted instances stay on v1, and an unsubmitted draft rebinds to v2 (DF-2, DF-6) (#41).
 - The engine evaluates a step's skipWhen condition (a JSON Logic expression) and skips the step when true, recording the skip on the timeline (WF-1, FM-5) (#42).
 - The engine starts and submits a submission: a start requires a signed-in principal with instance.start, and a submit records the assignment email in the same transaction (ID-2, SE-1, I2) (#43).
+- The engine resolves the six target kinds to assignees: groups and teams resolve live, dynamic targets resolve once with a snapshot, and an empty resolution routes to Unroutable with an owner alert (AS-1, AS-4, AS-5) (#45).
 
 ## [0.0.0] - 2026-10-08
 
