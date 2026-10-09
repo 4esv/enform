@@ -1,0 +1,49 @@
+name: CI
+
+# The complete local check on every pull request, and the two rules of
+# MVP.md section 4 and 9.5. `main` accepts pull requests only (MVP.md 11.5).
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Local check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install the dependencies
+        run: make setup
+
+      - name: Run the complete local check
+        run: make check
+
+      - name: Changelog rule (MVP.md 9.5)
+        if: github.event_name == 'pull_request'
+        run: node tools/changelog-rule.mjs "origin/${{ github.base_ref }}..HEAD"
+
+      - name: Invariant rule (MVP.md section 4)
+        run: node tools/invariant-rule.mjs

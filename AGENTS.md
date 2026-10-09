@@ -36,3 +36,14 @@ A change is done when it meets `MVP.md` section 11.6. All items, each time.
 | `make invariants` | The invariant suites in `invariants/` only. |
 | `make stories` | The story suites in `stories/` only. |
 | `make stack` | The local stack from `deploy/compose.yaml` (#97). |
+
+## CI
+
+`.github/workflows/ci.yml` runs the complete local check on every pull request and on every push to `main`: `make setup`, then `make check`. Two rules run next to it, for `MVP.md` section 4 and 9.5:
+
+| Command | Does |
+|---|---|
+| `node tools/changelog-rule.mjs <range>` | Fails when a `feat`, `fix`, `perf` or breaking commit in the range has no entry under `Unreleased` in `CHANGELOG.md`. CI passes `origin/<base>..HEAD`. |
+| `node tools/invariant-rule.mjs` | Fails when an invariant I1 to I16 has no suite under `invariants/`, or when a suite is skipped. |
+
+`main` is protected (`MVP.md` 11.5). It accepts pull requests only, with green CI and linear history.
