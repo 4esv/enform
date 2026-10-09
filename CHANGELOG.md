@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - An OpenAPI document describes the HTTP API under `/api/v1` (DX-1) (#91).
 - The engine serves the HTTP API in-process for the story harness (DX-1) (#24).
 - The story harness checks every run against the invariants, the golden end state and the timeline (I1, I4, I6, I14) (#28).
+- The story harness applies the Duplicate operator, sending each operation twice without changing the end state (I1, I3) (#31).
 
 ## [0.0.0] - 2026-10-08
 

@@ -34,7 +34,7 @@ test('#28 the oracles fail a run whose behavior event has no actor', () => {
 // end state does not change (I1, I3). The check is marked expected to fail
 // until the operator is implemented.
 
-test.fails('#31 the Duplicate operator leaves the end state unchanged (S01)', async () => {
+test('#31 the Duplicate operator leaves the end state unchanged (S01)', async () => {
   await runOperator(golden, DUPLICATE)
   expect(goldenView(golden).log).toHaveLength(1)
 })
