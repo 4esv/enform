@@ -43,6 +43,11 @@ export function toView(state: State): StateView {
   return { applied: [...state.applied], log: state.log }
 }
 
+/** The engine state of a state view (the inverse of toView, I4). */
+export function fromView(view: StateView): State {
+  return { applied: new Set(view.applied), log: view.log }
+}
+
 /**
  * The operation that one step appends (I2): a step with side effects carries
  * them in the same operation, so one `apply` commits the state change and its

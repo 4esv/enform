@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { emptyState, type State } from '../../engine/apply.js'
+import type { Operation } from '../../engine/operation.js'
 import { type OutboxEntry, outboxOf } from '../../engine/outbox.js'
 import { runSteps as engineRunSteps } from '../../engine/run.js'
 import { oracles } from './oracles.js'
-import { type Scenario, stepOperation } from './scenario.js'
+import { fromView, type Scenario, type StateView, stepOperation, toView } from './scenario.js'
 import { startApi } from './server.js'
 
 // Issue #24, STORIES.md Test method: the golden-path runner. A scenario runs
@@ -34,6 +38,11 @@ export type RunOptions = {
 
 /** Delivery once per step, the golden path. */
 const ONCE: Deliveries = () => 1
+
+/** The harness CLI (Issue #25), and the loader that resolves its `.js` imports. */
+const HARNESS_DIR = fileURLToPath(new URL('.', import.meta.url))
+const CLI_ENTRY = join(HARNESS_DIR, 'cli.ts')
+const TS_RESOLVE = join(HARNESS_DIR, 'ts-resolve.ts')
 
 /**
  * Run a scenario in one mode (STORIES.md, Golden path). Dry mode returns the
@@ -69,12 +78,47 @@ function dryRun(scenario: Scenario): RunOutcome {
 
 /**
  * cli mode (Issue #25, STORIES.md Golden path): run every step through the
- * harness CLI. Scaffold for issue #25: the CLI is not wired yet, so the mode
- * returns the empty outcome. The next commit runs each step through `cli.ts`
- * and threads the state between steps.
+ * harness CLI. Each step is one `node` process that applies the step's
+ * operation through the engine and prints the resulting state; the runner
+ * threads that state into the next step, so the log keeps one global order
+ * (I4) and the end state equals api mode's.
  */
-async function cliRun(_scenario: Scenario): Promise<RunOutcome> {
-  return { state: emptyState, intents: [] }
+async function cliRun(scenario: Scenario): Promise<RunOutcome> {
+  let state = emptyState
+  for (let i = 0; i < scenario.steps.length; i++) {
+    state = await cliApply(stepOperation(scenario.steps[i], i), state)
+  }
+  return { state, intents: outboxOf(state.log) }
+}
+
+/** Apply one operation through the CLI process, and read the state it returns. */
+async function cliApply(operation: Operation, state: State): Promise<State> {
+  const stdout = await runCli([
+    '--import',
+    TS_RESOLVE,
+    CLI_ENTRY,
+    '--json',
+    JSON.stringify(operation),
+    '--state',
+    JSON.stringify(toView(state)),
+  ])
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    throw new Error(`cli mode: the CLI did not return valid JSON\n${stdout}`)
+  }
+  return fromView(parsed as StateView)
+}
+
+/** Run the harness CLI, and reject with its stderr when it exits non-zero. */
+function runCli(args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) reject(new Error(`cli mode: ${error.message}\n${stderr}`))
+      else resolve(stdout)
+    })
+  })
 }
 
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */

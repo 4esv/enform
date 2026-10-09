@@ -13,12 +13,8 @@ import { golden } from './S01-publish-flow/scenario.js'
 // reads every `.test.ts` of a story suite, so a cli-mode file inside
 // S01-publish-flow would flip S01's matrix cell. Issue #25 extends the harness
 // runner, not S01's acceptance, so the check stays out of that suite.
-//
-// `test.fails` asserts that the check fails until the cli mode is
-// implemented: the scaffold returns the empty state, so the two modes differ.
-// The next commit implements the mode and removes the mark.
 
-test.fails('#25 cli mode reaches the same end state as api mode (S01)', async () => {
+test('#25 cli mode reaches the same end state as api mode (S01)', async () => {
   const api = await runSteps(golden, { mode: 'api' })
   const cli = await runSteps(golden, { mode: 'cli' })
   // Non-vacuous: the golden path has a step, so the log comparison has content.
