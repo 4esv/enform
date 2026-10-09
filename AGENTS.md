@@ -29,4 +29,10 @@ A change is done when it meets `MVP.md` section 11.6. All items, each time.
 
 ## Commands
 
-The commands are defined at `0.1.0`: setup, local check, invariant suites, story suites and local stack.
+| Command | Does |
+|---|---|
+| `make setup` | Installs the dependencies that `pnpm-lock.yaml` pins. Needs Node 26 and pnpm 10. |
+| `make check` | The local check: lint and format checks, type checks, unit tests, invariant suites and story suites. |
+| `make invariants` | The invariant suites in `invariants/` only. |
+| `make stories` | The story suites in `stories/` only. |
+| `make stack` | The local stack from `deploy/compose.yaml` (#97). |
