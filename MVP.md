@@ -207,7 +207,7 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | ID | Requirement | Traces to |
 |---|---|---|
 | SE-1 | Email goes through an outbox. A worker sends it, with retries and backoff. Each message shows one status: queued, sent, failed or bounced. A flow owner can send it again. | I2, I3, A4 |
-| SE-2 | Each event type has an email template with variables and a preview. Event types: task assigned, sent back, completed, reminder, escalation. | A4 |
+| SE-2 | Each event type has an email template with variables and a preview. Event types: task assigned, sent back, completed, reminder, escalation, unroutable (I10), taken over, withdrawn or cancelled, undone. | A4 |
 | SE-3 | Reminders occur at configured intervals before and after the due time. | A1 |
 | SE-4 | At the deadline, an escalation notifies a person or adds targets. It does not remove the current owner. | A1 |
 | SE-5 | Timers are durable jobs. The engine creates and cancels them in the same transaction as their task. | I2, I3 |
@@ -471,3 +471,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | Section 8: ID-2 and ID-3 move to `0.2.0`; WF-4 and AC-5 to `0.3.0`; RT-6 to `0.6.0`. ID-5, DX-1 to DX-4, I2, I3, I5, I8 to I10, I12 and I13 get a milestone. The web interface starts at `0.4.0`. | ID-2, ID-3, ID-5, WF-4, AC-5, RT-6, DX-1 to DX-4, I2, I3, I5, I8, I9, I10, I12, I13 | Each milestone must demonstrate its row with its own issues (#98). |
 | 2026-10-08 | A requirement that no story cites is complete when its requirement test passes; CI accepts that. Requirements trace to axioms or invariants; empty cells filled. Suite and story slugs fixed. Refs added to S01, S02, S03, S09, S15. S07 skips `cli` with a reason. S11 shows revisions in the timeline. 11.6 uses the changelog trigger of 9.5. | All | Sixteen requirements had no story and no completion rule (#99). |
 | 2026-10-08 | Glossary: a flow owner is a principal with `task.reassign` on the flow. | I10, SE-1 | I10, SE-1, S06 and S08 used a term that nothing defined (#100). |
+| 2026-10-08 | SE-2 adds the event types unroutable, taken over, withdrawn or cancelled, undone. | SE-2, I10 | S08, S10, S13 and S16 notify people; SE-2 had no template for it (#101). |
