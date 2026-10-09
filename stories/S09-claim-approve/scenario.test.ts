@@ -53,7 +53,7 @@ function applyAction(result: ActionResult, state: State): State {
 // holder with a stale view has the completion refused by the version check, so
 // there is no second approval (I5). The path is deterministic (I6).
 
-test.fails('#46 exactly one claim succeeds and the holder completes with an authorized outcome (S09)', () => {
+test('#46 exactly one claim succeeds and the holder completes with an authorized outcome (S09)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1): a
   // repeated ID would be the same change and `apply` would ignore it.
   const sources = deps()

@@ -10,15 +10,12 @@
 // stale view is refused at once (I5). Both are attributed operations on the
 // append-only log (I14), and both functions are pure and deterministic (I6):
 // they read no clock, no random source and no I/O of their own.
-//
-// This commit is the scaffolding. The bodies of `claim` and `complete` arrive
-// with the implementation, so the S09 check below is marked expected to fail.
 
-import type { Grant } from './authorize.js'
+import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
-import type { FlowDefinition } from './definition.js'
+import type { FlowDefinition, FlowStep } from './definition.js'
 import type { Instance } from './instance.js'
-import type { ActorId, Operation, OperationDeps } from './operation.js'
+import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -66,12 +63,25 @@ export type CompletionContext = {
  * records the holder and the operation records the claim (I14).
  */
 export function claim(
-  _instance: Instance,
-  _actor: ActorId,
-  _expectedVersion: Version,
-  _deps: OperationDeps
+  instance: Instance,
+  actor: ActorId,
+  expectedVersion: Version,
+  deps: OperationDeps
 ): ActionResult {
-  throw new Error('action: claim is not implemented yet (#46)')
+  const step = instance.currentStep
+  if (step === undefined) {
+    return { accepted: false, instance, reason: 'the instance has no current step to claim' }
+  }
+  const version = currentVersion(instance)
+  if (expectedVersion !== version) {
+    return { accepted: false, instance, reason: claimRefusal(step, instance.holder) }
+  }
+  if (!isAssignee(instance, actor)) {
+    return { accepted: false, instance, reason: `step ${step}: ${actor} is not an assignee` }
+  }
+  const claimed: Instance = { ...instance, holder: actor, version: version + 1 }
+  const operation = createOperation(STEP_CLAIMED, { step, holder: actor }, deps, actor)
+  return { accepted: true, instance: claimed, operation }
 }
 
 /**
@@ -85,12 +95,78 @@ export function claim(
  * last, and the operation records the outcome (I14).
  */
 export function complete(
-  _instance: Instance,
-  _actor: ActorId,
-  _outcome: string,
-  _expectedVersion: Version,
-  _context: CompletionContext,
-  _deps: OperationDeps
+  instance: Instance,
+  actor: ActorId,
+  outcome: string,
+  expectedVersion: Version,
+  context: CompletionContext,
+  deps: OperationDeps
 ): ActionResult {
-  throw new Error('action: complete is not implemented yet (#46)')
+  const step = instance.currentStep
+  if (step === undefined) {
+    return { accepted: false, instance, reason: 'the instance has no current step to complete' }
+  }
+  const version = currentVersion(instance)
+  if (expectedVersion !== version) {
+    return {
+      accepted: false,
+      instance,
+      reason: `step ${step}: the view is stale, refresh and retry`,
+    }
+  }
+  if (instance.holder !== actor) {
+    return { accepted: false, instance, reason: `step ${step}: ${actor} does not hold the step` }
+  }
+  const resource = stepResource(context.flow, step)
+  if (
+    context.grants !== undefined &&
+    !authorize(context.grants, `step.outcome:${outcome}`, resource)
+  ) {
+    return {
+      accepted: false,
+      instance,
+      reason: `step ${step}: ${actor} lacks step.outcome:${outcome} (AC-4)`,
+    }
+  }
+  const next = nextStep(context.definition, step)
+  const completed: Instance = {
+    ...instance,
+    holder: undefined,
+    currentStep: next?.key,
+    done: next === undefined,
+    version: version + 1,
+  }
+  const operation = createOperation(STEP_COMPLETED, { step, outcome }, deps, actor)
+  return { accepted: true, instance: completed, operation }
+}
+
+/** The version of the log that an instance view reflects (I5). An absent version is the empty log. */
+function currentVersion(instance: Instance): Version {
+  return instance.version ?? 0
+}
+
+/** Whether the acting principal is an assignee of the instance's current step (AC-4, AS-2). */
+function isAssignee(instance: Instance, actor: ActorId): boolean {
+  const step = instance.currentStep
+  return instance.assignees.some(
+    (assignee) => assignee.step === step && assignee.members.includes(actor)
+  )
+}
+
+/** Why the engine refused a claim (AS-2, I5): a held task names the holder, an unheld one asks for a re-read. */
+function claimRefusal(step: string, holder: ActorId | undefined): string {
+  return holder === undefined
+    ? `step ${step}: the view is stale, refresh and retry`
+    : `step ${step}: claimed by ${holder} just now`
+}
+
+/** The step that follows one key in definition order (WF-1); absent at the last step. */
+function nextStep(definition: FlowDefinition, key: string): FlowStep | undefined {
+  const index = definition.steps.findIndex((step) => step.key === key)
+  return index === -1 ? undefined : definition.steps[index + 1]
+}
+
+/** The resource of one step (MVP.md 5.6): `flow:<slug>/step:<key>`. */
+function stepResource(flow: string, key: string): string {
+  return `flow:${flow}/step:${key}`
 }
