@@ -25,7 +25,7 @@ The engine path passes before work on the interface path starts.
 ## Rules
 
 - Story IDs (`S01` and up) are permanent. Do not reuse them. A withdrawn story stays in this document with the label **Withdrawn**.
-- Each acceptance criterion uses the form Given, When, Then. Each criterion becomes one or more automated tests in `stories/S<nn>-<slug>/`.
+- Each acceptance criterion uses the form Given, When, Then. Each criterion becomes one or more automated tests in `stories/S<nn>-<slug>/`. The slug is in the story heading.
 - **Measures** make a golden path measurable. CI checks the measures that it can check. The pilot checks the others.
 - **Refs** cite the requirements and invariants of `MVP.md` that the story uses.
 - Tests use `--json` output. The human-readable output in this document is an example.
@@ -87,7 +87,7 @@ The suite grows from real failures. Each failure stays with the story that it br
 
 Coverage is the matrix of story, operator and mode. The build writes it to `stories/MATRIX.md`. CI fails if:
 
-- an in-scope requirement has no story,
+- an in-scope requirement has no story and no requirement test,
 - a story does not run under an operator that applies to it, or
 - a matrix cell is skipped without a written reason in the story.
 
@@ -144,7 +144,7 @@ All stories use one flow, so that they share fixtures.
 
 ## Part 1: Build
 
-### S01: Create and publish a flow
+### S01: Create and publish a flow (`publish-flow`)
 
 > As Dana, I want to define a flow as a file, test it and publish it, so that a new process starts without the GUI.
 
@@ -171,9 +171,9 @@ enform flow publish course-overload            # version 1, hash a1b2c3
 
 **Measures.** A developer who reads the documentation for the first time goes from `init` to a published two-step flow in less than 10 minutes. `push` and `validate` each take less than 2 seconds.
 
-**Refs.** DF-1, DF-2, DF-4, DR-1, DR-5, DX-3, I9, I14
+**Refs.** ID-1, DF-1, DF-2, DF-4, DR-1, DR-5, DX-3, VT-6, I9, I14
 
-### S02: Grant access by scope
+### S02: Grant access by scope (`grant-scopes`)
 
 > As Dana, I want to give each person the correct abilities, so that reviewers cannot approve and coordinators cannot rebuild flows.
 
@@ -198,9 +198,9 @@ enform grant list flow:course-overload
 
 **Measures.** One CLI command or one panel answers "Who can approve at the registrar step?". Nobody reads code.
 
-**Refs.** AC-1 to AC-4, I8, I14
+**Refs.** AC-1 to AC-4, VT-6, I8, I14
 
-### S03: Edit the text of a form
+### S03: Edit the text of a form (`edit-text`)
 
 > As Priya, I want to correct a typing error and add a dropdown option, so that I do not need a ticket for Dana.
 
@@ -223,9 +223,9 @@ enform flow publish course-overload   # allowed: edit-class changes only
 
 **Measures.** A label change takes less than 2 minutes, from builder open to publication. No edit by Priya or Dana is lost.
 
-**Refs.** DF-3, DF-5, DF-6, D2, A1, I1, I14
+**Refs.** DF-3, DF-5, DF-6, RT-2, D2, A1, I1, I14
 
-### S04: Add a field while submissions are in progress
+### S04: Add a field while submissions are in progress (`add-field-live`)
 
 > As Dana, I want to add a required field to a live flow, so that the process can change and drafts do not break.
 
@@ -248,7 +248,7 @@ enform flow publish course-overload   # version 2
 
 **Refs.** DF-2, DF-6, RT-6, A7
 
-### S05: Skip a step when a condition is true
+### S05: Skip a step when a condition is true (`skip-step`)
 
 > As Dana, I want the chair to skip small overloads, so that chairs see only the requests that need them.
 
@@ -276,7 +276,7 @@ enform flow dry-run course-overload --data fixtures/overload-4.json   # chair: a
 
 ## Part 2: Submit and route
 
-### S06: Start a submission
+### S06: Start a submission (`start-submission`)
 
 > As Sam, I want to open the form link, fill it in and submit it, so that my request starts and I know that it arrived.
 
@@ -300,7 +300,7 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Refs.** ID-2, ID-3, RT-3, SE-1, VT-2, I2, I15
 
-### S07: Lose the connection during fill-in
+### S07: Lose the connection during fill-in (`lose-connection`)
 
 > As Sam, on a bad day with no signal, I want my typing to survive network loss and accidental refreshes, so that I never fill in a form two times.
 
@@ -317,7 +317,9 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Refs.** RT-1, RT-3, RT-4, RT-5, I1, I11, I15, I16
 
-### S08: Route to the correct people
+**Modes.** The `cli` cell is skipped. The engine path is a transport simulation, and the CLI has no transport to interrupt.
+
+### S08: Route to the correct people (`route`)
 
 > As Dana, I want each task to go to real, current people, so that no task waits for a person who left or does not exist.
 
@@ -341,7 +343,7 @@ enform flow dry-run course-overload --data fixtures/sam.json --explain-routing
 
 ## Part 3: Act on work
 
-### S09: Claim and approve
+### S09: Claim and approve (`claim-approve`)
 
 > As Lee, I want to see the work available to my team, claim one task and approve it, so that work moves and nobody is locked out.
 
@@ -363,9 +365,9 @@ enform task complete <task> --outcome approve --comment "Within policy"
 
 **Measures.** An approval takes 3 interactions or fewer from the inbox.
 
-**Refs.** AS-2, AC-4, VT-1, I5, I8
+**Refs.** AS-2, AC-4, RT-2, VT-1, I5, I8
 
-### S10: Take over from a peer on vacation
+### S10: Take over from a peer on vacation (`takeover`)
 
 > As Ana, I want to take a task that Lee claimed before his vacation, so that the student does not wait a week and no administrator must help.
 
@@ -389,7 +391,7 @@ enform task takeover <task> --reason "Lee is out until 10/19"
 
 **Refs.** AS-3, WF-5, A1, A2, I14
 
-### S11: Send back for revision
+### S11: Send back for revision (`send-back`)
 
 > As Dr. Okafor, I want to send the request of Sam back with a note, so that he can correct it and does not start again.
 
@@ -400,7 +402,7 @@ enform task complete <task> --outcome send_back --to request --comment "Attach y
 enform instance show <id>   # step: request (revision 2); holder: sam
 ```
 
-**Interface path.** Dr. Okafor selects Send back, selects the step and writes a note. Sam gets an email. The request shows in his inbox, with the note above the form. When he submits again, Dr. Okafor can compare revision 1 and revision 2.
+**Interface path.** Dr. Okafor selects Send back, selects the step and writes a note. Sam gets an email. The request shows in his inbox, with the note above the form. When he submits again, Dr. Okafor sees revision 1 and revision 2 in the timeline.
 
 **Acceptance**
 
@@ -410,7 +412,7 @@ enform instance show <id>   # step: request (revision 2); holder: sam
 
 **Refs.** WF-2, WF-3, AC-4, SE-2
 
-### S12: Reminders and escalation
+### S12: Reminders and escalation (`reminders-escalation`)
 
 > As Priya, I want stuck tasks to remind people and then escalate, so that no task waits in silence.
 
@@ -431,7 +433,7 @@ enform flow dry-run course-overload --data fixtures/sam.json --advance P3D   # e
 
 **Refs.** SE-3, SE-4, SE-5, DR-3, DR-4, I2, I3, I7
 
-### S13: Withdraw or cancel a submission
+### S13: Withdraw or cancel a submission (`withdraw-cancel`)
 
 > As Sam, I want to withdraw a request that I do not need. As Priya, I want to cancel a request that is not valid. In both cases, all involved people must know.
 
@@ -454,7 +456,7 @@ enform instance cancel <id> --reason "Duplicate of #4411"    # Priya, instance.c
 
 ## Part 4: Know what happened
 
-### S14: Find the status of a submission
+### S14: Find the status of a submission (`find-status`)
 
 > As Sam, I want to see where my request is and what it waits for, so that I do not need to send emails.
 
@@ -477,7 +479,7 @@ enform instance show <id>
 
 **Refs.** VT-1, VT-2, VT-3, VT-4, I8
 
-### S15: Investigate a problem
+### S15: Investigate a problem (`investigate`)
 
 > As Dana, when a user reports a problem, I want to see what changed and when, next to what occurred, so that I can find the cause myself.
 
@@ -498,9 +500,9 @@ enform flow diff course-overload --from v4 --to v5
 - Each change that affects behavior shows with its author: definition, grant, team, connector, template.
 - Connector calls show with operation, time and outcome. They never show response bodies.
 
-**Refs.** VT-5, VT-6, I4, I13, I14
+**Refs.** DF-6, VT-5, VT-6, I4, I13, I14
 
-### S16: Undo a mistake
+### S16: Undo a mistake (`undo`)
 
 > As Lee, I want to undo an approval that I made on the wrong request, so that one wrong click does not damage the semester of a student.
 
@@ -523,4 +525,4 @@ enform undo <event-id> --reason "Approved the wrong request"
 
 ## Traceability
 
-The build generates `stories/MATRIX.md` from the Refs lines in this document. CI fails if an in-scope requirement in `MVP.md` has no story, or if a story cites an unknown ID.
+The build generates `stories/MATRIX.md` from the Refs lines in this document. CI fails if an in-scope requirement in `MVP.md` has no story and no requirement test, or if a story cites an unknown ID.
