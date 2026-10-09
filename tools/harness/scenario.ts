@@ -1,5 +1,5 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
-import { createOperation, type ActorId, type Event } from '../../engine/operation.js'
+import { type ActorId, createOperation, type Event } from '../../engine/operation.js'
 
 // Issue #24, STORIES.md Test method: one executable scenario per story. Its
 // steps are "a person acts, then a condition must be true". The runner
