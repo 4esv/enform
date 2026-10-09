@@ -1,4 +1,5 @@
 // Issue #38, S01, DF-1, DF-2, DF-4, VT-6, I9, I13, I14: the flow lifecycle.
+// Issue #40, S03, DF-5, D2, AC-1: the scope guard on a push.
 //
 // A flow has one draft definition and, once published, immutable versions
 // (DF-1, DF-2). `push` replaces the draft and records one
@@ -7,7 +8,13 @@
 // config.definition.published@1 operation (DF-2, VT-6). A later push opens a
 // new draft; a published version never changes, so an instance created from it
 // stays on it (I13).
+//
+// A push is scope-guarded when the caller passes the acting principal's grants
+// (DF-5, D2, AC-1): an edit-class change needs `flow.edit` and a structural
+// change needs `flow.build`. The classification lives in `edit.ts`; the engine
+// is the only place that evaluates it (AC-1).
 
+import type { Grant } from './authorize.js'
 import { configOperation } from './config.js'
 import { type FlowDefinition, parse, serialize } from './definition.js'
 import { contentHash } from './instance.js'
@@ -74,15 +81,36 @@ export function validate(text: string): FlowDefinition {
  * Push a definition to the draft (DF-4, I14). One config.definition.changed@1
  * operation records the change, attributed to the actor. The draft becomes the
  * pushed definition; the published versions stay as they were.
+ *
+ * `grants` are the scopes that apply to the acting principal (AC-1). When they
+ * are given, the push is scope-guarded (DF-5, D2): an edit-class change needs
+ * `flow.edit`, a structural change needs `flow.build`, and a refusal names the
+ * change and the scope. When they are absent the engine records the change
+ * unchecked; the first draft creation and the lifecycle tests use that path,
+ * and the API always passes the acting principal's grants.
  */
 export function push(
   flow: Flow,
   definition: FlowDefinition,
   deps: OperationDeps,
-  actor: ActorId
+  actor: ActorId,
+  grants?: readonly Grant[]
 ): PushedFlow {
+  if (grants !== undefined) assertPushAllowed(flow, definition, grants)
   const operation = configOperation({ kind: 'definition', actor, payload: definition }, deps)
   return { flow: { ...flow, draft: definition }, operation }
+}
+
+/**
+ * Authorize one push against the acting principal's grants (DF-5, D2, AC-1,
+ * I8). The classification and the scope check arrive with issue #40.
+ */
+function assertPushAllowed(
+  _flow: Flow,
+  _definition: FlowDefinition,
+  _grants: readonly Grant[]
+): void {
+  throw new Error('flow: the push scope guard is not implemented yet (issue #40)')
 }
 
 /**
