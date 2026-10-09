@@ -5,10 +5,6 @@
 // task silently. The oracle below states that as a check over one step's
 // route, so a story run can call it for the step that its run routed
 // (MVP.md 11.4).
-//
-// Scaffolding for #16: the first check is marked as expected to fail, because
-// the engine functions are stubs until the second commit implements them. The
-// deliberate violation below already fails the oracle, and it stays marked.
 
 import { expect, test } from 'vitest'
 import type { FlowStep } from '../../engine/definition.js'
@@ -74,7 +70,7 @@ function assertNoSilentRoutingLoss(
   expect(result.alert?.payload.to, 'the alert does not reach the flow owner').toBe(owner)
 }
 
-test.fails('#16 a task routes to its assignees or to Unroutable, never nowhere (I10)', () => {
+test('#16 a task routes to its assignees or to Unroutable, never nowhere (I10)', () => {
   const unroutable = route(STEP, resolveNobody, OWNER)
   expect(unroutable.assignees.flatMap((assignee) => assignee.members)).toEqual([])
   expect(unroutable.queue).toBe(UNROUTABLE_QUEUE)

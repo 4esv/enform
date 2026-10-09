@@ -6,10 +6,6 @@
 // resolve once; the instance records both. Routing is a pure function of the
 // step, the resolver and the flow owner: it reads no clock, no random source
 // and no directory of its own (I6), so the same inputs give the same route.
-//
-// Scaffolding for #16: the types and the queue and alert markers below are the
-// route that the oracle checks. The two functions are stubs, so the first
-// check of the suite fails until the implementation lands in the second commit.
 
 import type { FlowStep, Target } from './definition.js'
 import type { Assignee } from './instance.js'
@@ -59,19 +55,33 @@ export type RouteResult = {
 /**
  * Resolve the targets of a step to assignees (AS-4, I13). Every target yields
  * one assignee with the members that the resolver returns, so a target that
- * resolves to nobody carries an empty membership snapshot (I13, I10). Stub:
- * the resolution lands with #16.
+ * resolves to nobody carries an empty membership snapshot (I13, I10). The
+ * resolution is deterministic (I6): it depends on the step and the resolver
+ * alone.
  */
-export function resolveAssignees(_step: FlowStep, _resolve: TargetResolver): readonly Assignee[] {
-  return []
+export function resolveAssignees(step: FlowStep, resolve: TargetResolver): readonly Assignee[] {
+  return step.targets.map((target) => ({ step: step.key, target, members: resolve(target) }))
 }
 
 /**
  * Route the task of a step (I10, AS-4). When at least one target resolves to a
- * member the task routes to those assignees; when every target resolves to
- * nobody it goes to the Unroutable queue and the flow owner gets an alert, so
- * the task is never dropped. Stub: the routing lands with #16.
+ * member the task routes to those assignees and raises no alert. When every
+ * target resolves to nobody the task goes to the Unroutable queue and the flow
+ * owner gets an alert, so the task is never dropped. The function is pure and
+ * deterministic (I6).
  */
-export function route(step: FlowStep, _resolve: TargetResolver, _owner: ActorId): RouteResult {
-  return { step: step.key, assignees: [] }
+export function route(step: FlowStep, resolve: TargetResolver, owner: ActorId): RouteResult {
+  const assignees = resolveAssignees(step, resolve)
+  const routed = assignees.some((assignee) => assignee.members.length > 0)
+  if (routed) return { step: step.key, assignees }
+  return { step: step.key, assignees, queue: UNROUTABLE_QUEUE, alert: alertOwner(step, owner) }
+}
+
+/** The alert that the flow owner receives for an unroutable task (I10, SE-2). */
+function alertOwner(step: FlowStep, owner: ActorId): OutboxEntry {
+  return {
+    operation: UNROUTABLE_ALERT,
+    target: ALERT_CONNECTOR,
+    payload: { to: owner, step: step.key },
+  }
 }

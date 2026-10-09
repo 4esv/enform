@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine stamps each instance with its definition version, resolved assignees and a connector-call log (I13, DF-2) (#19).
 - The engine authorizes every read and write as a pure function of grants, scope and resource (I8, AC-1) (#14).
 - The engine records a state change and its side effects as one event, an append-only outbox (I2) (#8).
+- The engine routes a task whose targets resolve to nobody to the Unroutable queue and alerts the flow owner (I10, AS-5) (#16).
 
 ## [0.0.0] - 2026-10-08
 
