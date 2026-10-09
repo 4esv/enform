@@ -84,4 +84,22 @@ Commit messages use [Conventional Commits 1.0.0](https://www.conventionalcommits
 
 ## Local check
 
-The local check command is defined at `0.1.0`. It will run lint, type checks, unit tests, invariant suites and story suites.
+`make check` is the local check. It runs lint and format checks (Biome), type checks (tsc), the unit tests, the invariant suites and the story suites (Vitest). Nothing goes to the remote until it is green.
+
+| Command | Does |
+|---|---|
+| `make setup` | Installs the dependencies that `pnpm-lock.yaml` pins. Needs Node 26 and pnpm 10. |
+| `make check` | The local check: lint and format checks, type checks, unit tests, invariant suites and story suites. |
+| `make invariants` | The invariant suites in `invariants/` only. |
+| `make stories` | The story suites in `stories/` only. |
+| `make stack` | The local stack from `deploy/compose.yaml` (#97). |
+
+**Expected failures.** Mark a test with `test.fails` and start its name with the issue number:
+
+```ts
+test.fails('#42 takeover is refused before the idle limit', () => {
+  // ...
+})
+```
+
+Vitest fails the run when an expected failure passes.

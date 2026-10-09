@@ -68,7 +68,7 @@ afterAll(() => {
   if (copy !== '') rmSync(copy, { recursive: true, force: true })
 })
 
-test.fails(
+test(
   '#95 setup then check is green on an empty suite',
   () => {
     expect(setup.status, setup.output).toBe(0)
@@ -78,7 +78,7 @@ test.fails(
   timeout
 )
 
-test.fails(
+test(
   '#95 check fails when an expected failure passes',
   () => {
     const check = checkWith('passes.test.ts', expectedFailure('#0 passes', 'expect(1).toBe(1)'))
@@ -89,7 +89,7 @@ test.fails(
 )
 
 // The mutation of the previous check: the same file, but the failure is real.
-test.fails(
+test(
   '#95 check passes when an expected failure fails',
   () => {
     const check = checkWith('fails.test.ts', expectedFailure('#0 fails', 'expect(1).toBe(2)'))
