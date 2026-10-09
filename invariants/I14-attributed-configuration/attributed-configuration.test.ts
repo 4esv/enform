@@ -83,7 +83,7 @@ function assertAttributedConfiguration(
   expect(appended.actor, `event ${appended.seq} (${appended.type}) has no actor`).toBeDefined()
 }
 
-test.fails('#20 a configuration change is an attributed, versioned operation (I14)', () => {
+test('#20 a configuration change is an attributed, versioned operation (I14)', () => {
   const { state, next } = sample()
   expect(state.log).toHaveLength(CONFIG_KINDS.length)
   assertAttributedConfiguration(state, next)

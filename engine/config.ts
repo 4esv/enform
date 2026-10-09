@@ -33,11 +33,7 @@ export type ConfigChange = {
 
 /**
  * Create the operation that records one configuration change (I14, AC-2).
- *
- * Scaffolding for #20: the actor is not threaded from `change` yet, so the
- * event on the log carries no actor and the I14 oracle fails. The
- * implementation commit passes `change.actor` to `createOperation`.
  */
 export function configOperation(change: ConfigChange, deps: OperationDeps): Operation {
-  return createOperation(configType(change.kind), change.payload, deps)
+  return createOperation(configType(change.kind), change.payload, deps, change.actor)
 }
