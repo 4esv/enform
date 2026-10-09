@@ -94,6 +94,16 @@ Commit messages use [Conventional Commits 1.0.0](https://www.conventionalcommits
 | `make stories` | The story suites in `stories/` only. |
 | `make stack` | The local stack from `deploy/compose.yaml` (#97). |
 
+### CI
+
+`.github/workflows/ci.yml` runs the same commands on every pull request and every push to `main`:
+
+1. `make setup`, then `make check`.
+2. `node tools/changelog-rule.mjs <range>` on a pull request. It fails when the pull request contains a `feat`, `fix`, `perf` or breaking commit and `CHANGELOG.md` has no entry under `Unreleased` (`MVP.md` 9.5).
+3. `node tools/invariant-rule.mjs`. It fails when an invariant I1 to I16 has no suite under `invariants/`, or when a suite is skipped (`MVP.md` section 4).
+
+`main` is protected (`MVP.md` 11.5). It accepts pull requests only, with green CI and linear history.
+
 **Expected failures.** Mark a test with `test.fails` and start its name with the issue number:
 
 ```ts

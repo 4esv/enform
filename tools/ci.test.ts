@@ -7,7 +7,7 @@ import { expect, test } from 'vitest'
 
 const repo = join(import.meta.dirname, '..')
 
-test.fails('#96 CI runs the complete local check on every pull request', () => {
+test('#96 CI runs the complete local check on every pull request', () => {
   const workflow = readFileSync(join(repo, '.github', 'workflows', 'ci.yml'), 'utf8')
   expect(workflow, 'pull_request trigger').toContain('pull_request')
   expect(workflow, 'make setup').toContain('make setup')
