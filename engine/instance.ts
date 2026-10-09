@@ -1,4 +1,6 @@
 // Issue #19, I13, DF-2, AS-4, A8: the stamped instance record.
+// Issue #43, S06, WF-1: the workflow state of an instance, its current step
+// and its submitted flag.
 
 import { createHash } from 'node:crypto'
 import { type FlowDefinition, serialize, type Target } from './definition.js'
@@ -44,6 +46,18 @@ export type Instance = {
   readonly definitionVersion: string
   readonly assignees: readonly Assignee[]
   readonly connectorCalls: readonly ConnectorCall[]
+  /**
+   * The key of the step that the instance is on (WF-1, S06). It is absent
+   * before a start routes the draft, and a start sets it to the first step
+   * whose skip condition is false (S06).
+   */
+  readonly currentStep?: string
+  /**
+   * Whether the instance is submitted (S06, DF-6). It is absent before a
+   * submit and true after one; a submitted instance is in progress, and only a
+   * draft that is not submitted rebinds to the next version (DF-6).
+   */
+  readonly submitted?: boolean
 }
 
 /**
