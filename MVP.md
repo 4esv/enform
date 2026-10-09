@@ -458,7 +458,7 @@ Each decision applies until an amendment under section 10 changes it.
 | D4 | The default declaration of a connector operation is `write`. | An incorrect `read` label on a write is more dangerous than the opposite (I7). |
 | D5 | Legal deletion is a redaction event. It requires `org.redact`. It is attributed. It is not reversible, by design. | Privacy law has priority over A2. I4 allows only this exception. |
 | D6 | To undo a completed step, the engine adds a compensating event. It does not delete. | I4. |
-| D7 | Pilot flow: three steps, request, approval, processing. A ledger entry replaces it with the real flow before `0.8.0`. | A real flow sets the limits of the MVP. |
+| D7 | Pilot flow: `information-request`. Step `request`: the submitter answers typed questions, uploads a document and ticks an attestation. Step `review`: one of several reviewers, by group or team and by condition, approves, rejects, or sends back with a comment. On approval: a confirmation email from a template, and the PDF of the form. Sections and fields are conditional on the step and on other answers. The tracker shows each revision as a repeated step, in order. | A real flow sets the limits of the MVP. The simplest version first; it grows from use. |
 | D8 | License: MIT. See ADR 0002. | |
 
 ## 13. Scope Ledger
@@ -474,3 +474,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | SE-2 adds the event types unroutable, taken over, withdrawn or cancelled, undone. | SE-2, I10 | S08, S10, S13 and S16 notify people; SE-2 had no template for it (#101). |
 | 2026-10-08 | `STORIES.md` cast: Dr. Lin, chair, member of `CS-Chairs`. | AS-1, WF-1 | The Actor operator needs a person for each step (#102). |
 | 2026-10-08 | FM-5: the one format is a JSON expression tree. A TypeScript rule is a node of it, run in the sandbox. | FM-5 | FM-5 and S05 pointed at different formats (#103). ADR 0008 records the decision. |
+| 2026-10-08 | D7 names the pilot flow: `information-request`. | D7 | The real flow sets the limits of the MVP (#104). |
