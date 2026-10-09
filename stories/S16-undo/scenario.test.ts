@@ -114,7 +114,7 @@ function openStep(
 // flow marks final, and the engine refuses the undo with that reason (S16,
 // WF-5). The path is deterministic (I6).
 
-test.fails('#53 an undo appends a compensating event and marks the side effects that already occurred (S16)', () => {
+test('#53 an undo appends a compensating event and marks the side effects that already occurred (S16)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 
