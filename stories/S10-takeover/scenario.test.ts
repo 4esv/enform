@@ -58,12 +58,8 @@ function applyAction(result: TakeoverResult, state: State): State {
 // I14, I2). Below the idle period the engine refuses with the remaining time
 // (AS-3). A takeover from a stale view is refused at once (I5). The path is
 // deterministic (I6).
-//
-// Expected to fail until the takeover mechanism lands. The refusal keeps the
-// suite green while the first check fails, per CONTRIBUTING.md (the issue
-// number is in the name).
 
-test.fails('#47 a peer takes over a claimed task after the idle period, with a reason (S10)', () => {
+test('#47 a peer takes over a claimed task after the idle period, with a reason (S10)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1).
   let now = CLAIM_AT
   const deps = sources(() => now)

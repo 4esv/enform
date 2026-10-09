@@ -35,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine starts and submits a submission: a start requires a signed-in principal with instance.start, and a submit records the assignment email in the same transaction (ID-2, SE-1, I2) (#43).
 - The engine resolves the six target kinds to assignees: groups and teams resolve live, dynamic targets resolve once with a snapshot, and an empty resolution routes to Unroutable with an owner alert (AS-1, AS-4, AS-5) (#45).
 - The engine claims and completes a task: exactly one concurrent claim succeeds, a completion requires the step.outcome scope, and a stale version is rejected (AS-2, AC-4, I5) (#46).
+- The engine takes over a claimed task after an idle timeout: it reassigns the holder, records who/from whom/when/why, and notifies the previous holder (AS-3, WF-5, I14) (#47).
 
 ## [0.0.0] - 2026-10-08
 
