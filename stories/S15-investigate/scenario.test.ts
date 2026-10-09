@@ -33,7 +33,7 @@ const CONFIG_TYPES: readonly string[] = [
 // shows its operation, its time and its outcome and never a response body
 // (I13). The projection is pure and deterministic (I6).
 
-test.fails('#52 the timeline merges instance events and configuration changes, attributed and filtered (S15)', () => {
+test('#52 the timeline merges instance events and configuration changes, attributed and filtered (S15)', () => {
   const entries = timeline(investigationLog())
 
   // (a) I4, VT-5: the timeline is the log in order, so no two entries have an
