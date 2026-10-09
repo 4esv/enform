@@ -6,9 +6,6 @@
 // `step.outcome:<name>` scope controls which outcomes a person can choose. The
 // oracle below states that over the grants of one principal, so a story run can
 // call it for the principal that acts in that run (MVP.md 11.4).
-//
-// The first two checks are expected to fail until commit 2 implements the full
-// model, so `test.fails` marks them for now (CONTRIBUTING.md, AGENTS.md).
 
 import { expect, test } from 'vitest'
 import { authorize, type Grant } from '../../engine/authorize.js'
@@ -88,12 +85,12 @@ function assertAuthorized(authorizeFn: typeof authorize = authorize): void {
   expect(authorizeFn(grantsOf('user:dana'), 'org.grants', FLOW)).toBe(false)
 }
 
-test.fails('#14 a principal sees only the actions that its grants allow (I8)', () => {
+test('#14 a principal sees only the actions that its grants allow (I8)', () => {
   expect(grantsOf('user:jordan')).toHaveLength(1)
   assertAuthorized()
 })
 
-test.fails('#14 a resource wildcard covers a flow and every step under it (I8)', () => {
+test('#14 a resource wildcard covers a flow and every step under it (I8)', () => {
   const held: readonly Grant[] = [
     { principal: 'user:ops', scopes: ['instance.read'], resource: 'flow:*' },
   ]

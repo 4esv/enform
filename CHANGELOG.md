@@ -20,6 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The build writes `stories/MATRIX.md`, the matrix of story, operator and mode, and CI checks the coverage rules of `STORIES.md` (#29).
 - The engine parses and serializes a flow definition canonically, round-tripping byte for byte (I9, DF-1) (#15).
 - The engine stamps each instance with its definition version, resolved assignees and a connector-call log (I13, DF-2) (#19).
+- The engine authorizes every read and write as a pure function of grants, scope and resource (I8, AC-1) (#14).
 
 ## [0.0.0] - 2026-10-08
 
