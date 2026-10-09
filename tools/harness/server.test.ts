@@ -17,7 +17,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
+  await new Promise<void>((resolve, reject) =>
+    server.close((err) => (err ? reject(err) : resolve()))
+  )
 })
 
 const op = (id: string) => ({
@@ -28,7 +30,7 @@ const op = (id: string) => ({
   payload: { name: 'registrar-office' },
 })
 
-test.fails('#24 the api-mode server serves the /api/v1 contract', async () => {
+test('#24 the api-mode server serves the /api/v1 contract', async () => {
   const created = await fetch(`http://127.0.0.1:${port}/api/v1/operations`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
