@@ -22,22 +22,13 @@ export type Step = {
 /**
  * Run a sequence of steps from the injected sources (I6). The same steps and
  * the same sources give the same state.
- *
- * Scaffolding for #12: the operation ID source is not threaded from `sources`
- * yet, so the IDs come from a module counter and a second run differs. The
- * implementation commit replaces the counter with `sources.ids`.
  */
-let nextId = 0
-
 export function deterministicRun(steps: readonly Step[], sources: Sources): State {
   let state = emptyState
   for (const step of steps) {
     const operation = createOperation(step.type, step.payload, {
       clock: sources.clock,
-      ids: () => {
-        nextId += 1
-        return `scaffold-${nextId}`
-      },
+      ids: sources.ids,
     })
     state = apply(operation, state)
   }

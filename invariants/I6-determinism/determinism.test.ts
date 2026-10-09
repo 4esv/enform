@@ -62,7 +62,7 @@ function assertDeterministic(
   expect(snapshot(run(steps, makeSources()))).toBe(snapshot(state))
 }
 
-test.fails('#12 the same steps and injected sources give the same state (I6)', () => {
+test('#12 the same steps and injected sources give the same state (I6)', () => {
   const state = deterministicRun(STEPS, sources())
   expect(state.log).toHaveLength(3)
   assertDeterministic(state, STEPS)
