@@ -18,6 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The story harness checks every run against the invariants, the golden end state and the timeline (I1, I4, I6, I14) (#28).
 - The story harness applies the Duplicate operator, sending each operation twice without changing the end state (I1, I3) (#31).
 - The build writes `stories/MATRIX.md`, the matrix of story, operator and mode, and CI checks the coverage rules of `STORIES.md` (#29).
+- The engine parses and serializes a flow definition canonically, round-tripping byte for byte (I9, DF-1) (#15).
 
 ## [0.0.0] - 2026-10-08
 

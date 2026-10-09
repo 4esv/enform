@@ -107,7 +107,7 @@ function assertCanonicalRoundTrip(file: string): FlowDefinition {
   return definition
 }
 
-test.fails('#15 parse then serialize reproduces a canonical file byte for byte (I9)', () => {
+test('#15 parse then serialize reproduces a canonical file byte for byte (I9)', () => {
   assertCanonicalRoundTrip(FILE)
 })
 

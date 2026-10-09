@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/flow/v1.json",
+  "title": "enform flow definition",
+  "description": "One flow definition document, version 1 (MVP.md DF-1, DF-4, I9). A flow is one JSON document with an integer schemaVersion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "steps"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "targets"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/target" }
+        },
+        "outcomes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "skipWhen": { "$ref": "#/$defs/jsonLogic" }
+      }
+    },
+    "target": {
+      "description": "A task recipient: exactly one kind, per AS-1. Dynamic targets are starter, field and manager-of.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "user": { "type": "string" },
+        "group": { "type": "string" },
+        "team": { "type": "string" },
+        "field": { "type": "string" },
+        "starter": { "type": "string" },
+        "manager-of": { "type": "string" }
+      }
+    },
+    "jsonLogic": {
+      "description": "A JSON Logic expression tree (FM-5, ADR 0008).",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
+  }
+}
