@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Local harness state. Other tools write here; never commit it.
+.orchestrator/
+.pi/
