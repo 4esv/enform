@@ -98,7 +98,7 @@ test(
   timeout
 )
 
-test.fails('#95 the layout has the locations of MVP.md 9.1 and 11.4', () => {
+test('#95 the layout has the locations of MVP.md 9.1 and 11.4', () => {
   const dirs = [
     'schemas/flow',
     'schemas/realtime',
