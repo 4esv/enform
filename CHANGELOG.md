@@ -38,6 +38,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine takes over a claimed task after an idle timeout: it reassigns the holder, records who/from whom/when/why, and notifies the previous holder (AS-3, WF-5, I14) (#47).
 - The engine sends a task back for revision: a holder returns it to a named step with a required comment, the step records the next revision, and the note commits in the same event (WF-3, AC-4, SE-2) (#48).
 - The engine withdraws or cancels a submission: a starter withdraws their own, cancel needs instance.cancel, holders are notified, and an undo within the period restores the step and holder as a compensating event (WF-4, AC-5, I4) (#50).
+- The engine reports a submission's status (step N of M, holder, state) and filters notes and restricted values by authorization, so a starter sees the status but not others' notes (VT-1, VT-2, VT-3, I8) (#51).
 
 ## [0.0.0] - 2026-10-08
 

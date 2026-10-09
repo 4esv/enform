@@ -72,7 +72,7 @@ function applySendBack(result: SendBackResult, state: State): State {
 // status but not the notes of the people who act on another step, and not the
 // values that a scope guards (VT-3, VT-4, I8). The path is deterministic (I6).
 
-test.fails('#51 the status line shows the step, the holder and the wait state, and I8 hides notes and fields (S14)', () => {
+test('#51 the status line shows the step, the holder and the wait state, and I8 hides notes and fields (S14)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 

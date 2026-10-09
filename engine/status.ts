@@ -12,17 +12,13 @@
 // guarded values that an actor may not see are absent from the view (VT-3,
 // VT-4). The functions are pure and deterministic (I6): they read no clock,
 // no random source and no I/O.
-//
-// Scaffolding. The status line and the visibility rules land in the next
-// commit. Until they do, every function here refuses to read, so the story's
-// first check fails; the story test is marked `test.fails` with the issue
-// number, per CONTRIBUTING.md, so the suite stays green.
 
-import type { Grant } from './authorize.js'
+import { authorize, type Grant } from './authorize.js'
 import type { FlowDefinition, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
-import type { ActorId, Log } from './operation.js'
-import type { SkippedStep } from './workflow.js'
+import type { ActorId, Event, Log } from './operation.js'
+import { STEP_SENT_BACK } from './sendBack.js'
+import { type SkippedStep, STEP_SKIPPED } from './workflow.js'
 
 /** The plain-language state of an instance (VT-2, S14). */
 export type StatusState = 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
@@ -102,55 +98,152 @@ export type StatusContext = {
 }
 
 /**
- * The status of an instance (VT-1, VT-2, S14). This is the scaffold: it
- * refuses to read until the status line lands, so the story proves the missing
- * behavior.
+ * The status of an instance (VT-1, VT-2, S14). It is a pure function of the
+ * instance, the definition and the log (I6): the position and the total come
+ * from the definition, the state from the instance's markers, and the skipped
+ * steps from the log's `step.skipped@1` events (S05). It reads no clock, no
+ * random source and no I/O.
  */
-export function status(_instance: Instance, _definition: FlowDefinition, _log: Log): Status {
-  throw new Error('status: the status line is not implemented yet (S14)')
+export function status(instance: Instance, definition: FlowDefinition, log: Log): Status {
+  const totalSteps = definition.steps.length
+  return {
+    step: activePosition(instance, definition) ?? totalSteps,
+    totalSteps,
+    currentStep: instance.currentStep,
+    holder: instance.holder,
+    state: statusState(instance),
+    skipped: skippedSteps(log),
+  }
 }
 
 /**
- * The notes that the log records, in log order (I4, VT-3). This is the
- * scaffold: it refuses to read until the notes land.
+ * The notes that the log records, in log order (I4, VT-3). A note is the
+ * comment that an attributed event records on a step: a send back records one
+ * to the step that it addresses (WF-3, S11), and a completion that carries a
+ * comment sits on the step that it completed. An event without a comment
+ * records no note.
  */
-export function notesOf(_log: Log): readonly Note[] {
-  throw new Error('status: the notes are not implemented yet (S14)')
+export function notesOf(log: Log): readonly Note[] {
+  const notes: Note[] = []
+  for (const event of log) {
+    const note = readNote(event)
+    if (note !== undefined) notes.push(note)
+  }
+  return notes
 }
 
 /**
- * The notes that one actor may read (VT-3, I8). This is the scaffold: it
- * refuses to read until the visibility rules land.
+ * The notes that one actor may read (VT-3, I8). An actor reads a note when it
+ * wrote the note, or when it holds one of the outcome scopes of the note's
+ * step (AC-4): a note is the discussion of the people who act on the step, so
+ * an actor without the step's outcome scope does not read it.
  */
 export function visibleNotes(
-  _actor: ActorId,
-  _notes: readonly Note[],
-  _context: StatusContext
+  actor: ActorId,
+  notes: readonly Note[],
+  context: StatusContext
 ): readonly Note[] {
-  throw new Error('status: the note visibility is not implemented yet (S14)')
+  return notes.filter((note) => note.actor === actor || holdsOutcomeScope(context, note.step))
 }
 
 /**
- * The guarded values that one actor may read (VT-4, I8). This is the scaffold:
- * it refuses to read until the visibility rules land.
+ * The guarded values that one actor may read (VT-4, I8). Each value names the
+ * scope and the resource that read it, and the engine authorizes the read
+ * exactly as it authorizes a write (AC-1): a value whose scope the actor does
+ * not hold is absent from the result.
  */
 export function visibleValues(
-  _values: readonly GuardedValue[],
-  _grants: readonly Grant[]
+  values: readonly GuardedValue[],
+  grants: readonly Grant[]
 ): readonly GuardedValue[] {
-  throw new Error('status: the value visibility is not implemented yet (S14)')
+  return values.filter((value) => authorize(grants, value.scope, value.resource))
 }
 
 /**
- * The view of an instance that one actor reads (VT-3, VT-4, AC-5, I8). This is
- * the scaffold: it refuses to read until the status and the visibility rules
- * land.
+ * The view of an instance that one actor reads (VT-3, VT-4, AC-5, I8). The
+ * starter always reads the status of their own instance (AC-5), an assignee
+ * reads the instance that carries its task (AS-2), and so does a principal
+ * that holds `instance.read` on the flow. The view then holds the status, the
+ * notes that the actor may read (VT-3) and the guarded values that the actor
+ * may read (VT-4). An actor that may not read the instance reads no status, no
+ * note and no value. The function is pure and deterministic (I6).
  */
 export function visibleTo(
-  _actor: ActorId,
-  _instance: Instance,
-  _context: StatusContext,
-  _values: readonly GuardedValue[] = []
+  actor: ActorId,
+  instance: Instance,
+  context: StatusContext,
+  values: readonly GuardedValue[] = []
 ): StatusView {
-  throw new Error('status: the instance view is not implemented yet (S14)')
+  if (!mayRead(actor, instance, context)) {
+    return { readable: false, notes: [], values: [] }
+  }
+  return {
+    readable: true,
+    status: status(instance, context.definition, context.log),
+    notes: visibleNotes(actor, notesOf(context.log), context),
+    values: visibleValues(values, context.grants),
+  }
+}
+
+/** Whether an actor may read an instance (AC-5, AS-2, I8): its starter, its assignee, or `instance.read`. */
+function mayRead(actor: ActorId, instance: Instance, context: StatusContext): boolean {
+  if (actor === instance.starter) return true
+  if (instance.assignees.some((assignee) => assignee.members.includes(actor))) return true
+  return authorize(context.grants, 'instance.read', `flow:${context.flow}`)
+}
+
+/** The state of an instance in plain language (VT-2, S14). */
+function statusState(instance: Instance): StatusState {
+  if (instance.withdrawal === 'withdrawn') return 'withdrawn'
+  if (instance.withdrawal === 'cancelled') return 'cancelled'
+  if (instance.done === true) return 'done'
+  if (instance.holder !== undefined) return 'in-progress'
+  return 'waiting'
+}
+
+/**
+ * The 1-based position of the active step in the definition (VT-1). The active
+ * step is the current step, or the step that a withdraw or a cancel closed
+ * (WF-5). A done instance has no active step, so the caller uses the last
+ * position.
+ */
+function activePosition(instance: Instance, definition: FlowDefinition): number | undefined {
+  const key = instance.currentStep ?? instance.previousStep
+  if (key === undefined) return undefined
+  const index = definition.steps.findIndex((step) => step.key === key)
+  return index === -1 ? undefined : index + 1
+}
+
+/** The skipped steps that the log records, in log order (S05, WF-1). */
+function skippedSteps(log: Log): readonly SkippedStep[] {
+  const skipped: SkippedStep[] = []
+  for (const event of log) {
+    if (event.type !== STEP_SKIPPED) continue
+    const step = event.payload.step
+    const condition = event.payload.condition
+    if (typeof step === 'string' && condition !== undefined) {
+      skipped.push({ step, condition: condition as JsonValue })
+    }
+  }
+  return skipped
+}
+
+/** Read the note that one event records (VT-3, WF-3); absent when the event records none. */
+function readNote(event: Event): Note | undefined {
+  if (event.actor === undefined) return undefined
+  const comment = event.payload.comment
+  if (typeof comment !== 'string') return undefined
+  const step = event.type === STEP_SENT_BACK ? event.payload.to : event.payload.step
+  if (typeof step !== 'string') return undefined
+  return { step, actor: event.actor, comment }
+}
+
+/** Whether an actor holds one of the outcome scopes of a step (AC-4, I8). */
+function holdsOutcomeScope(context: StatusContext, step: string): boolean {
+  const definitionStep = context.definition.steps.find((candidate) => candidate.key === step)
+  if (definitionStep === undefined) return false
+  const resource = `flow:${context.flow}/step:${step}`
+  return (definitionStep.outcomes ?? []).some((outcome) =>
+    authorize(context.grants, `step.outcome:${outcome}`, resource)
+  )
 }
