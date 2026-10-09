@@ -27,6 +27,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine runs dry and live on one code path, differing only in the side-effect sink and the clock, with the same side-effect intents (I7) (#13).
 - The story harness runs a scenario in dry mode, and the dry side-effect intents equal api mode (I7) (#26).
 - The story harness runs a scenario in cli mode, with the same result as api mode (I6) (#25).
+- The engine models a flow lifecycle: a draft definition, publish to an immutable version with a content hash, and instances pinned to their version (DF-1, DF-2, DF-4) (#38).
 
 ## [0.0.0] - 2026-10-08
 

@@ -41,7 +41,7 @@ function lifecycleOperations(): readonly Operation[] {
 // path. The first check is marked expected to fail until the lifecycle is
 // implemented.
 
-test.fails('#38 the lifecycle publishes an immutable version and pins an instance to version 1 (S01)', () => {
+test('#38 the lifecycle publishes an immutable version and pins an instance to version 1 (S01)', () => {
   // The lifecycle produces the golden path, operation for operation.
   expect(lifecycleOperations()).toEqual(
     golden.steps.map((step, index) => stepOperation(step, index))

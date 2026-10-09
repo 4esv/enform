@@ -1,12 +1,17 @@
 // Issue #38, S01, DF-1, DF-2, DF-4, VT-6, I9, I13, I14: the flow lifecycle.
 //
-// Scaffold. The types, `createFlow` and `validate` are in place. `push` and
-// `publish` arrive with the implementation; the lifecycle check in
-// `stories/S01-publish-flow/scenario.test.ts` is marked expected to fail until
-// then (CONTRIBUTING.md: a failing test before the implementation).
+// A flow has one draft definition and, once published, immutable versions
+// (DF-1, DF-2). `push` replaces the draft and records one
+// config.definition.changed@1 operation (DF-4, I14). `publish` freezes the
+// draft into version N with a content hash and records one
+// config.definition.published@1 operation (DF-2, VT-6). A later push opens a
+// new draft; a published version never changes, so an instance created from it
+// stays on it (I13).
 
-import { type FlowDefinition, parse } from './definition.js'
-import type { ActorId, Operation, OperationDeps } from './operation.js'
+import { configOperation } from './config.js'
+import { type FlowDefinition, parse, serialize } from './definition.js'
+import { contentHash } from './instance.js'
+import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 
 /** The versioned event type of a publication (DF-2, VT-6). */
 export const DEFINITION_PUBLISHED = 'config.definition.published@1'
@@ -43,6 +48,14 @@ export type PublishedFlow = {
   readonly operation: Operation
 }
 
+/** The payload of a publication (VT-6): the slug, the version, the hash and the frozen definition. */
+type PublicationPayload = {
+  readonly slug: string
+  readonly version: number
+  readonly contentHash: string
+  readonly definition: FlowDefinition
+}
+
 /** A new flow with an empty draft and no published version (DF-1). */
 export function createFlow(slug: string): Flow {
   return { slug, versions: [] }
@@ -57,17 +70,43 @@ export function validate(text: string): FlowDefinition {
   return parse(text)
 }
 
-/** Push a definition to the draft (DF-4, I14). The implementation arrives with issue #38. */
+/**
+ * Push a definition to the draft (DF-4, I14). One config.definition.changed@1
+ * operation records the change, attributed to the actor. The draft becomes the
+ * pushed definition; the published versions stay as they were.
+ */
 export function push(
-  _flow: Flow,
-  _definition: FlowDefinition,
-  _deps: OperationDeps,
-  _actor: ActorId
+  flow: Flow,
+  definition: FlowDefinition,
+  deps: OperationDeps,
+  actor: ActorId
 ): PushedFlow {
-  throw new Error('flow: push is not implemented yet (issue #38)')
+  const operation = configOperation({ kind: 'definition', actor, payload: definition }, deps)
+  return { flow: { ...flow, draft: definition }, operation }
 }
 
-/** Publish the draft as the next immutable version (DF-2, VT-6). The implementation arrives with issue #38. */
-export function publish(_flow: Flow, _deps: OperationDeps, _actor: ActorId): PublishedFlow {
-  throw new Error('flow: publish is not implemented yet (issue #38)')
+/**
+ * Publish the draft as the next immutable version (DF-2, VT-6). One
+ * config.definition.published@1 operation records the version, its content
+ * hash and the frozen definition, attributed to the actor. The frozen
+ * definition is a fresh parse, so a later change to the draft cannot reach the
+ * version; a later push opens a new draft.
+ */
+export function publish(flow: Flow, deps: OperationDeps, actor: ActorId): PublishedFlow {
+  const draft = flow.draft
+  if (draft === undefined) {
+    throw new Error('flow: the draft is empty; push a definition before publishing')
+  }
+  const frozen = parse(serialize(draft))
+  const version = flow.versions.length + 1
+  const hash = contentHash(frozen)
+  const published: FlowVersion = { version, contentHash: hash, definition: frozen }
+  const payload: PublicationPayload = {
+    slug: flow.slug,
+    version,
+    contentHash: hash,
+    definition: frozen,
+  }
+  const operation = createOperation(DEFINITION_PUBLISHED, payload, deps, actor)
+  return { flow: { ...flow, versions: [...flow.versions, published] }, operation }
 }
