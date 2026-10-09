@@ -27,10 +27,9 @@ function heldBy(principal: string, held: readonly Grant[]): Grant[] {
 // (AC-2, I14), and `grantsOf` reads the log back into the grants that
 // `authorize` evaluates (AC-1). Jordan holds only `step.outcome:send_back` on
 // the registrar step, so the engine authorizes Send back and refuses approve
-// (AC-4). The first check is marked expected to fail until the grant model is
-// implemented.
+// (AC-4).
 
-test.fails('#39 grants derive from the log and scope each principal to its outcomes (S02)', async () => {
+test('#39 grants derive from the log and scope each principal to its outcomes (S02)', async () => {
   // The grant operations are the golden path, operation for operation (I14).
   expect(grants.map((grant, index) => addGrant(grant, 'dana', stepDeps(index)))).toEqual(
     golden.steps.map((step, index) => stepOperation(step, index))
