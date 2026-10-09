@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine resolves the six target kinds to assignees: groups and teams resolve live, dynamic targets resolve once with a snapshot, and an empty resolution routes to Unroutable with an owner alert (AS-1, AS-4, AS-5) (#45).
 - The engine claims and completes a task: exactly one concurrent claim succeeds, a completion requires the step.outcome scope, and a stale version is rejected (AS-2, AC-4, I5) (#46).
 - The engine takes over a claimed task after an idle timeout: it reassigns the holder, records who/from whom/when/why, and notifies the previous holder (AS-3, WF-5, I14) (#47).
+- The engine sends a task back for revision: a holder returns it to a named step with a required comment, the step records the next revision, and the note commits in the same event (WF-3, AC-4, SE-2) (#48).
 
 ## [0.0.0] - 2026-10-08
 

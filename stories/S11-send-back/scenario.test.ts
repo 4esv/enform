@@ -80,7 +80,7 @@ function revisionsOnTimeline(log: Log, step: string): number[] {
 // (WF-3). A send back from a stale view is refused at once (I5). The path is
 // deterministic (I6).
 
-test.fails('#48 a send back needs a comment and returns the instance to the named step as revision 2 (S11)', () => {
+test('#48 a send back needs a comment and returns the instance to the named step as revision 2 (S11)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 
