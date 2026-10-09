@@ -6,10 +6,6 @@
 // operation that changes state carries the side effects that it causes, so one
 // `apply` writes both into one event. The oracle below states that as a check
 // over any end state. A story run can call it after its own run (MVP.md 11.4).
-//
-// Scaffolding for #8: the first check is marked as expected to fail, because
-// the engine functions are stubs until the second commit implements them. The
-// deliberate violation below already fails the oracle, and it stays marked.
 
 import { expect, test } from 'vitest'
 import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
@@ -82,7 +78,7 @@ function assertTransactionalOutbox(
   )
 }
 
-test.fails('#8 a state change and its side effects share one event (I2)', () => {
+test('#8 a state change and its side effects share one event (I2)', () => {
   const { state, entries } = sample()
   expect(outboxOf(state.log)).toEqual(entries)
   assertTransactionalOutbox(state)

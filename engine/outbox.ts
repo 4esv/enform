@@ -8,10 +8,6 @@
 // side effects are therefore present in the log together or absent together.
 // The outbox is derived state, a projection of the log; a worker would deliver
 // it at least once, later (SE-1, I3). This model does not run the worker.
-//
-// Scaffolding for #8: the types below are the outbox that the oracle checks.
-// The three functions are stubs, so the first check of the suite fails until
-// the implementation lands in the second commit.
 
 import {
   type ActorId,
@@ -35,34 +31,54 @@ export type OutboxEntry = {
 }
 
 /**
+ * The reserved payload key that carries an operation's side effects (I2). An
+ * operation that changes state carries the outbox entries that it causes under
+ * this key, so one `apply` writes the state change and its side effects into
+ * one event. A state-change payload does not use the key.
+ */
+const OUTBOX_KEY = 'outbox'
+
+/**
  * Create the operation that records one state change and the side effects that
  * it causes (I2, A2). `change` is the payload of the state change, and `outbox`
- * are the outbox entries that it causes. Stub: the operation does not carry its
- * side effects yet, so the first check of the suite fails until #8 lands.
+ * are the outbox entries that it causes. The operation carries both in one
+ * payload, so the one event that `apply` appends holds both: the state change
+ * and its side effects commit together or not at all (I2).
  */
 export function createOutboxOperation(
   type: string,
   change: Readonly<Record<string, unknown>>,
-  _outbox: readonly OutboxEntry[],
+  outbox: readonly OutboxEntry[],
   deps: OperationDeps,
   actor?: ActorId
 ): Operation {
-  return createOperation(type, change, deps, actor)
+  return createOperation(type, { ...change, [OUTBOX_KEY]: outbox }, deps, actor)
 }
 
 /**
  * The outbox entries that one event carries (I2). They are part of the event
- * itself, so the state change and its side effects share one commit. Stub: the
- * read lands with #8.
+ * itself, so the state change and its side effects share one commit (I2).
  */
-export function outboxOfEvent(_event: Event): readonly OutboxEntry[] {
-  return []
+export function outboxOfEvent(event: Event): readonly OutboxEntry[] {
+  return readOutbox(event.payload[OUTBOX_KEY])
 }
 
 /**
  * The outbox as derived state (I4): every side effect that the log carries, in
- * log order. Stub: the projection lands with #8.
+ * log order. The log is the single source of truth, so the outbox is a
+ * projection of it and never a second store (I2): reading the outbox reads no
+ * separate state, so a committed state change and its side effects are always
+ * both visible (I2). A rebuild from the log reproduces the outbox (I4).
  */
-export function outboxOf(_log: Log): readonly OutboxEntry[] {
-  return []
+export function outboxOf(log: Log): readonly OutboxEntry[] {
+  return log.flatMap(outboxOfEvent)
+}
+
+/** Read the reserved outbox key. An absent key means the event caused no side effect. */
+function readOutbox(value: unknown): readonly OutboxEntry[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new Error(`outbox: the ${OUTBOX_KEY} key must be an array`)
+  }
+  return value as readonly OutboxEntry[]
 }
