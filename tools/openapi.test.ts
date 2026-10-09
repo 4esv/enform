@@ -23,7 +23,7 @@ const operations = [
   ['/api/v1/state', 'get'],
 ] as const
 
-test.fails('#91 DX-1 api/openapi.yaml is valid OpenAPI 3.1 for /api/v1', async () => {
+test('#91 DX-1 api/openapi.yaml is valid OpenAPI 3.1 for /api/v1', async () => {
   const document = parse(readFileSync(documentPath, 'utf8'))
   expect(document, 'parses as a YAML mapping').toBeTypeOf('object')
   expect(document.openapi, 'declares OpenAPI 3.1').toMatch(/^3\.1\./)

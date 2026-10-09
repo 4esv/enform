@@ -1,9 +1,146 @@
-# The HTTP API contract (MVP.md 9.1, DX-1). Issue #91 fills it in.
+# The HTTP API contract (MVP.md 9.1, DX-1). The path prefix is /api/v1.
 openapi: 3.1.0
 info:
   title: enform
   version: 0.1.0
-  description: The HTTP API of the enform engine. The path prefix is /api/v1.
+  description: >-
+    The HTTP API of the enform engine. It appends operations to the
+    append-only log and reads the log and the state rebuilt from it. A
+    configuration change is an operation whose type is
+    `config.<kind>.changed@1` (I14), not a separate endpoint.
 servers:
   - url: /api/v1
-paths: {}
+security:
+  - keycloak: []
+paths:
+  /api/v1/operations:
+    post:
+      operationId: appendOperation
+      summary: Append one operation to the log
+      description: >-
+        The engine applies the operation idempotently by its client-created
+        ID (I1) and appends the event it records (I4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Operation'
+      responses:
+        '201':
+          description: The operation was appended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '400':
+          description: The operation is invalid
+  /api/v1/log:
+    get:
+      operationId: readLog
+      summary: Read the append-only log
+      description: The single sequence of all events, in one global order (I4).
+      responses:
+        '200':
+          description: The ordered events of the log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Log'
+  /api/v1/state:
+    get:
+      operationId: readState
+      summary: Read the state rebuilt from the log
+      description: >-
+        The derived state is rebuilt from the log (I4), so it is reproducible
+        from the same sequence of events.
+      responses:
+        '200':
+          description: The state rebuilt from the log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+components:
+  securitySchemes:
+    keycloak:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A Keycloak access token (ADR 0005).
+  schemas:
+    ActorId:
+      type: string
+      description: >-
+        An immutable directory ID that identifies a person or a group (ID-4).
+        A name or an email address never identifies a principal.
+    OperationId:
+      type: string
+      description: The client-created ID of one operation (UUIDv7).
+    Operation:
+      type: object
+      description: One change (MVP.md 3). The client creates its ID (ADR 0004).
+      required: [id, type, at, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: >-
+            The versioned event type that this operation records (MVP.md 9.1).
+            A configuration change uses `config.<kind>.changed@1` (I14).
+          examples:
+            - config.grant.changed@1
+            - config.team.changed@1
+            - config.connector.changed@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The change payload.
+    Event:
+      type: object
+      description: >-
+        An immutable, ordered record of an occurrence. The single writer
+        assigns `seq` (ADR 0004).
+      required: [seq, operationId, type, at, payload]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+          description: The 1-based position in the append-only log.
+        operationId:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type that this event records.
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The change payload.
+    Log:
+      type: array
+      description: The single sequence of all events, in one global order.
+      items:
+        $ref: '#/components/schemas/Event'
+    State:
+      type: object
+      description: The derived state, rebuilt from the log (I4).
+      required: [applied, log]
+      properties:
+        applied:
+          type: array
+          description: The IDs of the operations that have been applied.
+          items:
+            $ref: '#/components/schemas/OperationId'
+        log:
+          $ref: '#/components/schemas/Log'

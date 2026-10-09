@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine rebuilds derived state from the append-only log (I4) (#10).
 - The engine runs a sequence deterministically from injected clock and ID sources (I6) (#12).
 - The engine records configuration changes as attributed, versioned operations (I14) (#20).
+- An OpenAPI document describes the HTTP API under `/api/v1` (DX-1) (#91).
 
 ## [0.0.0] - 2026-10-08
 
