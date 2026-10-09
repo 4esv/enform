@@ -74,11 +74,13 @@ export function startInstance(
     ...createInstance(definition, assignees),
     currentStep: step.key,
     submitted: false,
+    starter: actor,
   }
   const change = {
     definitionVersion: instance.definitionVersion,
     currentStep: step.key,
     assignees,
+    starter: actor,
   }
   const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
   return { instance, operation }
