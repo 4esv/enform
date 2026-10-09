@@ -1,9 +1,13 @@
 // Issue #19, I13, DF-2, AS-4, A8: the stamped instance record.
 // Issue #43, S06, WF-1: the workflow state of an instance, its current step
 // and its submitted flag.
+// Issue #46, S09, AS-2, I5: the holder of the current step and the log version
+// that a view of the instance was read at.
 
 import { createHash } from 'node:crypto'
+import type { Version } from './concurrency.js'
 import { type FlowDefinition, serialize, type Target } from './definition.js'
+import type { ActorId } from './operation.js'
 
 /**
  * One resolved assignee of a step, with the membership snapshot that the
@@ -58,6 +62,26 @@ export type Instance = {
    * draft that is not submitted rebinds to the next version (DF-6).
    */
   readonly submitted?: boolean
+  /**
+   * The principal that holds the current step (S09, AS-2). It is absent before
+   * anyone claims the step, the first claim sets it to the claimant, and a
+   * completion clears it. Only the holder may complete the step.
+   */
+  readonly holder?: ActorId
+  /**
+   * Whether the instance completed its last step (S09, WF-1). It is absent
+   * before the last completion and true after one; while a next step remains,
+   * the engine advances `currentStep` instead.
+   */
+  readonly done?: boolean
+  /**
+   * The log position that this view of the instance was read at (S09, I5). The
+   * engine reads it from the log length (`version` in concurrency.ts), and an
+   * action carries it as the version that the actor based its action on. It is
+   * absent before an action reads the instance, and an absent version is the
+   * empty log, version 0.
+   */
+  readonly version?: Version
 }
 
 /**
