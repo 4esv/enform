@@ -1,5 +1,6 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { type ActorId, createOperation, type Event } from '../../engine/operation.js'
+import type { OutboxEntry } from '../../engine/outbox.js'
 
 // Issue #24, STORIES.md Test method: one executable scenario per story. Its
 // steps are "a person acts, then a condition must be true". The runner
@@ -14,6 +15,8 @@ export type Step = {
   readonly type: string
   /** The payload of the operation the step appends. */
   readonly payload: Readonly<Record<string, unknown>>
+  /** The side effects that the step causes (I2); absent when it causes none. */
+  readonly outbox?: readonly OutboxEntry[]
 }
 
 export type Scenario = {

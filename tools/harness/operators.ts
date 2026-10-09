@@ -17,6 +17,6 @@ export const DUPLICATE: Operator = { id: 'Duplicate', deliveries: () => 2 }
 
 /** Run one fuzzy path of a golden path, then check it against the oracles. */
 export async function runOperator(scenario: Scenario, operator: Operator): Promise<void> {
-  const state = await runSteps(scenario, operator.deliveries)
+  const { state } = await runSteps(scenario, { mode: 'api', deliveries: operator.deliveries })
   oracles(state, scenario)
 }
