@@ -9,14 +9,18 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 const repo = join(import.meta.dirname, '..')
-const table = invariantTable(readFileSync(join(repo, 'MVP.md'), 'utf8'))
+const mvp = readFileSync(join(repo, 'MVP.md'), 'utf8')
+const table = invariantTable(mvp)
 
-const expected = Array.from({ length: 16 }, (_, i) => `I${i + 1}`)
+// The rule checks the invariants of the current milestone (MVP.md section 8).
+// At 0.1.0 that is I1, I4, I6 and I14. It advances with the milestone.
+const expected = currentMilestoneInvariants(mvp)
+const inScope = table.filter((row) => expected.includes(row.id))
 const missingId = expected.filter((id) => !table.some((row) => row.id === id))
 const missing = []
 const skipped = []
 
-for (const { id, suite } of table) {
+for (const { id, suite } of inScope) {
   const dir = join(repo, suite)
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     missing.push(`${id}: ${suite} is not a directory`)
@@ -54,7 +58,7 @@ if (skipped.length > 0) {
 
 if (failed) process.exit(1)
 
-console.log(`invariant rule: ${table.length} invariant suites present and not skipped`)
+console.log(`invariant rule: ${inScope.length} invariant suites present and not skipped`)
 
 // The rows of the table in MVP.md section 4: `| I1 | ... | A2, A7 | `suite` |`.
 function invariantTable(text) {
@@ -66,6 +70,16 @@ function invariantTable(text) {
     if (suite.startsWith('invariants/')) rows.push({ id: cells[1], suite })
   }
   return rows
+}
+
+// The invariant IDs of the current milestone, from the 0.1.0 row of the
+// release plan (MVP.md section 8).
+function currentMilestoneInvariants(text) {
+  for (const line of text.split('\n')) {
+    if (!/^\|\s*`0\.1\.0`\s*\|/.test(line)) continue
+    return [...line.matchAll(/I\d+/g)].map((match) => match[0])
+  }
+  return []
 }
 
 // Every test file in a suite, at any depth.
