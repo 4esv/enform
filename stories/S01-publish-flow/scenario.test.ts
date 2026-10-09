@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
 import type { State } from '../../engine/apply.js'
+import { DUPLICATE, runOperator } from '../../tools/harness/operators.js'
 import { oracles } from '../../tools/harness/oracles.js'
 import { runGolden } from '../../tools/harness/runner.js'
 import { goldenView } from '../../tools/harness/scenario.js'
@@ -27,4 +28,13 @@ test('#28 the oracles fail a run whose behavior event has no actor', () => {
     log: expected.log.map((event) => ({ ...event, actor: undefined })),
   }
   expect(() => oracles(unattributed, golden)).toThrow()
+})
+
+// Issue #31: the Duplicate operator sends each operation two times, and the
+// end state does not change (I1, I3). The check is marked expected to fail
+// until the operator is implemented.
+
+test.fails('#31 the Duplicate operator leaves the end state unchanged (S01)', async () => {
+  await runOperator(golden, DUPLICATE)
+  expect(goldenView(golden).log).toHaveLength(1)
 })
