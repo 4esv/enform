@@ -49,10 +49,9 @@ function grantsFromLog(grants: readonly Grant[]): readonly Grant[] {
 // submit marks the instance submitted and, in the same operation, records the
 // assignment email to the first assignee (I2, SE-1). A start with no principal,
 // or without instance.start on the flow, is refused (ID-2, AC-1). The path is
-// deterministic (I6). The first check is marked expected to fail until the
-// submission workflow is implemented.
+// deterministic (I6).
 
-test.fails('#43 a start routes a draft and the submit records the assignment email (S06)', () => {
+test('#43 a start routes a draft and the submit records the assignment email (S06)', () => {
   // (a) Sam holds instance.start on the flow, read back from the log (AC-1, I4).
   const grants = grantsFromLog(samGrants)
   const started = startInstance(flow, samData, SAM, deps(), resolve, grants)

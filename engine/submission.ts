@@ -13,12 +13,15 @@
 // Both functions are pure and deterministic (I6): they read no clock, no
 // random source and no I/O, and the injected sources come in as arguments.
 
-import type { Grant } from './authorize.js'
+import { authorize, type Grant } from './authorize.js'
 import type { ConditionData } from './condition.js'
+import type { FlowDefinition, FlowStep } from './definition.js'
 import type { Flow } from './flow.js'
-import type { Instance } from './instance.js'
-import type { ActorId, Operation, OperationDeps } from './operation.js'
-import type { TargetResolver } from './routing.js'
+import { createInstance, type Instance } from './instance.js'
+import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
+import { createOutboxOperation, type OutboxEntry } from './outbox.js'
+import { resolveAssignees, type TargetResolver } from './routing.js'
+import { isStepSkipped } from './workflow.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
 export const INSTANCE_STARTED = 'instance.started@1'
@@ -55,14 +58,30 @@ export type SubmittedInstance = {
  * version (DF-2, I13). It is pure and deterministic (I6).
  */
 export function startInstance(
-  _flow: Flow,
-  _data: ConditionData,
-  _actor: ActorId | undefined,
-  _deps: OperationDeps,
-  _resolve: TargetResolver,
-  _grants?: readonly Grant[]
+  flow: Flow,
+  data: ConditionData,
+  actor: ActorId | undefined,
+  deps: OperationDeps,
+  resolve: TargetResolver,
+  grants?: readonly Grant[]
 ): StartedInstance {
-  throw new Error('submission: the start of a submission is not implemented yet (issue #43)')
+  const resource = `flow:${flow.slug}`
+  assertStartable(actor, grants, resource)
+  const definition = startableDefinition(flow)
+  const step = firstActiveStep(definition, data)
+  const assignees = resolveAssignees(step, resolve)
+  const instance: Instance = {
+    ...createInstance(definition, assignees),
+    currentStep: step.key,
+    submitted: false,
+  }
+  const change = {
+    definitionVersion: instance.definitionVersion,
+    currentStep: step.key,
+    assignees,
+  }
+  const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
+  return { instance, operation }
 }
 
 /**
@@ -73,9 +92,79 @@ export function startInstance(
  * (SE-1). The function is pure and deterministic (I6).
  */
 export function submitInstance(
-  _instance: Instance,
-  _actor: ActorId,
-  _deps: OperationDeps
+  instance: Instance,
+  actor: ActorId,
+  deps: OperationDeps
 ): SubmittedInstance {
-  throw new Error('submission: the submit of a submission is not implemented yet (issue #43)')
+  const submitted: Instance = { ...instance, submitted: true }
+  const change = { currentStep: instance.currentStep, submitted: true }
+  const operation = createOutboxOperation(
+    INSTANCE_SUBMITTED,
+    change,
+    [assignmentEmail(instance)],
+    deps,
+    actor
+  )
+  return { instance: submitted, operation }
+}
+
+/**
+ * Authorize a start (ID-2, AC-1, I8). A start without a principal is refused:
+ * the engine never creates an anonymous draft (ID-2). When the caller gives
+ * the acting principal's grants, the principal must hold `instance.start` on
+ * the flow (AC-1). The check narrows the actor, so the caller's start has a
+ * principal.
+ */
+function assertStartable(
+  actor: ActorId | undefined,
+  grants: readonly Grant[] | undefined,
+  resource: string
+): asserts actor is ActorId {
+  if (actor === undefined) {
+    throw new Error('instance: a start requires a signed-in principal (ID-2)')
+  }
+  if (grants !== undefined && !authorize(grants, 'instance.start', resource)) {
+    throw new Error(`instance: starting ${resource} requires the scope instance.start (AC-1)`)
+  }
+}
+
+/**
+ * The definition that a start pins the instance to (DF-2, I13): the flow's
+ * latest published version. A flow with no published version cannot start.
+ */
+function startableDefinition(flow: Flow): FlowDefinition {
+  const latest = flow.versions.at(-1)
+  if (latest === undefined) {
+    throw new Error(`instance: the flow ${flow.slug} has no published version to start on (DF-2)`)
+  }
+  return latest.definition
+}
+
+/**
+ * The step that the draft routes to (WF-1, S06): the first step whose skip
+ * condition is false. A step with no condition is never skipped. Every step
+ * being skipped is a flow error, and the start refuses rather than routing
+ * nowhere.
+ */
+function firstActiveStep(definition: FlowDefinition, data: ConditionData): FlowStep {
+  const step = definition.steps.find((candidate) => !isStepSkipped(candidate, data))
+  if (step === undefined) {
+    throw new Error('instance: every step is skipped, so the start has no step to route (WF-1)')
+  }
+  return step
+}
+
+/**
+ * The assignment email that the first assignee receives (S06, SE-1): the
+ * connector operation, the connector and the recipient. I10 forbids a silent
+ * drop, so a step whose assignees resolve to nobody refuses the submit rather
+ * than record no email.
+ */
+function assignmentEmail(instance: Instance): OutboxEntry {
+  const to = instance.assignees.flatMap((assignee) => assignee.members)[0]
+  if (to === undefined) {
+    throw new Error(`instance: the step ${instance.currentStep} has no assignee to notify (I10)`)
+  }
+  const payload = { to, step: instance.currentStep }
+  return { operation: ASSIGNMENT_EMAIL, target: EMAIL_CONNECTOR, payload }
 }
