@@ -1,0 +1,82 @@
+{
+  "realm": "enform-entra",
+  "enabled": true,
+  "displayName": "enform Microsoft Entra ID (test)",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "rememberMe": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "clients": [
+    {
+      "clientId": "enform",
+      "name": "enform",
+      "description": "The enform engine and web interface (ID-1).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": ["http://localhost:8080/api/v1/auth/callback"],
+      "webOrigins": ["http://localhost:8080"],
+      "secret": "enform-dev-secret",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "entra",
+      "displayName": "Microsoft Entra ID",
+      "providerId": "oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "00000000-0000-0000-0000-000000000000",
+        "clientSecret": "change-me",
+        "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "tokenUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        "userInfoUrl": "https://graph.microsoft.com/oidc/userinfo",
+        "logoutUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/logout",
+        "issuer": "https://login.microsoftonline.com/common/v2.0",
+        "defaultScope": "openid profile email",
+        "validateSignature": "true",
+        "useJwksUrl": "true",
+        "pkceEnabled": "true"
+      }
+    }
+  ],
+  "identityProviderMappers": [
+    {
+      "name": "entra-object-id",
+      "identityProviderAlias": "entra",
+      "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": {
+        "claim": "oid",
+        "user.attribute": "entra_object_id",
+        "syncMode": "FORCE"
+      }
+    },
+    {
+      "name": "entra-username",
+      "identityProviderAlias": "entra",
+      "identityProviderMapper": "oidc-username-idp-mapper",
+      "config": {
+        "template": "${ALIAS}.${CLAIM.preferred_username}",
+        "syncMode": "FORCE"
+      }
+    }
+  ]
+}

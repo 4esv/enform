@@ -5,7 +5,7 @@ import { expect, test } from 'vitest'
 
 // The check of issue #97: the local Compose stack and its two test realms.
 // The engine does not exist in 0.1.0, so the stack cannot run yet, and the
-// check stays marked expected to fail.
+// check verifies the stack configuration.
 
 const repo = join(import.meta.dirname, '..')
 const composeFile = join(repo, 'deploy', 'compose.yaml')
@@ -15,7 +15,7 @@ function docker(args: string[]) {
   return spawnSync('docker', args, { encoding: 'utf8' })
 }
 
-test.fails('#97 the Compose stack validates and brokers AD and Entra ID', () => {
+test('#97 the Compose stack validates and brokers AD and Entra ID', () => {
   expect(existsSync(composeFile), 'deploy/compose.yaml exists').toBe(true)
 
   const version = docker(['compose', 'version'])

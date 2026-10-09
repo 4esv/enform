@@ -1,0 +1,132 @@
+# The local enform stack (MVP.md 9.1, issue #97).
+#
+# Every service name and every environment variable below is a public surface
+# (MVP.md 9.1). Change them only with a release that states the change.
+#
+# `make stack` runs `docker compose -f deploy/compose.yaml up --wait`.
+#
+# The server and the worker images are not built in 0.1.0, because the engine
+# does not exist yet. The `image` values are the release images that the build
+# pipeline publishes. Override them with ENFORM_SERVER_IMAGE and
+# ENFORM_WORKER_IMAGE until those images exist.
+
+name: enform
+
+services:
+  postgres:
+    # ADR 0003: PostgreSQL is the only datastore and job queue.
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-enform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enform}
+      POSTGRES_DB: ${POSTGRES_DB:-enform}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    networks:
+      - enform
+
+  keycloak:
+    # ADR 0005: Keycloak is the identity broker. It federates on-premises
+    # Active Directory and Microsoft Entra ID (ID-1).
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB:-keycloak}
+      KC_DB_USERNAME: ${POSTGRES_USER:-enform}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-enform}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+    volumes:
+      - ./keycloak/realms:/opt/keycloak/data/import:ro
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+      test:
+        - CMD-SHELL
+        - >-
+          { printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&0;
+          grep 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/9000
+    networks:
+      - enform
+
+  server:
+    # The enform engine. It answers under /api/v1 (MVP.md 9.1).
+    image: ${ENFORM_SERVER_IMAGE:-ghcr.io/enform/enform-server:0.1.0}
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      ENFORM_HTTP_ADDR: ${ENFORM_HTTP_ADDR:-0.0.0.0:8080}
+      ENFORM_API_BASE_PATH: /api/v1
+      ENFORM_PUBLIC_URL: ${ENFORM_PUBLIC_URL:-http://localhost:8080}
+      ENFORM_DATABASE_URL: >-
+        ${ENFORM_DATABASE_URL:-postgres://enform:enform@postgres:5432/enform}
+      ENFORM_OIDC_ISSUER_URL: >-
+        ${ENFORM_OIDC_ISSUER_URL:-http://keycloak:8080/realms/enform-ad}
+      ENFORM_OIDC_CLIENT_ID: ${ENFORM_OIDC_CLIENT_ID:-enform}
+      ENFORM_OIDC_CLIENT_SECRET: ${ENFORM_OIDC_CLIENT_SECRET:-enform-dev-secret}
+      ENFORM_LOG_LEVEL: ${ENFORM_LOG_LEVEL:-info}
+    ports:
+      - "${ENFORM_HTTP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1:8080/api/v1/health
+    networks:
+      - enform
+
+  worker:
+    # The side-effect and outbox worker. It reads the same store as the server
+    # and never decides correctness on its own (MVP.md axiom A9).
+    image: ${ENFORM_WORKER_IMAGE:-ghcr.io/enform/enform-worker:0.1.0}
+    restart: unless-stopped
+    command: ["work"]
+    environment:
+      ENFORM_DATABASE_URL: >-
+        ${ENFORM_DATABASE_URL:-postgres://enform:enform@postgres:5432/enform}
+      ENFORM_SERVER_URL: ${ENFORM_SERVER_URL:-http://server:8080}
+      ENFORM_LOG_LEVEL: ${ENFORM_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_started
+    networks:
+      - enform
+
+volumes:
+  postgres-data:
+
+networks:
+  enform:
