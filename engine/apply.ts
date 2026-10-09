@@ -20,6 +20,7 @@ export const emptyState: State = { applied: new Set(), log: [] }
  * again returns the same state (I1): its ID is already in `applied`.
  */
 export function apply(operation: Operation, state: State): State {
+  if (state.applied.has(operation.id)) return state
   const event: Event = {
     seq: state.log.length + 1,
     operationId: operation.id,

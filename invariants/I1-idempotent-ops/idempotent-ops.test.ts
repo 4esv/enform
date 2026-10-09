@@ -64,7 +64,7 @@ function assertIdempotent(
   expect(replayed).toEqual(state)
 }
 
-test.fails('#7 a replay of the log does not change the state (I1)', () => {
+test('#7 a replay of the log does not change the state (I1)', () => {
   const state = endState()
   expect(state.log).toHaveLength(3)
   assertIdempotent(state)

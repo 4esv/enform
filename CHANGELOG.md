@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 ### Added
 
 - The repository layout of `MVP.md` section 9.1 and the five commands: `make setup`, `make check`, `make invariants`, `make stories` and `make stack` (#95).
+- The engine operation model: idempotent operations with client-created UUIDv7 IDs (I1) (#7).
 
 ## [0.0.0] - 2026-10-08
 
