@@ -29,7 +29,7 @@ function sources(sink: 'live' | 'dry'): RunSources {
 // timeline, at four it stays active. Dry and live share one run path, so they
 // decide the same route (I7). The decision is deterministic (I6).
 
-test.fails('#42 a true skip condition skips the chair step and the live run records it (S05)', () => {
+test('#42 a true skip condition skips the chair step and the live run records it (S05)', () => {
   // The fixture carries the condition, and the evaluator reads the data (FM-5).
   expect(chairStep.skipWhen).toEqual(chairSkipWhen)
   expect(evaluate(chairSkipWhen, smallOverload)).toBe(true)

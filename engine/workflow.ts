@@ -11,10 +11,10 @@
 // no event and reports the same route and the same skips as intents.
 
 import type { State } from './apply.js'
-import type { ConditionData } from './condition.js'
+import { type ConditionData, evaluate } from './condition.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import type { ActorId } from './operation.js'
-import type { RunSources } from './run.js'
+import { type RunSources, runSteps, type Step } from './run.js'
 
 /** The versioned event type of a skip (S05, WF-1). */
 export const STEP_SKIPPED = 'step.skipped@1'
@@ -43,8 +43,9 @@ export type FlowRun = {
  * Decide whether one step is skipped (WF-1, S05, I6): the skip condition is
  * true. A step with no condition is never skipped.
  */
-export function isStepSkipped(_step: FlowStep, _data: ConditionData): boolean {
-  throw new Error('workflow: the skip decision is not implemented yet (issue #42)')
+export function isStepSkipped(step: FlowStep, data: ConditionData): boolean {
+  if (step.skipWhen === undefined) return false
+  return evaluate(step.skipWhen, data) === true
 }
 
 /**
@@ -57,10 +58,23 @@ export function isStepSkipped(_step: FlowStep, _data: ConditionData): boolean {
  * and data.
  */
 export function runFlow(
-  _definition: FlowDefinition,
-  _data: ConditionData,
-  _sources: RunSources,
-  _actor: ActorId
+  definition: FlowDefinition,
+  data: ConditionData,
+  sources: RunSources,
+  actor: ActorId
 ): FlowRun {
-  throw new Error('workflow: the run path is not implemented yet (issue #42)')
+  const active: string[] = []
+  const skipped: SkippedStep[] = []
+  const steps: Step[] = []
+  for (const step of definition.steps) {
+    const condition = step.skipWhen
+    if (condition !== undefined && isStepSkipped(step, data)) {
+      skipped.push({ step: step.key, condition })
+      steps.push({ type: STEP_SKIPPED, payload: { step: step.key, condition }, actor })
+      continue
+    }
+    active.push(step.key)
+  }
+  const { state } = runSteps(steps, sources)
+  return { state, route: { active, skipped } }
 }
