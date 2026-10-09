@@ -1,4 +1,4 @@
-// Issue #7, I1, I4, I6, ADR 0004: the idempotent operation model.
+// Issue #7, I1, I4, I6, I14, ADR 0004: the idempotent operation model.
 
 import type { Event, Log, Operation, OperationId } from './operation.js'
 
@@ -17,7 +17,9 @@ export const emptyState: State = { applied: new Set(), log: [] }
 /**
  * Apply one operation and append its event to the log. Pure and deterministic
  * (I6): it reads no clock and no random source. Applying the same operation
- * again returns the same state (I1): its ID is already in `applied`.
+ * again returns the same state (I1): its ID is already in `applied`. The event
+ * keeps the actor of the operation, so an attributed change stays attributed
+ * on the log (I14).
  */
 export function apply(operation: Operation, state: State): State {
   if (state.applied.has(operation.id)) return state
@@ -26,6 +28,7 @@ export function apply(operation: Operation, state: State): State {
     operationId: operation.id,
     type: operation.type,
     at: operation.at,
+    actor: operation.actor,
     payload: operation.payload,
   }
   return {

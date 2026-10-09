@@ -1,4 +1,4 @@
-// Issue #7, I1, I4, I6, ADR 0004: the operation, event and log model.
+// Issue #7, I1, I4, I6, I14, ADR 0004: the operation, event and log model.
 
 /** A client-created operation ID. ADR 0004 makes it a UUIDv7. */
 export type OperationId = string
@@ -8,6 +8,18 @@ export type Clock = () => number
 
 /** The operation ID generator, injected for the same reason (I6). */
 export type IdGenerator = () => OperationId
+
+/** The injected sources that create an operation: the clock and the ID generator (I6). */
+export type OperationDeps = {
+  readonly clock: Clock
+  readonly ids: IdGenerator
+}
+
+/**
+ * A principal ID: a user, a group or a team (MVP.md 3). It is immutable, so a
+ * name or an email address never identifies a principal (ID-4).
+ */
+export type ActorId = string
 
 /**
  * One change (MVP.md 3). Every change is an operation, and the client creates
@@ -19,6 +31,11 @@ export type Operation = {
   readonly type: string
   /** The time of the change, from the injected clock (I6). */
   readonly at: number
+  /**
+   * Who made the change (I14). An operation that affects no behavior may omit
+   * it; a change that affects behavior always names its principal.
+   */
+  readonly actor?: ActorId
   readonly payload: Readonly<Record<string, unknown>>
 }
 
@@ -31,6 +48,8 @@ export type Event = {
   readonly operationId: OperationId
   readonly type: string
   readonly at: number
+  /** Who made the change (I14). It is the actor of the operation that records it. */
+  readonly actor?: ActorId
   readonly payload: Readonly<Record<string, unknown>>
 }
 
@@ -57,11 +76,13 @@ export type RedactionPayload = {
 /**
  * Create a client operation from an injected clock and ID generator (I6). Two
  * operations with the same ID are the same change, however often they arrive.
+ * A change that affects behavior also passes the actor who made it (I14).
  */
 export function createOperation(
   type: string,
   payload: Readonly<Record<string, unknown>>,
-  deps: { readonly clock: Clock; readonly ids: IdGenerator }
+  deps: OperationDeps,
+  actor?: ActorId
 ): Operation {
-  return { id: deps.ids(), type, at: deps.clock(), payload }
+  return { id: deps.ids(), type, at: deps.clock(), actor, payload }
 }
