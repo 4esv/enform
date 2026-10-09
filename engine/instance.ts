@@ -1,15 +1,7 @@
 // Issue #19, I13, DF-2, AS-4, A8: the stamped instance record.
-//
-// I13: each instance records its definition version and the resolved assignees
-// with a membership snapshot. It also records a log of connector calls:
-// operation, time and outcome. It does not record response bodies. The
-// instance stays on the definition version that it started on (DF-2).
-//
-// Scaffolding for #19: the types below are the record that the oracle checks.
-// The three functions are stubs, so the first check of the suite fails until
-// the implementation lands in the second commit.
 
-import type { FlowDefinition, Target } from './definition.js'
+import { createHash } from 'node:crypto'
+import { type FlowDefinition, serialize, type Target } from './definition.js'
 
 /**
  * One resolved assignee of a step, with the membership snapshot that the
@@ -57,29 +49,32 @@ export type Instance = {
 /**
  * The content hash of a definition (DF-2): the SHA-256 of the canonical file
  * form, in lowercase hex. It is deterministic, and it reads no random source
- * (I6). Stub: the hash lands with #19.
+ * (I6).
  */
-export function contentHash(_definition: FlowDefinition): string {
-  return ''
+export function contentHash(definition: FlowDefinition): string {
+  return createHash('sha256').update(serialize(definition)).digest('hex')
 }
 
 /**
  * Create an instance from a definition and its resolved assignees (I13,
  * DF-2). The instance records the content hash of the definition as its
- * version, so it stays on the version that it started on. Stub: the record
- * lands with #19.
+ * version, so it stays on the version that it started on (DF-2).
  */
 export function createInstance(
-  _definition: FlowDefinition,
-  _assignees: readonly Assignee[]
+  definition: FlowDefinition,
+  assignees: readonly Assignee[]
 ): Instance {
-  return { definitionVersion: '', assignees: [], connectorCalls: [] }
+  return {
+    definitionVersion: contentHash(definition),
+    assignees: [...assignees],
+    connectorCalls: [],
+  }
 }
 
 /**
  * Append one connector call to an instance (I13, I4). The log grows by one
- * entry; the past entries stay as they were. Stub: the append lands with #19.
+ * entry; the past entries stay as they were.
  */
-export function recordConnectorCall(instance: Instance, _call: ConnectorCall): Instance {
-  return instance
+export function recordConnectorCall(instance: Instance, call: ConnectorCall): Instance {
+  return { ...instance, connectorCalls: [...instance.connectorCalls, call] }
 }

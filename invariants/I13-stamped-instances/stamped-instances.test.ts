@@ -5,10 +5,6 @@
 // operation, time and outcome. It does not record response bodies. The oracle
 // below states that as a check over one instance, so a story run can call it
 // with the instance that its run created (MVP.md 11.4).
-//
-// Scaffolding for #19: the first check is marked as expected to fail, because
-// the engine functions are stubs until the second commit implements them. The
-// deliberate violation below already fails the oracle, and it stays marked.
 
 import { createHash } from 'node:crypto'
 import { expect, test } from 'vitest'
@@ -109,7 +105,7 @@ function assertStampedInstance(instance: Instance): void {
   }
 }
 
-test.fails('#19 an instance is stamped with its version, assignees and calls (I13)', () => {
+test('#19 an instance is stamped with its version, assignees and calls (I13)', () => {
   const definition = parse(FILE)
   const instance = recordConnectorCall(createInstance(definition, ASSIGNEES), CALL)
   expect(instance.definitionVersion).toBe(
