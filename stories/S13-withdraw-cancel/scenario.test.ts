@@ -84,11 +84,8 @@ function applyUndo(result: UndoResult, state: State): State {
 // An undo within the flow's undo period restores the previous step and holder
 // as a compensating event (WF-5, I4); a stale view or a time past the period is
 // refused. The path is deterministic (I6).
-//
-// Expected to fail until #50 lands: the withdraw model is a scaffold that
-// refuses every close, so the first acceptance check fails (MVP.md 11.1).
 
-test.fails('#50 a starter withdraws, an authorized principal cancels, and an undo restores the step (S13)', () => {
+test('#50 a starter withdraws, an authorized principal cancels, and an undo restores the step (S13)', () => {
   // One shared source, so every recorded operation gets a distinct ID (I1).
   let now = CLOSED_AT
   const sources = deps(() => now)
