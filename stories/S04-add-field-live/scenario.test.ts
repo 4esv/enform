@@ -23,7 +23,7 @@ function stepDeps(index: number): { clock: () => number; ids: () => string } {
 // (an added step) stands in for the new field; the field and its values arrive
 // with FM-1 (issue #74).
 
-test.fails('#41 a published version pins its instance and a draft rebinds to the next one (S04)', async () => {
+test('#41 a published version pins its instance and a draft rebinds to the next one (S04)', async () => {
   // (a) Dana pushes and publishes version 1, then makes a structural change and
   // publishes version 2 (DF-2, DF-6). Each publication freezes the draft as an
   // immutable version, and the two versions have different content hashes.

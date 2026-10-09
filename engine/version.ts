@@ -13,7 +13,7 @@
 // added step) stands in for "a new field", and the field-value migration
 // ("keeps each value that fits") arrives with FM-1 (issue #74).
 
-import type { DefinitionChange } from './edit.js'
+import { classifyChange, type DefinitionChange } from './edit.js'
 import type { FlowVersion } from './flow.js'
 import type { Instance } from './instance.js'
 
@@ -22,8 +22,8 @@ import type { Instance } from './instance.js'
  * `classifyChange` on the two frozen definitions, so the difference names the
  * structural or edit-class change from `from` to `to` (DF-6, AC-1).
  */
-export function versionDiff(_from: FlowVersion, _to: FlowVersion): readonly DefinitionChange[] {
-  return []
+export function versionDiff(from: FlowVersion, to: FlowVersion): readonly DefinitionChange[] {
+  return classifyChange(from.definition, to.definition)
 }
 
 /**
@@ -33,6 +33,6 @@ export function versionDiff(_from: FlowVersion, _to: FlowVersion): readonly Defi
  * instance and reads no clock and no random source. The caller rebinds only a
  * draft that is not submitted; a submitted instance is never passed here.
  */
-export function migrateDraft(instance: Instance, _nextVersion: FlowVersion): Instance {
-  return instance
+export function migrateDraft(instance: Instance, nextVersion: FlowVersion): Instance {
+  return { ...instance, definitionVersion: nextVersion.contentHash }
 }
