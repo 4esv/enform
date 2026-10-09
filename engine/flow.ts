@@ -14,9 +14,10 @@
 // change needs `flow.build`. The classification lives in `edit.ts`; the engine
 // is the only place that evaluates it (AC-1).
 
-import type { Grant } from './authorize.js'
+import { authorize, type Grant } from './authorize.js'
 import { configOperation } from './config.js'
 import { type FlowDefinition, parse, serialize } from './definition.js'
+import { classifyChange, type DefinitionChange } from './edit.js'
 import { contentHash } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 
@@ -103,14 +104,30 @@ export function push(
 
 /**
  * Authorize one push against the acting principal's grants (DF-5, D2, AC-1,
- * I8). The classification and the scope check arrive with issue #40.
+ * I8). The engine is the only place that evaluates the scope of a definition
+ * change (AC-1). A structural change needs `flow.build`. An edit-class change
+ * needs `flow.edit`; `flow.build` also covers it, because it allows all
+ * changes (D2). The error names the structural changes and the scope they need.
  */
-function assertPushAllowed(
-  _flow: Flow,
-  _definition: FlowDefinition,
-  _grants: readonly Grant[]
-): void {
-  throw new Error('flow: the push scope guard is not implemented yet (issue #40)')
+function assertPushAllowed(flow: Flow, definition: FlowDefinition, grants: readonly Grant[]): void {
+  const resource = `flow:${flow.slug}`
+  const changes: readonly DefinitionChange[] =
+    flow.draft === undefined
+      ? [{ class: 'structural', message: 'the first draft was created' }]
+      : classifyChange(flow.draft, definition)
+  const structural = changes.filter((change) => change.class === 'structural')
+  if (structural.length > 0) {
+    if (!authorize(grants, 'flow.build', resource)) {
+      const named = structural.map((change) => change.message).join('; ')
+      throw new Error(
+        `flow: the push makes a structural change (${named}); it requires the scope flow.build`
+      )
+    }
+    return
+  }
+  if (!authorize(grants, 'flow.edit', resource) && !authorize(grants, 'flow.build', resource)) {
+    throw new Error('flow: the push makes an edit-class change; it requires the scope flow.edit')
+  }
 }
 
 /**

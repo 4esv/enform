@@ -29,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The story harness runs a scenario in cli mode, with the same result as api mode (I6) (#25).
 - The engine models a flow lifecycle: a draft definition, publish to an immutable version with a content hash, and instances pinned to their version (DF-1, DF-2, DF-4) (#38).
 - The engine models grants as attributed configuration operations derived from the log, so authorize answers who can do what (AC-1, AC-4) (#39).
+- The engine guards a flow push by change class: an edit-class change needs flow.edit, a structural change needs flow.build, and the rejection names the change and the scope (DF-3) (#40).
 
 ## [0.0.0] - 2026-10-08
 

@@ -28,10 +28,9 @@ function heldBy(principal: string, held: readonly Grant[]): Grant[] {
 // her (DF-5, I14). A change that adds a step is structural, so the engine
 // rejects it without `flow.build`, and the message names the change and the
 // scope (DF-5, I1, AC-1). The literal label and field cases arrive with FM-1
-// (issue #74). The first check is marked expected to fail until the
-// classification and the guard are implemented.
+// (issue #74).
 
-test.fails('#40 the engine guards an edit-class push and rejects a structural one (S03)', async () => {
+test('#40 the engine guards an edit-class push and rejects a structural one (S03)', async () => {
   // (a) The classification: an option change is edit-class; a step change is
   // structural (DF-5, D2).
   expect(classifyChange(draft, edited)).toEqual([
