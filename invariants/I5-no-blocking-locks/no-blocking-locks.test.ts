@@ -8,10 +8,6 @@
 // A read is a pure function of the log, so it is immediate (I4). The oracle
 // below states that as a check over any end state. A story run can call it
 // after its own run (MVP.md 11.4).
-//
-// Scaffolding for #11: the first check is marked as expected to fail, because
-// `completeStep` is a stub until the second commit implements it. The
-// deliberate violation below already fails the oracle, and it stays marked.
 
 import { expect, test } from 'vitest'
 import { apply, emptyState, type State } from '../../engine/apply.js'
@@ -95,7 +91,7 @@ function assertNoBlockingLocks(
   expect(version(state), 'a read is not stable across calls').toBe(current)
 }
 
-test.fails('#11 a completion on the current version applies and a stale one is rejected (I5)', () => {
+test('#11 a completion on the current version applies and a stale one is rejected (I5)', () => {
   assertNoBlockingLocks(sample(), completions())
 })
 

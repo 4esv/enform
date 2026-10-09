@@ -7,11 +7,6 @@
 // current. A completion on a stale version is rejected at once, and the caller
 // re-reads and retries. A read is a pure function of the log, so it is
 // immediate (I4).
-//
-// Scaffolding for #11: the types below are the version and the completion
-// result that the oracle checks. `completeStep` is a stub that ignores the
-// version, so the first check of the suite fails until the implementation
-// lands in the second commit.
 
 import { apply, type State } from './apply.js'
 import type { Operation } from './operation.js'
@@ -40,14 +35,20 @@ export type CompletionResult = {
 }
 
 /**
- * Complete a step with an optimistic version check (I5, A1). Stub: it ignores
- * the version and always applies, so the first check of the suite fails until
- * #11 lands.
+ * Complete a step with an optimistic version check (I5, A1). `expectedVersion`
+ * is the version that the completion was based on. When it is the current
+ * version, the engine applies the completion and returns the new state. When it
+ * is stale, the engine rejects the completion at once and returns the state
+ * unchanged, so nobody blocks: the caller re-reads and retries. Nothing runs
+ * in place (I4).
  */
 export function completeStep(
   state: State,
-  _expectedVersion: Version,
+  expectedVersion: Version,
   completion: Operation
 ): CompletionResult {
+  if (expectedVersion !== version(state)) {
+    return { accepted: false, state }
+  }
   return { accepted: true, state: apply(completion, state) }
 }

@@ -23,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine authorizes every read and write as a pure function of grants, scope and resource (I8, AC-1) (#14).
 - The engine records a state change and its side effects as one event, an append-only outbox (I2) (#8).
 - The engine routes a task whose targets resolve to nobody to the Unroutable queue and alerts the flow owner (I10, AS-5) (#16).
+- The engine applies an optimistic version check on step completion, so a read or edit never waits (I5) (#11).
 
 ## [0.0.0] - 2026-10-08
 
