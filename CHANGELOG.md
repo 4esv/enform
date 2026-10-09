@@ -24,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine records a state change and its side effects as one event, an append-only outbox (I2) (#8).
 - The engine routes a task whose targets resolve to nobody to the Unroutable queue and alerts the flow owner (I10, AS-5) (#16).
 - The engine applies an optimistic version check on step completion, so a read or edit never waits (I5) (#11).
+- The engine runs dry and live on one code path, differing only in the side-effect sink and the clock, with the same side-effect intents (I7) (#13).
 
 ## [0.0.0] - 2026-10-08
 

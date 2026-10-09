@@ -97,7 +97,7 @@ function assertDryRunParity(
   expect(outboxOf(dry.state.log), 'the dry run committed a side effect').toEqual([])
 }
 
-test.fails('#13 the same steps dry and live give the same side-effect intents (I7)', () => {
+test('#13 the same steps dry and live give the same side-effect intents (I7)', () => {
   assertDryRunParity(STEPS)
 })
 

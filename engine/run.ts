@@ -3,7 +3,7 @@
 
 import { apply, emptyState, type State } from './apply.js'
 import { type ActorId, type Clock, createOperation, type IdGenerator } from './operation.js'
-import type { OutboxEntry } from './outbox.js'
+import { createOutboxOperation, type OutboxEntry } from './outbox.js'
 
 /**
  * The injected sources of a run: the clock and the operation ID generator
@@ -57,10 +57,23 @@ export type RunResult = {
 
 /**
  * Run a sequence of steps and send the side effects that they cause to the
- * sink (I7). Scaffold for issue #13: the sink is not wired yet, so the run
- * commits every step with the sink-less `deterministicRun` and reports no
- * intent. The next commit replaces this with the full run loop.
+ * sink (I7). One loop serves both modes: it reads each step's side effects
+ * once, and only the sink branch differs. A live run commits every step and
+ * its side effects together (I2), so they appear in `outboxOf(state.log)`. A
+ * dry run commits nothing (A6): it writes no event, and returns the same side
+ * effects as intents, so the same scenario gives the same intents in both
+ * modes (I7).
  */
 export function runSteps(steps: readonly Step[], sources: RunSources): RunResult {
-  return { state: deterministicRun(steps, sources), intents: [] }
+  let state = emptyState
+  const intents: OutboxEntry[] = []
+  for (const step of steps) {
+    const entries = step.outbox ?? []
+    intents.push(...entries)
+    if (sources.sink === 'live') {
+      const operation = createOutboxOperation(step.type, step.payload, entries, sources, step.actor)
+      state = apply(operation, state)
+    }
+  }
+  return { state, intents }
 }
