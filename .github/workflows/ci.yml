@@ -47,3 +47,6 @@ jobs:
 
       - name: Invariant rule (MVP.md section 4)
         run: node tools/invariant-rule.mjs
+
+      - name: Matrix rule (STORIES.md Coverage)
+        run: node tools/matrix-rule.mjs
