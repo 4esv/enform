@@ -14,6 +14,7 @@ import type { State } from './apply.js'
 import { type ConditionData, evaluate } from './condition.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import type { ActorId } from './operation.js'
+import type { OutboxEntry } from './outbox.js'
 import { type RunSources, runSteps, type Step } from './run.js'
 
 /** The versioned event type of a skip (S05, WF-1). */
@@ -33,9 +34,11 @@ export type FlowRoute = {
   readonly skipped: readonly SkippedStep[]
 }
 
-/** The outcome of a flow run (I7): the end state and the route that it decided. */
+/** The outcome of a flow run (I7): the end state, the side-effect intents and the route. */
 export type FlowRun = {
   readonly state: State
+  /** The side effects that the run produced, in step order (I7). */
+  readonly intents: readonly OutboxEntry[]
   readonly route: FlowRoute
 }
 
@@ -54,8 +57,8 @@ export function isStepSkipped(step: FlowStep, data: ConditionData): boolean {
  * absent from `route.active`, and its condition is in `route.skipped`. One
  * loop serves both modes (I7): a live run commits one `step.skipped@1`
  * operation per skipped step, attributed to the actor (I14), and a dry run
- * writes no event. Both modes decide the same route for the same definition
- * and data.
+ * writes no event. Both modes decide the same route and produce the same
+ * side-effect intents for the same definition and data (I7).
  */
 export function runFlow(
   definition: FlowDefinition,
@@ -75,6 +78,6 @@ export function runFlow(
     }
     active.push(step.key)
   }
-  const { state } = runSteps(steps, sources)
-  return { state, route: { active, skipped } }
+  const { state, intents } = runSteps(steps, sources)
+  return { state, intents, route: { active, skipped } }
 }

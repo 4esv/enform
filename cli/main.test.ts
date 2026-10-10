@@ -15,10 +15,6 @@ import { contentHash } from '../engine/instance.js'
 // immutable version with a content hash (DF-2), `diff` names the change (DF-6)
 // and `dry-run` reports the route and the side-effect intents without writing
 // an event (DR-1, I7). The output is deterministic (I6).
-//
-// This commit scaffolds the stateful `push`, `publish`, `diff` and `dry-run`
-// commands as stubs, so their four checks are marked expected to fail until
-// the next commit implements them and removes the mark.
 
 const entry = join(import.meta.dirname, 'main.ts')
 
@@ -36,7 +32,7 @@ function enform(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-/** The local `.enform/<slug>.json` store, as the CLI will write it (DF-1, DF-4). */
+/** The local `.enform/<slug>.json` store, as the CLI writes it (DF-1, DF-4). */
 type StoredFlow = {
   readonly slug: string
   readonly draft?: unknown
@@ -121,7 +117,7 @@ test('#38 --json prints machine-readable JSON (S01, DX-3)', () => {
   )
 })
 
-test.fails('#38 flow push stores the draft equal to the file (S01, DF-4, I9)', () => {
+test('#38 flow push stores the draft equal to the file (S01, DF-4, I9)', () => {
   const cwd = workdir()
   const file = 'course-overload.flow.json'
   writeFileSync(join(cwd, file), TWO_STEP)
@@ -138,7 +134,7 @@ test.fails('#38 flow push stores the draft equal to the file (S01, DF-4, I9)', (
   expect(JSON.parse(result.stdout)).toEqual({ ok: true, slug: 'course-overload', path: file })
 })
 
-test.fails('#38 flow publish freezes an immutable version with a content hash (S01, DF-2)', () => {
+test('#38 flow publish freezes an immutable version with a content hash (S01, DF-2)', () => {
   const cwd = workdir()
   const file = 'course-overload.flow.json'
   writeFileSync(join(cwd, file), TWO_STEP)
@@ -164,7 +160,7 @@ test.fails('#38 flow publish freezes an immutable version with a content hash (S
   expect(next.versions).toEqual(published.versions)
 })
 
-test.fails('#38 flow diff names the change from a version to the draft (S01, DF-6)', () => {
+test('#38 flow diff names the change from a version to the draft (S01, DF-6)', () => {
   const cwd = workdir()
   const file = 'course-overload.flow.json'
   writeFileSync(join(cwd, file), TWO_STEP)
@@ -197,7 +193,7 @@ test.fails('#38 flow diff names the change from a version to the draft (S01, DF-
   expect(JSON.parse(same.stdout).changes).toEqual([])
 })
 
-test.fails('#38 flow dry-run reports the route and intents and writes no event (S01, DR-1, I7)', () => {
+test('#38 flow dry-run reports the route and intents and writes no event (S01, DR-1, I7)', () => {
   const cwd = workdir()
   const file = 'course-overload.flow.json'
   writeFileSync(join(cwd, file), TWO_STEP)
