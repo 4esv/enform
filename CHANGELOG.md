@@ -55,6 +55,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The story harness runs the Version fuzzy-path operator: publishing a new version between two steps leaves an in-progress instance on its version (DF-2) (#37).
 - The engine models a local draft with a saved/synced state, so an acknowledged edit is never lost (I15) (#21).
 - The engine models an optimistic update as pending until acknowledged, so an unconfirmed state is never shown as confirmed (I16) (#22).
+- The engine models local drafts encrypted under a session-scoped key, destroyed on sign-out or idle (I11) (#17).
 
 ## [0.0.0] - 2026-10-08
 

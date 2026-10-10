@@ -3,6 +3,7 @@ import { apply, rebuild, type State } from '../../engine/apply.js'
 import type { DraftSession } from '../../engine/drafts.js'
 import type { Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
+import { decryptDraft, isSealed, type Session } from '../../engine/session.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
 import { confirmedOnly, type UpdateLog } from '../../engine/updates.js'
 import { goldenView, type Scenario, type StepClock, toView } from './scenario.js'
@@ -29,6 +30,11 @@ export type RunResult = {
    * updates, which is every run before the realtime path (RT-3).
    */
   readonly updates?: UpdateLog
+  /**
+   * The encrypted local draft session of the run (I11). Absent means the run
+   * holds no session, which is every run before the realtime path (RT-3).
+   */
+  readonly session?: Session
 }
 
 /** One invariant oracle (I1 to I16). A later milestone adds a new entry to the registry. */
@@ -94,6 +100,32 @@ const I6: InvariantOracle = {
   check: ({ state, scenario, clock }) => {
     if (!isDeepStrictEqual(toView(state), goldenView(scenario, clock))) {
       throw new Error('I6: the end state differs from the golden end state (determinism)')
+    }
+  },
+}
+
+/**
+ * I11: the stored drafts are ciphertext under the session key, never plaintext,
+ * so an unencrypted local copy is visible; and a session that sign-out or the
+ * idle timeout destroyed holds no key and no ciphertext, so its drafts are
+ * unrecoverable. A run before the realtime path (RT-3) carries no session, so
+ * the check is empty until a run supplies one.
+ */
+const I11: InvariantOracle = {
+  id: 'I11',
+  check: ({ session }) => {
+    if (session === undefined) return
+    for (const stored of session.drafts) {
+      if (!isSealed(stored.ciphertext)) {
+        throw new Error(`I11: draft ${stored.id} is stored without encryption`)
+      }
+      if (session.key === undefined) {
+        throw new Error(`I11: draft ${stored.id} is stored without a session key`)
+      }
+      const plaintext = decryptDraft(stored, session.key)
+      if (stored.ciphertext === plaintext || stored.ciphertext.includes(plaintext)) {
+        throw new Error(`I11: draft ${stored.id} stores its plaintext`)
+      }
     }
   },
 }
@@ -174,7 +206,7 @@ const I16: InvariantOracle = {
  * The registered invariant oracles. A later milestone adds an invariant
  * without a change to the runner: it appends one entry here.
  */
-export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14, I15, I16]
+export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I11, I14, I15, I16]
 
 /**
  * Run the three checks of #28 in order over a finished run, and throw on the
@@ -188,9 +220,10 @@ export function oracles(
   scenario: Scenario,
   clock?: StepClock,
   drafts?: DraftSession,
-  updates?: UpdateLog
+  updates?: UpdateLog,
+  session?: Session
 ): void {
-  assertInvariants({ state, scenario, clock, drafts, updates })
+  assertInvariants({ state, scenario, clock, drafts, updates, session })
   assertGoldenEndState(state, scenario, clock)
   assertTimeline(state, clock)
 }

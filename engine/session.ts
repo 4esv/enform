@@ -11,10 +11,6 @@
 // cipher is an injected, deterministic, reversible encoding. This model is
 // pure and deterministic (I6): it reads no clock, no random source and no I/O
 // of its own.
-//
-// The model is a scaffold: the types and the surface below are fixed, and the
-// behavior arrives in the next commit, when the suite stops expecting the first
-// check to fail (#17).
 
 import type { Draft } from './drafts.js'
 
@@ -56,12 +52,52 @@ export type Cipher = {
   readonly open: (ciphertext: string, key: SessionKey) => string
 }
 
+/** The marker that a sealed value carries, so a ciphertext is never read as a plaintext (I11). */
+export const SEALED = 'enc.v1'
+
 /** The session before any draft, and after sign-out or the idle timeout (I11): no key, no drafts. */
 export const emptySession: Session = { key: undefined, drafts: [] }
 
 /** The plaintext of one draft (I11): the serialized edit that the cipher hides. */
 export function plaintextOf(draft: Draft): string {
   return JSON.stringify(draft.edit)
+}
+
+/** Whether a value is a sealed ciphertext (I11): it carries the cipher marker. */
+export function isSealed(ciphertext: string): boolean {
+  return ciphertext.startsWith(`${SEALED}.`)
+}
+
+/**
+ * The default cipher (I11, ADR 0007): a deterministic, reversible, keyed
+ * encoding that stands in for AES-256-GCM. It mixes the plaintext with a
+ * keystream derived from the key and hex-encodes the result behind a marker,
+ * so the output is never the plaintext, and `open` reverses `seal` under the
+ * same key.
+ */
+export const streamCipher: Cipher = {
+  seal: (plaintext, key) => {
+    const stream = keystream(key, plaintext.length)
+    let body = ''
+    for (let i = 0; i < plaintext.length; i += 1) {
+      body += ((plaintext.charCodeAt(i) ^ stream[i]) & 0xffff).toString(16).padStart(4, '0')
+    }
+    return `${SEALED}.${body}`
+  },
+  open: (ciphertext, key) => {
+    if (!isSealed(ciphertext)) {
+      throw new Error('session: the value is not a sealed ciphertext (I11)')
+    }
+    const body = ciphertext.slice(SEALED.length + 1)
+    const stream = keystream(key, body.length / 4)
+    let plaintext = ''
+    for (let i = 0; i < body.length; i += 4) {
+      plaintext += String.fromCharCode(
+        (Number.parseInt(body.slice(i, i + 4), 16) ^ stream[i / 4]) & 0xffff
+      )
+    }
+    return plaintext
+  },
 }
 
 /**
@@ -72,55 +108,74 @@ export function openSession(key: SessionKey): Session {
   return { key, drafts: [] }
 }
 
-/** Whether a value is a sealed ciphertext (I11). Not implemented yet (#17). */
-export function isSealed(_ciphertext: string): boolean {
-  throw new Error('session: isSealed is not implemented yet (I11, #17)')
-}
-
 /**
  * Seal one draft under the session key (I11): the plaintext edit becomes a
- * ciphertext, the only form in which an edit enters the stored session. Not
- * implemented yet (#17).
+ * ciphertext, the only form in which an edit enters the stored session.
  */
-export function encryptDraft(_draft: Draft, _key: SessionKey, _cipher?: Cipher): EncryptedDraft {
-  throw new Error('session: encryptDraft is not implemented yet (I11, #17)')
+export function encryptDraft(
+  draft: Draft,
+  key: SessionKey,
+  cipher: Cipher = streamCipher
+): EncryptedDraft {
+  return { id: draft.id, ciphertext: cipher.seal(plaintextOf(draft), key) }
 }
 
 /**
  * Recover the plaintext of one draft from its ciphertext under the session key
- * (I11): the inverse of `encryptDraft`. Not implemented yet (#17).
+ * (I11): the inverse of `encryptDraft`. After sign-out or the idle timeout the
+ * key is gone, so there is nothing to recover with.
  */
 export function decryptDraft(
-  _encrypted: EncryptedDraft,
-  _key: SessionKey,
-  _cipher?: Cipher
+  encrypted: EncryptedDraft,
+  key: SessionKey,
+  cipher: Cipher = streamCipher
 ): string {
-  throw new Error('session: decryptDraft is not implemented yet (I11, #17)')
+  return cipher.open(encrypted.ciphertext, key)
 }
 
 /**
  * Save one edit into the session as ciphertext (I11, RT-3): the session seals
  * the draft under its key and stores only the ciphertext, replacing any
- * earlier draft under the same id. Not implemented yet (#17).
+ * earlier draft under the same id. A session with no key (signed out or idle)
+ * stores nothing.
  */
-export function saveEncryptedDraft(_session: Session, _draft: Draft, _cipher?: Cipher): Session {
-  throw new Error('session: saveEncryptedDraft is not implemented yet (I11, #17)')
+export function saveEncryptedDraft(
+  session: Session,
+  draft: Draft,
+  cipher: Cipher = streamCipher
+): Session {
+  if (session.key === undefined) return session
+  const encrypted = encryptDraft(draft, session.key, cipher)
+  return {
+    key: session.key,
+    drafts: [...session.drafts.filter((entry) => entry.id !== draft.id), encrypted],
+  }
 }
 
 /**
  * Sign out (I11): the session destroys the key and every ciphertext, so the
- * drafts become unrecoverable and the session is empty. Not implemented yet
- * (#17).
+ * drafts become unrecoverable and the session is empty.
  */
-export function signOut(_session: Session): Session {
-  throw new Error('session: signOut is not implemented yet (I11, #17)')
+export function signOut(session: Session): Session {
+  return session.key === undefined && session.drafts.length === 0 ? session : emptySession
 }
 
 /**
  * The idle timeout (I11): the session destroys the key and every ciphertext,
- * so the drafts become unrecoverable and the session is empty. Not implemented
- * yet (#17).
+ * so the drafts become unrecoverable and the session is empty.
  */
-export function idleTimeout(_session: Session): Session {
-  throw new Error('session: idleTimeout is not implemented yet (I11, #17)')
+export function idleTimeout(session: Session): Session {
+  return session.key === undefined && session.drafts.length === 0 ? session : emptySession
+}
+
+/**
+ * The keystream of one key (I11): a deterministic sequence derived from the key
+ * id, the stand-in for the key schedule and counter of AES-256-GCM.
+ */
+function keystream(key: SessionKey, length: number): number[] {
+  const stream: number[] = []
+  for (let i = 0; i < length; i += 1) {
+    stream.push((key.id.charCodeAt(i % key.id.length) + i * 31) & 0xffff)
+  }
+  return stream
 }

@@ -72,7 +72,7 @@ function assertEncryptedLocalDrafts(session: Session, destroyed = false): void {
   }
 }
 
-test.fails('#17 a stored draft is ciphertext, and sign-out or idle destroys it (I11)', () => {
+test('#17 a stored draft is ciphertext, and sign-out or idle destroys it (I11)', () => {
   const live = saveEncryptedDraft(saveEncryptedDraft(openSession(KEY), DRAFT), OTHER_DRAFT)
   expect(live.key).toEqual(KEY)
   expect(live.drafts.map((stored) => stored.id)).toEqual(['draft-1', 'draft-2'])
