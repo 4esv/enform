@@ -4,6 +4,9 @@
   "private": true,
   "description": "The open-source multiplayer form builder for both users and developers.",
   "license": "MIT",
+  "bin": {
+    "enform": "cli/main.ts"
+  },
   "type": "module",
   "packageManager": "pnpm@10.7.1",
   "engines": {
