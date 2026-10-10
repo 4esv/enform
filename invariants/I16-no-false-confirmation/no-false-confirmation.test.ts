@@ -53,7 +53,7 @@ function assertNoFalseConfirmation(
   }
 }
 
-test.fails('#22 an optimistic update shows as pending until the server acknowledges it (I16)', () => {
+test('#22 an optimistic update shows as pending until the server acknowledges it (I16)', () => {
   const applying = applyOptimistic(emptyUpdates, 'update-1', EDIT)
   expect(applying).toEqual([{ id: 'update-1', edit: EDIT, state: 'pending' }])
   expect(confirmedOnly(applying)).toEqual([])

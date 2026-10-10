@@ -4,6 +4,7 @@ import type { DraftSession } from '../../engine/drafts.js'
 import type { Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
+import { confirmedOnly, type UpdateLog } from '../../engine/updates.js'
 import { goldenView, type Scenario, type StepClock, toView } from './scenario.js'
 
 // Issue #28, STORIES.md Test method: the oracle pipeline that every run,
@@ -23,6 +24,11 @@ export type RunResult = {
    * no drafts, which is every run before the realtime path (RT-3).
    */
   readonly drafts?: DraftSession
+  /**
+   * The optimistic updates of the run (I16). Absent means the run holds no
+   * updates, which is every run before the realtime path (RT-3).
+   */
+  readonly updates?: UpdateLog
 }
 
 /** One invariant oracle (I1 to I16). A later milestone adds a new entry to the registry. */
@@ -137,10 +143,38 @@ const I15: InvariantOracle = {
 }
 
 /**
+ * I16: the confirmed set that the interface shows holds no pending update, so
+ * it never shows an unconfirmed state as confirmed, and every update shows
+ * whether it is pending or confirmed. A run before the realtime path (RT-3)
+ * carries no updates, so the check is empty until a run supplies them.
+ */
+const I16: InvariantOracle = {
+  id: 'I16',
+  check: ({ updates }) => {
+    if (updates === undefined) return
+    const acknowledged = new Set(
+      updates.filter((update) => update.state === 'confirmed').map((update) => update.id)
+    )
+    for (const update of updates) {
+      if (update.state !== 'pending' && update.state !== 'confirmed') {
+        throw new Error(`I16: update ${update.id} does not show whether it is pending or confirmed`)
+      }
+    }
+    for (const update of confirmedOnly(updates)) {
+      if (!acknowledged.has(update.id)) {
+        throw new Error(
+          `I16: the interface shows update ${update.id} as confirmed while it is pending`
+        )
+      }
+    }
+  },
+}
+
+/**
  * The registered invariant oracles. A later milestone adds an invariant
  * without a change to the runner: it appends one entry here.
  */
-export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14, I15]
+export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14, I15, I16]
 
 /**
  * Run the three checks of #28 in order over a finished run, and throw on the
@@ -153,9 +187,10 @@ export function oracles(
   state: State,
   scenario: Scenario,
   clock?: StepClock,
-  drafts?: DraftSession
+  drafts?: DraftSession,
+  updates?: UpdateLog
 ): void {
-  assertInvariants({ state, scenario, clock, drafts })
+  assertInvariants({ state, scenario, clock, drafts, updates })
   assertGoldenEndState(state, scenario, clock)
   assertTimeline(state, clock)
 }
