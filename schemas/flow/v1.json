@@ -2,12 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/flow/v1.json",
   "title": "enform flow definition",
-  "description": "One flow definition document, version 1 (MVP.md DF-1, DF-4, I9). A flow is one JSON document with an integer schemaVersion.",
+  "description": "One flow definition document, version 1 (MVP.md DF-1, DF-4, I9). A flow is one JSON document with an integer schemaVersion. The optional anonymous setting is ID-3.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "steps"],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "anonymous": { "type": "boolean" },
     "steps": {
       "type": "array",
       "minItems": 1,

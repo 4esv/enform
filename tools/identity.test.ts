@@ -21,9 +21,6 @@ import { startInstance } from '../engine/submission.js'
 // the code, and the canonical file form (DF-4) carries the optional field
 // through the round trip (I9). Viewing is not starting: a start still needs a
 // signed-in principal (ID-2), so the anonymous setting never creates a draft.
-//
-// The check is marked as expected to fail until the anonymous setting lands
-// (#71, ID-3).
 
 const repo = join(import.meta.dirname, '..')
 
@@ -66,7 +63,7 @@ function flowOf(definition: FlowDefinition): Flow {
 /** The injected sources of a start (I6): a fixed clock time and one operation ID. */
 const deps = { clock: () => 1_700_000_000_000, ids: () => 'op-1' }
 
-test.fails('#71 ID-3 anonymous access is an explicit setting for each flow', () => {
+test('#71 ID-3 anonymous access is an explicit setting for each flow', () => {
   // (a) The default sends a visitor who is not signed in to SSO (ID-2): the
   // flow does not allow anonymous access, so the visitor cannot view it.
   expect(allowsAnonymous(privateFlow)).toBe(false)

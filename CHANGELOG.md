@@ -41,6 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine reports a submission's status (step N of M, holder, state) and filters notes and restricted values by authorization, so a starter sees the status but not others' notes (VT-1, VT-2, VT-3, I8) (#51).
 - The engine projects the log into an attributed change feed, filterable by flow and type, and connector calls show operation, time and outcome only (VT-5, VT-6, I13, I14) (#52).
 - The engine undoes a mistake with a compensating event: the original stays in the log, already-sent side effects are marked 'Already sent' and not reversed, and the affected people are notified (WF-5, I4, D6) (#53).
+- The flow definition gains an explicit anonymous-access setting: a flow with anonymous on lets a visitor open the form without signing in, while a start still requires sign-in (ID-3) (#71).
 
 ## [0.0.0] - 2026-10-08
 

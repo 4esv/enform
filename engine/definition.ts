@@ -85,8 +85,9 @@ export function parse(text: string): FlowDefinition {
 /**
  * Serialize a definition to its canonical file form (I9, DF-4). The form is
  * stable and byte-for-byte reproducible: the flow, a step and a target have a
- * fixed key order, a nested JSON Logic expression sorts its object keys, the
- * indent is two spaces, and the file ends with one newline. `parse` then
+ * fixed key order, the optional `anonymous` setting (ID-3) appears only when
+ * the definition has it, a nested JSON Logic expression sorts its object keys,
+ * the indent is two spaces, and the file ends with one newline. `parse` then
  * `serialize` reproduces a canonical file exactly (I9).
  */
 export function serialize(definition: FlowDefinition): string {
@@ -128,23 +129,46 @@ function readDefinition(body: unknown): FlowDefinition {
     throw new Error(`flow definition: schemaVersion must be ${SCHEMA_VERSION}`)
   }
   if (!Array.isArray(body.steps)) throw new Error('flow definition: steps must be an array')
-  return { schemaVersion: SCHEMA_VERSION, steps: body.steps.map(readStep) }
+  const definition: {
+    schemaVersion: number
+    anonymous?: boolean
+    steps: readonly FlowStep[]
+  } = { schemaVersion: SCHEMA_VERSION, steps: body.steps.map(readStep) }
+  const anonymous = readAnonymous(body.anonymous)
+  if (anonymous !== undefined) definition.anonymous = anonymous
+  return definition
 }
 
 /**
- * Issue #71 (ID-3): the anonymous setting is not read yet, so a definition
- * never allows anonymous access and every visitor goes to SSO (ID-2).
+ * Read the optional anonymous setting of a flow (ID-3). Absent means false, so
+ * the flow requires sign-in (ID-2). A present value must be a boolean.
  */
-export function allowsAnonymous(_definition: FlowDefinition): boolean {
-  return false
+function readAnonymous(body: unknown): boolean | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'boolean') {
+    throw new Error('flow definition: anonymous must be a boolean (ID-3)')
+  }
+  return body
 }
 
 /**
- * Issue #71 (ID-3): a visitor who is not signed in cannot view a flow until
- * the anonymous setting lands, so only a signed-in actor may view (ID-2).
+ * Whether a flow lets a visitor who is not signed in open its form (ID-3).
+ * Anonymous access is off unless the flow sets the setting to true, so the
+ * default sends the visitor to SSO (ID-2). The function is pure and
+ * deterministic (I6).
  */
-export function canView(_definition: FlowDefinition, actor: ActorId | undefined): boolean {
-  return actor !== undefined
+export function allowsAnonymous(definition: FlowDefinition): boolean {
+  return definition.anonymous === true
+}
+
+/**
+ * Whether an actor may view a flow (ID-3). A signed-in actor may always view
+ * the flow; a visitor who is not signed in may view it only when the flow
+ * allows anonymous access. Viewing is not starting: a start still requires a
+ * signed-in principal (ID-2). The function is pure and deterministic (I6).
+ */
+export function canView(definition: FlowDefinition, actor: ActorId | undefined): boolean {
+  return actor !== undefined || allowsAnonymous(definition)
 }
 
 /** Read one step: a key, its targets, and the optional outcomes and skip condition. */
@@ -196,10 +220,10 @@ function readOutcomes(body: unknown): readonly string[] | undefined {
 
 /** The canonical value of a definition: the fixed key order of the flow format. */
 function canonicalDefinition(definition: FlowDefinition): JsonValue {
-  return {
-    schemaVersion: definition.schemaVersion,
-    steps: definition.steps.map(canonicalStep),
-  }
+  const canonical: Record<string, JsonValue> = { schemaVersion: definition.schemaVersion }
+  if (definition.anonymous !== undefined) canonical.anonymous = definition.anonymous
+  canonical.steps = definition.steps.map(canonicalStep)
+  return canonical
 }
 
 /** The canonical value of one step: key, targets, then the optional outcomes and skip condition. */
