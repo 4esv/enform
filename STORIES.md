@@ -97,22 +97,22 @@ This table records where each story was done. Update it in the same pull request
 
 | Story | Engine issue | Engine tests | Engine commits | Interface issue | Interface commits | Status |
 |---|---|---|---|---|---|---|
-| S01 | #38 | stories/S01-publish-flow/scenario.test.ts | ad5ddca eac5f63 58750b7 | | | Engine passes |
-| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts | 5383f8c | | | Engine passes |
-| S03 | #40 | stories/S03-edit-text/scenario.test.ts | e436106 | | | Engine passes |
-| S04 | #41 | stories/S04-add-field-live/scenario.test.ts | c38bb5e | | | Engine passes |
-| S05 | #42 | stories/S05-skip-step/scenario.test.ts | 501e5e3 | | | Engine passes |
-| S06 | #43 | stories/S06-start-submission/scenario.test.ts | 7d0b973 | | | Engine passes |
+| S01 | #38 | stories/S01-publish-flow/scenario.test.ts | ad5ddca eac5f63 58750b7 | | | Engine in progress |
+| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts | 5383f8c | | | Engine in progress |
+| S03 | #40 | stories/S03-edit-text/scenario.test.ts | e436106 | | | Engine in progress |
+| S04 | #41 | stories/S04-add-field-live/scenario.test.ts | c38bb5e | | | Engine in progress |
+| S05 | #42 | stories/S05-skip-step/scenario.test.ts | 501e5e3 | | | Engine in progress |
+| S06 | #43 | stories/S06-start-submission/scenario.test.ts | 7d0b973 | | | Engine in progress |
 | S07 | #44 | | | | | Not started |
-| S08 | #45 | stories/S08-route/scenario.test.ts | c3d8025 | | | Engine passes |
-| S09 | #46 | stories/S09-claim-approve/scenario.test.ts | 8888d67 | | | Engine passes |
-| S10 | #47 | stories/S10-takeover/scenario.test.ts | d165932 | | | Engine passes |
-| S11 | #48 | stories/S11-send-back/scenario.test.ts | 981b365 | | | Engine passes |
-| S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts | e85a55b | | | Engine passes |
-| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts | 0194b88 | | | Engine passes |
-| S14 | #51 | stories/S14-find-status/scenario.test.ts | 4cb4d49 | | | Engine passes |
-| S15 | #52 | stories/S15-investigate/scenario.test.ts | 2768a41 | | | Engine passes |
-| S16 | #53 | stories/S16-undo/scenario.test.ts | 5bf4a30 | | | Engine passes |
+| S08 | #45 | stories/S08-route/scenario.test.ts | c3d8025 | | | Engine in progress |
+| S09 | #46 | stories/S09-claim-approve/scenario.test.ts | 8888d67 | | | Engine in progress |
+| S10 | #47 | stories/S10-takeover/scenario.test.ts | d165932 | | | Engine in progress |
+| S11 | #48 | stories/S11-send-back/scenario.test.ts | 981b365 | | | Engine in progress |
+| S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts | e85a55b | | | Engine in progress |
+| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts | 0194b88 | | | Engine in progress |
+| S14 | #51 | stories/S14-find-status/scenario.test.ts | 4cb4d49 | | | Engine in progress |
+| S15 | #52 | stories/S15-investigate/scenario.test.ts | 2768a41 | | | Engine in progress |
+| S16 | #53 | stories/S16-undo/scenario.test.ts | 5bf4a30 | | | Engine in progress |
 
 Status values: Not started, Engine in progress, Engine passes, Interface in progress, Done.
 
