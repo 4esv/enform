@@ -1,5 +1,5 @@
-// Issue #15, #71, I9, ID-3, DF-1, DF-4, A3: the flow definition file, its
-// canonical round trip, and the anonymous setting.
+// Issue #15, #71, #74, I9, ID-3, DF-1, DF-4, A3, FM-1: the flow definition
+// file, its canonical round trip, the anonymous setting and the form fields.
 
 import { configType } from './config.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
@@ -42,14 +42,54 @@ export type Target =
   | { readonly 'manager-of': string }
 
 /**
+ * The sixteen form controls (FM-1, A3). `control` of a field is one of these,
+ * and `validateField` (fields.ts) checks a submitted value against it (FM-4).
+ */
+export const CONTROL_TYPES = [
+  'text',
+  'long-text',
+  'number',
+  'money',
+  'date',
+  'select',
+  'multi-select',
+  'checkbox',
+  'radio',
+  'yes-no',
+  'email',
+  'phone',
+  'file',
+  'user',
+  'static',
+  'repeating',
+] as const
+
+/** One kind of form control (FM-1). */
+export type ControlType = (typeof CONTROL_TYPES)[number]
+
+/**
+ * One form field of a step (FM-1, A3). `key` is the field's stable name within
+ * the flow. `control` is one of the sixteen FM-1 controls. A choice control
+ * (`select`, `multi-select`, `radio`) lists the values it accepts in
+ * `options`; the other controls ignore the list.
+ */
+export type Field = {
+  readonly key: string
+  readonly control: ControlType
+  readonly options?: readonly string[]
+}
+
+/**
  * One stage of a flow (MVP.md 3, WF-1, WF-2). `targets` are the recipients of
- * the task that the step creates. `outcomes` are the names an actor can
- * choose (WF-2). `skipWhen` is a JSON Logic expression; when it is true the
- * step is skipped (WF-1, S05).
+ * the task that the step creates. `fields` are the form fields that the step
+ * shows (FM-1). `outcomes` are the names an actor can choose (WF-2).
+ * `skipWhen` is a JSON Logic expression; when it is true the step is skipped
+ * (WF-1, S05).
  */
 export type FlowStep = {
   readonly key: string
   readonly targets: readonly Target[]
+  readonly fields?: readonly Field[]
   readonly outcomes?: readonly string[]
   readonly skipWhen?: JsonValue
 }
@@ -171,7 +211,10 @@ export function canView(definition: FlowDefinition, actor: ActorId | undefined):
   return actor !== undefined || allowsAnonymous(definition)
 }
 
-/** Read one step: a key, its targets, and the optional outcomes and skip condition. */
+/**
+ * Read one step: a key, its targets, and the optional outcomes and skip
+ * condition. The form fields (FM-1) arrive with issue #74.
+ */
 function readStep(body: unknown): FlowStep {
   if (!isRecord(body)) throw new Error('flow definition: a step is not an object')
   if (typeof body.key !== 'string') throw new Error('flow definition: a step has no key')
