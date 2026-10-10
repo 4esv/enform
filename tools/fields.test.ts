@@ -19,10 +19,6 @@ import { validateField } from '../engine/fields.js'
 // the round trip byte for byte (I9). The server validates a submitted value
 // against its control at each submission (FM-4), and the check is pure and
 // deterministic (I6).
-//
-// This is the failing test of the issue (AGENTS.md): the first check fails on
-// purpose until the model, the schema and the check land, so the test is
-// marked as expected to fail. The mark comes off with the implementation.
 
 const repo = join(import.meta.dirname, '..')
 
@@ -169,7 +165,7 @@ function fieldFor(control: ControlType): Field {
   return { key, control }
 }
 
-test.fails('#74 FM-1 the sixteen controls parse, round-trip and validate', () => {
+test('#74 FM-1 the sixteen controls parse, round-trip and validate', () => {
   // (a) A definition that uses each of the sixteen controls parses, and the
   // canonical round trip reproduces the file byte for byte (I9). The fields
   // come back in order, one for each control.

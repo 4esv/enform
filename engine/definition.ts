@@ -125,10 +125,11 @@ export function parse(text: string): FlowDefinition {
 /**
  * Serialize a definition to its canonical file form (I9, DF-4). The form is
  * stable and byte-for-byte reproducible: the flow, a step and a target have a
- * fixed key order, the optional `anonymous` setting (ID-3) appears only when
- * the definition has it, a nested JSON Logic expression sorts its object keys,
- * the indent is two spaces, and the file ends with one newline. `parse` then
- * `serialize` reproduces a canonical file exactly (I9).
+ * fixed key order, the optional `anonymous` setting (ID-3) and the optional
+ * `fields` of a step (FM-1) appear only when the definition has them, a nested
+ * JSON Logic expression sorts its object keys, the indent is two spaces, and
+ * the file ends with one newline. `parse` then `serialize` reproduces a
+ * canonical file exactly (I9).
  */
 export function serialize(definition: FlowDefinition): string {
   return `${JSON.stringify(canonicalDefinition(definition), null, 2)}\n`
@@ -212,8 +213,8 @@ export function canView(definition: FlowDefinition, actor: ActorId | undefined):
 }
 
 /**
- * Read one step: a key, its targets, and the optional outcomes and skip
- * condition. The form fields (FM-1) arrive with issue #74.
+ * Read one step: a key, its targets, and the optional fields, outcomes and
+ * skip condition.
  */
 function readStep(body: unknown): FlowStep {
   if (!isRecord(body)) throw new Error('flow definition: a step is not an object')
@@ -221,9 +222,12 @@ function readStep(body: unknown): FlowStep {
   const step: {
     key: string
     targets: readonly Target[]
+    fields?: readonly Field[]
     outcomes?: readonly string[]
     skipWhen?: JsonValue
   } = { key: body.key, targets: readTargets(body.targets) }
+  const fields = readFields(body.fields)
+  if (fields !== undefined) step.fields = fields
   const outcomes = readOutcomes(body.outcomes)
   if (outcomes !== undefined) step.outcomes = outcomes
   if (body.skipWhen !== undefined) step.skipWhen = body.skipWhen as JsonValue
@@ -252,6 +256,41 @@ function readTarget(body: unknown): Target {
   return { [kind]: body[kind] } as Target
 }
 
+/** Read the optional fields of a step (FM-1). */
+function readFields(body: unknown): readonly Field[] | undefined {
+  if (body === undefined) return undefined
+  if (!Array.isArray(body)) throw new Error('flow definition: fields must be an array')
+  return body.map(readField)
+}
+
+/**
+ * Read one field: a key, one of the sixteen controls, and the optional option
+ * list of a choice control (FM-1). An unknown control is refused.
+ */
+function readField(body: unknown): Field {
+  if (!isRecord(body)) throw new Error('flow definition: a field is not an object')
+  if (typeof body.key !== 'string') throw new Error('flow definition: a field has no key')
+  if (!CONTROL_TYPES.includes(body.control as ControlType)) {
+    throw new Error(`flow definition: ${String(body.control)} is not a control type (FM-1)`)
+  }
+  const field: { key: string; control: ControlType; options?: readonly string[] } = {
+    key: body.key,
+    control: body.control as ControlType,
+  }
+  const options = readOptions(body.options)
+  if (options !== undefined) field.options = options
+  return field
+}
+
+/** Read the optional option list of a choice control (FM-1). */
+function readOptions(body: unknown): readonly string[] | undefined {
+  if (body === undefined) return undefined
+  if (!Array.isArray(body) || body.some((option) => typeof option !== 'string')) {
+    throw new Error('flow definition: options must be an array of strings')
+  }
+  return body as string[]
+}
+
 /** Read the optional outcomes of a step (WF-2). */
 function readOutcomes(body: unknown): readonly string[] | undefined {
   if (body === undefined) return undefined
@@ -269,14 +308,28 @@ function canonicalDefinition(definition: FlowDefinition): JsonValue {
   return canonical
 }
 
-/** The canonical value of one step: key, targets, then the optional outcomes and skip condition. */
+/**
+ * The canonical value of one step: key, targets, then the optional fields,
+ * outcomes and skip condition.
+ */
 function canonicalStep(step: FlowStep): JsonValue {
   const canonical: Record<string, JsonValue> = {
     key: step.key,
     targets: step.targets.map((target) => ({ ...target })),
   }
+  if (step.fields !== undefined) canonical.fields = step.fields.map(canonicalField)
   if (step.outcomes !== undefined) canonical.outcomes = [...step.outcomes]
   if (step.skipWhen !== undefined) canonical.skipWhen = canonicalJson(step.skipWhen)
+  return canonical
+}
+
+/** The canonical value of one field: key, control, then the optional options (FM-1). */
+function canonicalField(field: Field): JsonValue {
+  const canonical: Record<string, JsonValue> = {
+    key: field.key,
+    control: field.control,
+  }
+  if (field.options !== undefined) canonical.options = [...field.options]
   return canonical
 }
 

@@ -57,6 +57,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine models an optimistic update as pending until acknowledged, so an unconfirmed state is never shown as confirmed (I16) (#22).
 - The engine models local drafts encrypted under a session-scoped key, destroyed on sign-out or idle (I11) (#17).
 - The interface uses only the public API: a lint rule fails when interface code imports an engine internal (I12) (#18).
+- The flow definition gains the sixteen form controls as step fields, with per-control value validation (FM-1) (#74).
 
 ## [0.0.0] - 2026-10-08
 

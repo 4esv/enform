@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/flow/v1.json",
   "title": "enform flow definition",
-  "description": "One flow definition document, version 1 (MVP.md DF-1, DF-4, I9). A flow is one JSON document with an integer schemaVersion. The optional anonymous setting is ID-3.",
+  "description": "One flow definition document, version 1 (MVP.md DF-1, DF-4, I9). A flow is one JSON document with an integer schemaVersion. The optional anonymous setting is ID-3 and the optional fields of a step are FM-1.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "steps"],
@@ -27,12 +27,52 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/target" }
         },
+        "fields": {
+          "description": "The form fields that the step shows (FM-1).",
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
         "outcomes": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         },
         "skipWhen": { "$ref": "#/$defs/jsonLogic" }
       }
+    },
+    "field": {
+      "description": "One form field: a key, one of the sixteen controls (FM-1), and the option list of a choice control.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "control"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "control": { "$ref": "#/$defs/control" },
+        "options": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "control": {
+      "description": "The sixteen form controls of FM-1.",
+      "enum": [
+        "text",
+        "long-text",
+        "number",
+        "money",
+        "date",
+        "select",
+        "multi-select",
+        "checkbox",
+        "radio",
+        "yes-no",
+        "email",
+        "phone",
+        "file",
+        "user",
+        "static",
+        "repeating"
+      ]
     },
     "target": {
       "description": "A task recipient: exactly one kind, per AS-1. Dynamic targets are starter, field and manager-of.",
