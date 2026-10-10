@@ -57,7 +57,7 @@ const golden = scenario({
   ],
 })
 
-test.fails('#36 the Data operator generates valid and invalid data per S01 field (S01)', async () => {
+test('#36 the Data operator generates valid and invalid data per S01 field (S01)', async () => {
   // The fixture carries one field of each of the sixteen FM-1 controls, so the
   // generator covers every control type.
   expect(fields.map((field) => field.control)).toEqual([...CONTROL_TYPES])

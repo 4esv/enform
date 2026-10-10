@@ -8,7 +8,7 @@ import {
   type FlowDefinition,
   type JsonValue,
 } from '../../engine/definition.js'
-import type { FieldError } from '../../engine/fields.js'
+import { type FieldError, validateField } from '../../engine/fields.js'
 import { DEFINITION_PUBLISHED, type FlowVersion } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { contentHash, createInstance } from '../../engine/instance.js'
@@ -627,13 +627,15 @@ function publicationsBefore(scenario: Scenario, boundary: number): number {
 // golden path of a field-bearing flow carries the form data on its submission
 // step, in the step payload's `data` record. For each field of the flow's steps
 // the operator generates one value that the field's control accepts and one
-// that it refuses; the engine's validator (validateField, FM-4) is the oracle,
-// so an accepted value reaches the golden state and a refused value deviates
-// by the submission step, with the failure naming the field path (FM-1). The
-// runner generates the variants; no fuzzy test is written by hand.
-//
-// This is the #36 scaffold: the test lands first and fails; the next commit
-// implements the generator and the run.
+// that it refuses, from the control type's constraints (FM-1). The engine's
+// validator (validateField, FM-4) is the oracle: an accepted value passes and
+// the run reaches the variant's golden end state; a refused value fails
+// validation with the field path, so the submission does not land and the run
+// deviates by exactly that step. The generator is deterministic (I6): it reads
+// no clock and no random source, and the variants come in field order, valid
+// before invalid. The engine records no form data yet, so the operator models
+// the FM-4 boundary: it checks the value with the engine's validator at the
+// submission step and predicts the deviation.
 
 /**
  * One value that a field's control can receive (FM-1): a JSON value, or no
@@ -656,18 +658,169 @@ export type DataVariant = {
   readonly scenario: Scenario
 }
 
-/** Generate one valid and one invalid variant per field (STORIES.md, Fuzzy paths). */
-export function dataVariants(
-  _scenario: Scenario,
-  _fields: readonly Field[]
-): readonly DataVariant[] {
-  return []
+/**
+ * Generate one valid and one invalid variant per field (STORIES.md, Fuzzy
+ * paths). The valid value fits the field's control and the invalid value does
+ * not, both from the control type's constraints (FM-1). The variants come in
+ * field order, valid before invalid, so the generation is deterministic (I6).
+ * The value goes into the submission step, the step of the golden path that
+ * carries the form data (FM-4).
+ */
+export function dataVariants(scenario: Scenario, fields: readonly Field[]): readonly DataVariant[] {
+  const index = dataStepIndex(scenario)
+  const variants: DataVariant[] = []
+  for (const field of fields) {
+    const valid = validValue(field)
+    variants.push({
+      id: `data:valid:${field.key}`,
+      field,
+      value: valid,
+      expected: 'accepted',
+      scenario: withData(scenario, index, field.key, valid),
+    })
+    const invalid = invalidValue(field)
+    variants.push({
+      id: `data:invalid:${field.key}`,
+      field,
+      value: invalid,
+      expected: 'refused',
+      deviation: validateField(field, invalid),
+      scenario: withData(scenario, index, field.key, invalid),
+    })
+  }
+  return variants
 }
 
-/** Run the Data operator over a golden path: run every variant, check the oracles. */
+/**
+ * Run the Data operator over a golden path: every variant runs, and the
+ * oracles check it (STORIES.md, Oracles). An accepted value passes the
+ * engine's validator (FM-4), so the submission lands and the run reaches the
+ * variant's golden end state. A refused value fails validation with the field
+ * path (FM-1), so the submission does not land and the run deviates by exactly
+ * the submission step, the predicted deviation. The variants are returned, so
+ * a test can count them.
+ */
 export async function runDataOperator(
-  _scenario: Scenario,
-  _fields: readonly Field[]
+  scenario: Scenario,
+  fields: readonly Field[]
 ): Promise<readonly DataVariant[]> {
-  return []
+  const variants = dataVariants(scenario, fields)
+  const index = dataStepIndex(scenario)
+  for (const variant of variants) {
+    const error = validateField(variant.field, variant.value)
+    if (variant.expected === 'accepted') {
+      if (error !== undefined) {
+        throw new Error(`${variant.id}: the generated value is not accepted (FM-1, FM-4)`)
+      }
+      const { state } = await runSteps(variant.scenario, { mode: 'api' })
+      oracles(state, variant.scenario)
+    } else {
+      if (error === undefined || error.path !== variant.field.key) {
+        throw new Error(`${variant.id}: the value is not refused with its field path (FM-4)`)
+      }
+      const deviation = withoutStep(variant.scenario, index)
+      const { state } = await runSteps(deviation, { mode: 'api' })
+      oracles(state, deviation)
+    }
+  }
+  return variants
+}
+
+/** The index of the golden step that carries the form data (FM-4): the submission step. */
+function dataStepIndex(scenario: Scenario): number {
+  const index = scenario.steps.findIndex((step) => isRecord(step.payload.data))
+  if (index === -1) {
+    throw new Error('data operator: the scenario has no step that carries form data (FM-4)')
+  }
+  return index
+}
+
+/** The golden path with one value injected into the data step's form data (FM-1). */
+function withData(scenario: Scenario, index: number, key: string, value: FormValue): Scenario {
+  return {
+    ...scenario,
+    steps: scenario.steps.map((step, i) => {
+      if (i !== index) return step
+      const data = isRecord(step.payload.data) ? step.payload.data : {}
+      // A static control takes no value (FM-1), so it adds no payload entry;
+      // the run and its golden replay must stay equal through JSON.
+      if (value === undefined) return step
+      return { ...step, payload: { ...step.payload, data: { ...data, [key]: value } } }
+    }),
+  }
+}
+
+/** A value that a field's control accepts (FM-1), from the control type alone (I6). */
+function validValue(field: Field): FormValue {
+  const option = field.options?.[0]
+  switch (field.control) {
+    case 'text':
+    case 'long-text':
+      return 'sample'
+    case 'number':
+    case 'money':
+      return 1
+    case 'date':
+      return '2026-01-01'
+    case 'select':
+    case 'radio':
+      return option
+    case 'multi-select':
+      return option === undefined ? [] : [option]
+    case 'checkbox':
+      return true
+    case 'yes-no':
+      return 'yes'
+    case 'email':
+      return 'sam@example.org'
+    case 'phone':
+      return '+1 555 0100'
+    case 'file':
+      return 'file:sample'
+    case 'user':
+      return 'user:sam'
+    case 'static':
+      return undefined
+    case 'repeating':
+      return [{ key: 'value' }]
+  }
+}
+
+/** A value that a field's control refuses (FM-1), from the control type alone (I6). */
+function invalidValue(field: Field): FormValue {
+  switch (field.control) {
+    case 'text':
+    case 'long-text':
+      return 42
+    case 'number':
+    case 'money':
+      return 'not a number'
+    case 'date':
+      return '01/01/2026'
+    case 'select':
+    case 'radio':
+      return 'not-an-option'
+    case 'multi-select':
+      return 'not a list'
+    case 'checkbox':
+      return 'true'
+    case 'yes-no':
+      return 'maybe'
+    case 'email':
+      return 'not-an-email'
+    case 'phone':
+      return 'not a phone'
+    case 'file':
+    case 'user':
+      return ''
+    case 'static':
+      return 'text'
+    case 'repeating':
+      return 'not a list'
+  }
+}
+
+/** A JSON object: not null and not an array. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

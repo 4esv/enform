@@ -58,6 +58,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine models local drafts encrypted under a session-scoped key, destroyed on sign-out or idle (I11) (#17).
 - The interface uses only the public API: a lint rule fails when interface code imports an engine internal (I12) (#18).
 - The flow definition gains the sixteen form controls as step fields, with per-control value validation (FM-1) (#74).
+- The story harness runs the Data fuzzy-path operator: it generates one valid and one invalid value per field and checks each against the oracles (FM-1) (#36).
 
 ## [0.0.0] - 2026-10-08
 
