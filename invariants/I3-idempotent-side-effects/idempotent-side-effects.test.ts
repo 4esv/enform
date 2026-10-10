@@ -110,7 +110,7 @@ function assertIdempotentSideEffects(
   ).toEqual([])
 }
 
-test.fails('#9 delivering a log twice executes each side effect once (I3)', () => {
+test('#9 delivering a log twice executes each side effect once (I3)', () => {
   const state = sample()
   expect(outboxOf(state.log)).toEqual([REMINDER, NEXT_REMINDER])
   assertIdempotentSideEffects(state)

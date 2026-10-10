@@ -64,10 +64,6 @@ export function sideEffectIdentity(entry: OutboxEntry): SideEffectIdentity {
  * key and a different identity gives a different key. A worker stores the key
  * of each side effect that it delivered, so one key means one execution,
  * however often the worker retries or the outbox redelivers (I3).
- *
- * Scaffold for issue #9 (commit 1): the key leaves the occurrence out, so the
- * two occurrences of one rule collide. The suite of I3 marks its first check
- * expected to fail against this stub. Commit 2 adds the occurrence.
  */
 export function sideEffectKey(entry: OutboxEntry): string {
   const identity = sideEffectIdentity(entry)
@@ -77,6 +73,7 @@ export function sideEffectKey(entry: OutboxEntry): string {
     identity.instance,
     identity.step,
     identity.rule,
+    identity.occurrence,
   ])
 }
 

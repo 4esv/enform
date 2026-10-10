@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from 'node:util'
 import { apply, rebuild, type State } from '../../engine/apply.js'
 import type { Operation } from '../../engine/operation.js'
+import { outboxOf } from '../../engine/outbox.js'
+import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
 import { goldenView, type Scenario, toView } from './scenario.js'
 
 // Issue #28, STORIES.md Test method: the oracle pipeline that every run,
@@ -40,6 +42,17 @@ const I1: InvariantOracle = {
     for (const operation of replayOperations(state)) replayed = apply(operation, replayed)
     if (!isDeepStrictEqual(replayed, state)) {
       throw new Error('I1: a replay of the log changed the state (idempotent operations)')
+    }
+  },
+}
+
+/** I3: each side effect has a deterministic key, and a redelivery of a delivered key is a no-op. */
+const I3: InvariantOracle = {
+  id: 'I3',
+  check: ({ state }) => {
+    const delivered = new Set(outboxOf(state.log).map(sideEffectKey))
+    if (deliver(state.log, delivered).length > 0) {
+      throw new Error('I3: a redelivery of a delivered side effect executes it again')
     }
   },
 }
@@ -89,7 +102,7 @@ const I14: InvariantOracle = {
  * The registered invariant oracles. A later milestone adds an invariant
  * without a change to the runner: it appends one entry here.
  */
-export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I4, I6, I14]
+export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14]
 
 /** Run the three checks of #28 in order over a finished run, and throw on the first failure. */
 export function oracles(state: State, scenario: Scenario): void {

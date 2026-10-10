@@ -46,6 +46,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine models teams as attributed configuration operations: a user with org.teams creates and maintains them, and a team task resolves to current members (AS-6, AS-4, I14) (#81).
 - The enform CLI ships flow init, validate and pull with --json output and exit codes (DX-3) (#38).
 - The enform CLI ships flow push, publish, diff and dry-run with a local .enform store, and the flow run reports its side-effect intents (DX-3, DF-2, I7) (#38).
+- The engine gives each side effect a deterministic key and delivers it at most once, so a retry, crash or redelivery is a no-op (I3) (#9).
 
 ## [0.0.0] - 2026-10-08
 
