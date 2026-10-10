@@ -59,7 +59,7 @@ function grantsWith(principal: string, scope: string, deps: OperationDeps): read
   return grantsOf(state.log)
 }
 
-test.fails('#81 AS-6 users with org.teams create and maintain teams', () => {
+test('#81 AS-6 users with org.teams create and maintain teams', () => {
   const deps = sources()
 
   // AC-1: a grant is `(principal, scope, resource)`. Dana holds `org.teams` on

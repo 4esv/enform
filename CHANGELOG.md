@@ -43,6 +43,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine undoes a mistake with a compensating event: the original stays in the log, already-sent side effects are marked 'Already sent' and not reversed, and the affected people are notified (WF-5, I4, D6) (#53).
 - The flow definition gains an explicit anonymous-access setting: a flow with anonymous on lets a visitor open the form without signing in, while a start still requires sign-in (ID-3) (#71).
 - The engine synchronizes group membership to the directory and releases a deprovisioned user's claimed tasks back to the pool, recording it on the log (ID-5) (#73).
+- The engine models teams as attributed configuration operations: a user with org.teams creates and maintains them, and a team task resolves to current members (AS-6, AS-4, I14) (#81).
 
 ## [0.0.0] - 2026-10-08
 
