@@ -78,9 +78,7 @@ function fireTimers(log: Log, entries: readonly OutboxEntry[]): Log {
 // task's timers in the same event (SE-5, I2). The same timer steps give the
 // same side-effect intents dry and live (I7). The path is deterministic (I6).
 
-// The scaffold returns no timer, so this check fails on purpose until the model
-// lands (#49, MVP.md 11.1). The mark comes off in the implementation commit.
-test.fails('#49 a stuck task reminds at each interval, escalates at the deadline and cancels its timers (S12)', () => {
+test('#49 a stuck task reminds at each interval, escalates at the deadline and cancels its timers (S12)', () => {
   let now = NOW
   const deps = sources(() => now)
 

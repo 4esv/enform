@@ -47,6 +47,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The enform CLI ships flow init, validate and pull with --json output and exit codes (DX-3) (#38).
 - The enform CLI ships flow push, publish, diff and dry-run with a local .enform store, and the flow run reports its side-effect intents (DX-3, DF-2, I7) (#38).
 - The engine gives each side effect a deterministic key and delivers it at most once, so a retry, crash or redelivery is a no-op (I3) (#9).
+- The engine fires a reminder after each idle interval and an escalation near the deadline, each exactly once, and cancels pending timers when a task completes first (SE-3, SE-4, SE-5, I3) (#49).
 
 ## [0.0.0] - 2026-10-08
 
