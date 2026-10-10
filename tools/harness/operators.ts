@@ -128,3 +128,36 @@ function swapActor(scenario: Scenario, index: number, actor: ActorId): Scenario 
 function withoutStep(scenario: Scenario, index: number): Scenario {
   return { ...scenario, steps: scenario.steps.filter((_, i) => i !== index) }
 }
+
+// Issue #32, STORIES.md Fuzzy paths: the Race operator adds a competing action
+// by another person at each step of a golden path (two claims, a claim and a
+// takeover, an edit and a publish). Both actions are based on the same version
+// of the log, so the engine's optimistic version check (concurrency.ts, I5)
+// accepts exactly one and refuses the other at once. The runner generates the
+// variants from the golden path in step order, then cast order, so no fuzzy
+// test is written by hand and the run is deterministic (I6).
+//
+// This is the #32 scaffold: the test lands first and fails; the next commit
+// implements the generator and the run.
+
+/** One generated Race variant: one step of the golden path, raced against another person. */
+export type RaceVariant = {
+  readonly id: string
+  readonly stepIndex: number
+  /** The person who acts the step on the golden path (STORIES.md, Cast). */
+  readonly actor: ActorId
+  /** The other person who attempts the same step from the same version. */
+  readonly competitor: ActorId
+  /** The golden path with the step's actor swapped for the competitor (the predicted deviation). */
+  readonly scenario: Scenario
+}
+
+/** Generate one Race variant per step and per other person of the cast (STORIES.md, Fuzzy paths). */
+export function raceVariants(_scenario: Scenario, _cast: Cast): readonly RaceVariant[] {
+  return []
+}
+
+/** Run the Race operator over a golden path: every race runs, the oracles check each winner. */
+export function runRaceOperator(_scenario: Scenario, _cast: Cast): readonly RaceVariant[] {
+  return []
+}
