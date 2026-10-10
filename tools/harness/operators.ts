@@ -2,9 +2,10 @@ import { isDeepStrictEqual } from 'node:util'
 import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { type CompletionResult, completeStep } from '../../engine/concurrency.js'
-import type { FlowDefinition } from '../../engine/definition.js'
-import type { FlowVersion } from '../../engine/flow.js'
+import { DEFINITION_CHANGED, type FlowDefinition } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED, type FlowVersion } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
+import { contentHash, createInstance } from '../../engine/instance.js'
 import type { ActorId, Log, Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
@@ -457,10 +458,10 @@ function logShape(view: StateView): readonly unknown[] {
 // version, gives the new version a different hash, and records the change on
 // the log, which the timeline projects (I4). The runner generates one variant
 // per step boundary from the golden path, so no fuzzy test is written by hand
-// and the run is deterministic (I6).
-//
-// This is the #37 scaffold: the test lands first and fails; the next commit
-// implements the generator and the run.
+// and the run is deterministic (I6). The variant's log is the golden path with
+// the change and its publication inserted; the harness checks the invariants,
+// the variant's golden end state and the timeline, and never re-derives the
+// flow from the log.
 
 /**
  * How the Version operator publishes a new definition version between two
@@ -492,18 +493,125 @@ export type VersionVariant = {
   readonly published: FlowVersion
 }
 
-/** Generate one Version variant per step boundary (STORIES.md, Fuzzy paths). */
+/**
+ * Generate one Version variant per step boundary (STORIES.md, Fuzzy paths). A
+ * boundary is the point after one step, so a golden path of n steps gives n
+ * variants, in step order, so the generation is deterministic (I6). Each
+ * variant inserts a definition change and the publication that freezes it
+ * between the boundary and the next step; the publication is the next version
+ * after the ones that the golden path published before the boundary.
+ */
 export function versionVariants(
-  _scenario: Scenario,
-  _versioning: Versioning
+  scenario: Scenario,
+  versioning: Versioning
 ): readonly VersionVariant[] {
-  return []
+  const variants: VersionVariant[] = []
+  for (let boundary = 1; boundary <= scenario.steps.length; boundary += 1) {
+    const version = publicationsBefore(scenario, boundary) + 1
+    const published: FlowVersion = {
+      version,
+      contentHash: contentHash(versioning.definition),
+      definition: versioning.definition,
+    }
+    variants.push({
+      id: `version:after-step${boundary}`,
+      boundary,
+      scenario: insertVersion(scenario, boundary, versioning, published),
+      started: versioning.started,
+      published,
+    })
+  }
+  return variants
 }
 
-/** Run the Version operator over a golden path: publish a new version at every boundary. */
+/**
+ * Run the Version operator over a golden path: publish a new version at every
+ * boundary, and the oracles check each run (STORIES.md, Oracles). A published
+ * version is immutable (DF-2), so an instance that already started keeps its
+ * `definitionVersion`, the new version has a different content hash, and the
+ * timeline records the publication. The variants are returned, so a test can
+ * count them.
+ */
 export async function runVersionOperator(
-  _scenario: Scenario,
-  _versioning: Versioning
+  scenario: Scenario,
+  versioning: Versioning
 ): Promise<readonly VersionVariant[]> {
-  return []
+  const variants = versionVariants(scenario, versioning)
+  for (const variant of variants) {
+    const { state } = await runSteps(variant.scenario, { mode: 'api' })
+    oracles(state, variant.scenario)
+    assertVersionPinned(variant, state)
+  }
+  return variants
+}
+
+/**
+ * DF-2: an instance already in progress stays on the version that it started
+ * on. The engine stamps the instance with the content hash of its definition
+ * (instance.ts), a publication creates a version with a different hash, and the
+ * log records the publication, which the timeline projects (I4). The check
+ * throws the first time a variant breaks one of the three.
+ */
+function assertVersionPinned(variant: VersionVariant, state: State): void {
+  const started = contentHash(variant.started)
+  const instance = createInstance(variant.started, [])
+  if (instance.definitionVersion !== started) {
+    throw new Error(`${variant.id}: the instance did not start on its version (DF-2)`)
+  }
+  if (variant.published.contentHash !== contentHash(variant.published.definition)) {
+    throw new Error(`${variant.id}: the version does not match its definition (DF-2)`)
+  }
+  if (variant.published.contentHash === started) {
+    throw new Error(`${variant.id}: the new version has the same content hash (DF-2)`)
+  }
+  const recorded = state.log.some(
+    (event) =>
+      event.type === DEFINITION_PUBLISHED &&
+      event.payload.contentHash === variant.published.contentHash
+  )
+  if (!recorded) {
+    throw new Error(`${variant.id}: the timeline does not record the new version (DF-2)`)
+  }
+}
+
+/** The golden path with the definition change and its publication inserted after `boundary` steps. */
+function insertVersion(
+  scenario: Scenario,
+  boundary: number,
+  versioning: Versioning,
+  published: FlowVersion
+): Scenario {
+  const change: Step = {
+    actor: versioning.actor,
+    type: DEFINITION_CHANGED,
+    payload: versioning.definition,
+  }
+  const publication: Step = {
+    actor: versioning.actor,
+    type: DEFINITION_PUBLISHED,
+    payload: {
+      slug: versioning.slug,
+      version: published.version,
+      contentHash: published.contentHash,
+      definition: published.definition,
+    },
+  }
+  return {
+    ...scenario,
+    steps: [
+      ...scenario.steps.slice(0, boundary),
+      change,
+      publication,
+      ...scenario.steps.slice(boundary),
+    ],
+  }
+}
+
+/** How many versions the golden path published before a boundary (DF-2). */
+function publicationsBefore(scenario: Scenario, boundary: number): number {
+  let count = 0
+  for (let i = 0; i < boundary; i += 1) {
+    if (scenario.steps[i].type === DEFINITION_PUBLISHED) count += 1
+  }
+  return count
 }

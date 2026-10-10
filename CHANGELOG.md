@@ -52,6 +52,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The story harness runs the Race fuzzy-path operator: competing actions at each step race and exactly one wins via the optimistic version check (I5) (#32).
 - The story harness runs the Fault fuzzy-path operator: at each step boundary it rebuilds, re-applies and re-delivers, and the state is unchanged (I1, I3, I4) (#33).
 - The story harness runs the Clock fuzzy-path operator: a moved or skewed clock shifts the timeline's at values but never the state (I6) (#35).
+- The story harness runs the Version fuzzy-path operator: publishing a new version between two steps leaves an in-progress instance on its version (DF-2) (#37).
 
 ## [0.0.0] - 2026-10-08
 

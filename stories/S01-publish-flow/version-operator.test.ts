@@ -24,7 +24,7 @@ const versioning: Versioning = {
   started: draftV1,
 }
 
-test.fails('#37 the Version operator publishes a new version at each S01 step (S01)', async () => {
+test('#37 the Version operator publishes a new version at each S01 step (S01)', async () => {
   // One variant per step boundary, in step order, so the generation is
   // deterministic (I6).
   const generated = versionVariants(golden, versioning)
