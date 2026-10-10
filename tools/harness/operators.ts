@@ -1,8 +1,11 @@
-import { apply, emptyState, type State } from '../../engine/apply.js'
+import { isDeepStrictEqual } from 'node:util'
+import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { type CompletionResult, completeStep } from '../../engine/concurrency.js'
 import { grantsOf } from '../../engine/grants.js'
-import type { ActorId, Log } from '../../engine/operation.js'
+import type { ActorId, Log, Operation } from '../../engine/operation.js'
+import { outboxOf } from '../../engine/outbox.js'
+import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
 import { oracles } from './oracles.js'
 import { type Deliveries, runSteps } from './runner.js'
 import { type Scenario, type Step, stepOperation } from './scenario.js'
@@ -251,11 +254,12 @@ function assertRefused(result: CompletionResult, id: string, side: string): void
 // realtime and no worker yet, so the fault is modelled at the engine boundary
 // (MVP.md I1, I3, I4): the runner rebuilds the state from the log so far (I4),
 // re-applies the operations (I1) and redelivers the side effects (I3), then
-// continues the golden path. The engine is fault tolerant by construction, so
-// every run reaches the golden end state, and the run is deterministic (I6).
-//
-// This is the #33 scaffold: the test lands first and fails; the next commit
-// implements the generator and the run.
+// continues the golden path. The engine is fault tolerant by construction: the
+// rebuild reproduces the state, a re-apply is a no-op, and a redelivery fires
+// at most once, so every run reaches the golden end state. The runner generates
+// the variants in step order, so no fuzzy test is written by hand and the run
+// is deterministic (I6). A side effect is part of its operation's payload (I2),
+// so a rebuild and a re-apply read the same outbox as the prefix did.
 
 /** One generated Fault variant: the step boundary where the run is interrupted. */
 export type FaultVariant = {
@@ -264,12 +268,74 @@ export type FaultVariant = {
   readonly boundary: number
 }
 
-/** Generate one Fault variant per step boundary (STORIES.md, Fuzzy paths). */
-export function faultVariants(_scenario: Scenario): readonly FaultVariant[] {
-  return []
+/**
+ * Generate one Fault variant per step boundary (STORIES.md, Fuzzy paths). A
+ * boundary is the point after one step, so a golden path of n steps gives n
+ * variants, in step order, so the generation is deterministic (I6).
+ */
+export function faultVariants(scenario: Scenario): readonly FaultVariant[] {
+  const variants: FaultVariant[] = []
+  for (let boundary = 1; boundary <= scenario.steps.length; boundary += 1) {
+    variants.push({ id: `fault:after-step${boundary}`, boundary })
+  }
+  return variants
 }
 
-/** Run the Fault operator over a golden path: fault at every boundary, check the oracles. */
-export function runFaultOperator(_scenario: Scenario): readonly FaultVariant[] {
-  return []
+/**
+ * Run the Fault operator over a golden path: fault at every boundary, and the
+ * oracles check each run (STORIES.md, Oracles). The fault is three failures at
+ * once, modelled at the engine boundary: restart the server (rebuild the state
+ * from the log, I4), stop the realtime connection (re-apply the prefix, I1) and
+ * stop the worker (redeliver the side effects, I3). Each is a no-op on an
+ * engine that is fault tolerant by construction, so the run continues to the
+ * golden end state. The variants are returned, so a test can count them.
+ */
+export function runFaultOperator(scenario: Scenario): readonly FaultVariant[] {
+  const variants = faultVariants(scenario)
+  for (const variant of variants) runFault(scenario, variant)
+  return variants
+}
+
+/**
+ * Run one fault at one step boundary. The prefix runs first, then the fault,
+ * then the rest of the golden path. The fault leaves the state equal to the
+ * state that the prefix produced (I1, I3, I4), so the oracles see the golden
+ * end state.
+ */
+function runFault(scenario: Scenario, variant: FaultVariant): void {
+  const prefix: Operation[] = []
+  let state = emptyState
+  for (let i = 0; i < variant.boundary; i += 1) {
+    const operation = stepOperation(scenario.steps[i], i)
+    prefix.push(operation)
+    state = apply(operation, state)
+  }
+
+  // Restart the server (I4): rebuild the derived state from the log alone.
+  const rebuilt = rebuild(state.log)
+  if (!isDeepStrictEqual(rebuilt, state)) {
+    throw new Error(`${variant.id}: the rebuild did not reproduce the state (I4)`)
+  }
+
+  // Stop the realtime connection (I1): re-apply the prefix. Every operation ID
+  // is already applied, so every re-apply returns the same state.
+  let reapplied = rebuilt
+  for (const operation of prefix) reapplied = apply(operation, reapplied)
+  if (!isDeepStrictEqual(reapplied, state)) {
+    throw new Error(`${variant.id}: the re-apply changed the state (I1)`)
+  }
+
+  // Stop the worker (I3): redeliver the side effects. A worker that already
+  // delivered the prefix's side effects delivers no entry a second time.
+  const delivered = new Set(outboxOf(reapplied.log).map(sideEffectKey))
+  if (deliver(reapplied.log, delivered).length > 0) {
+    throw new Error(`${variant.id}: the redelivery executed a side effect again (I3)`)
+  }
+
+  // Continue the golden path from the rebuilt state, and check the oracles.
+  let end = reapplied
+  for (let i = variant.boundary; i < scenario.steps.length; i += 1) {
+    end = apply(stepOperation(scenario.steps[i], i), end)
+  }
+  oracles(end, scenario)
 }

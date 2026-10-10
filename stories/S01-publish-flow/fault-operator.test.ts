@@ -12,7 +12,7 @@ import { golden } from './scenario.js'
 // reaches the golden end state. The runner generates the variants from the
 // golden path; no fuzzy test is written by hand.
 
-test.fails('#33 the Fault operator survives an interruption at each S01 step (S01)', () => {
+test('#33 the Fault operator survives an interruption at each S01 step (S01)', () => {
   // One variant per step boundary, in step order, so the generation is
   // deterministic (I6).
   const generated = faultVariants(golden)

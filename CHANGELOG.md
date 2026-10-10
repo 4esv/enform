@@ -50,6 +50,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine fires a reminder after each idle interval and an escalation near the deadline, each exactly once, and cancels pending timers when a task completes first (SE-3, SE-4, SE-5, I3) (#49).
 - The story harness runs the Actor fuzzy-path operator: it generates one variant per step and cast person and checks each against the oracles with the engine's authorize prediction (I8, AC-1) (#30).
 - The story harness runs the Race fuzzy-path operator: competing actions at each step race and exactly one wins via the optimistic version check (I5) (#32).
+- The story harness runs the Fault fuzzy-path operator: at each step boundary it rebuilds, re-applies and re-delivers, and the state is unchanged (I1, I3, I4) (#33).
 
 ## [0.0.0] - 2026-10-08
 
