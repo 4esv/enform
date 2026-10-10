@@ -1,7 +1,8 @@
-// Issue #15, I9, DF-1, DF-4, A3: the flow definition file and its canonical round trip.
+// Issue #15, #71, I9, ID-3, DF-1, DF-4, A3: the flow definition file, its
+// canonical round trip, and the anonymous setting.
 
 import { configType } from './config.js'
-import { createOperation, type Operation, type OperationDeps } from './operation.js'
+import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 
 /**
  * One integer `schemaVersion` of the flow definition format (DF-1, MVP.md
@@ -56,6 +57,12 @@ export type FlowStep = {
 /** One flow, as one JSON document (DF-1). */
 export type FlowDefinition = {
   readonly schemaVersion: number
+  /**
+   * Whether a visitor who is not signed in may open the form (ID-3). The
+   * setting is explicit and per flow; absent means false, so the default sends
+   * the visitor to SSO (ID-2).
+   */
+  readonly anonymous?: boolean
   readonly steps: readonly FlowStep[]
 }
 
@@ -122,6 +129,22 @@ function readDefinition(body: unknown): FlowDefinition {
   }
   if (!Array.isArray(body.steps)) throw new Error('flow definition: steps must be an array')
   return { schemaVersion: SCHEMA_VERSION, steps: body.steps.map(readStep) }
+}
+
+/**
+ * Issue #71 (ID-3): the anonymous setting is not read yet, so a definition
+ * never allows anonymous access and every visitor goes to SSO (ID-2).
+ */
+export function allowsAnonymous(_definition: FlowDefinition): boolean {
+  return false
+}
+
+/**
+ * Issue #71 (ID-3): a visitor who is not signed in cannot view a flow until
+ * the anonymous setting lands, so only a signed-in actor may view (ID-2).
+ */
+export function canView(_definition: FlowDefinition, actor: ActorId | undefined): boolean {
+  return actor !== undefined
 }
 
 /** Read one step: a key, its targets, and the optional outcomes and skip condition. */
