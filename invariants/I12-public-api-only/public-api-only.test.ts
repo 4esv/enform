@@ -68,7 +68,7 @@ test('#18 the rule passes while the interface directory does not exist (I12)', (
   expect(result.status, result.stderr).toBe(0)
 })
 
-test.fails('#18 the rule fails when the interface imports an engine internal (I12)', () => {
+test('#18 the rule fails when the interface imports an engine internal (I12)', () => {
   const dir = makeRepo({
     'interface/app.ts': "import { createInstance } from '../engine/instance.js'\n",
   })
