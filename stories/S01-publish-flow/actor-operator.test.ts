@@ -1,15 +1,15 @@
 import { expect, test } from 'vitest'
-import { apply, emptyState } from '../engine/apply.js'
-import type { Grant } from '../engine/authorize.js'
-import { addGrant } from '../engine/grants.js'
-import type { Log } from '../engine/operation.js'
+import { apply, emptyState } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
+import { addGrant } from '../../engine/grants.js'
+import type { Log } from '../../engine/operation.js'
 import {
   actorVariants,
   castOf,
   type Requirements,
   runActorOperator,
-} from '../tools/harness/operators.js'
-import { golden } from './S01-publish-flow/scenario.js'
+} from '../../tools/harness/operators.js'
+import { golden } from './scenario.js'
 
 // Issue #30, STORIES.md Fuzzy paths: the Actor operator does every step of a
 // golden path as every person in the cast. The expected result comes from the
@@ -69,7 +69,7 @@ function grantsLog(grants: readonly Grant[]): Log {
 /** Every S01 step requires `flow.build` on the flow (DF-5, D2). */
 const requires: Requirements = () => ({ scope: BUILD, resource: FLOW })
 
-test.fails('#30 the Actor operator does each S01 step as each person of the cast (S01)', async () => {
+test('#30 the Actor operator does each S01 step as each person of the cast (S01)', async () => {
   const people = castOf(grantsLog(cast))
   expect(Object.keys(people)).toHaveLength(8)
 

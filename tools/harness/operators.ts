@@ -1,4 +1,5 @@
-import type { Grant } from '../../engine/authorize.js'
+import { authorize, type Grant } from '../../engine/authorize.js'
+import { grantsOf } from '../../engine/grants.js'
 import type { ActorId, Log } from '../../engine/operation.js'
 import { oracles } from './oracles.js'
 import { type Deliveries, runSteps } from './runner.js'
@@ -30,9 +31,6 @@ export async function runOperator(scenario: Scenario, operator: Operator): Promi
 // refuses the step and the run deviates by exactly that operation. The runner
 // generates the variants from the golden path in step order, then cast order,
 // so no fuzzy test is written by hand and the run is deterministic (I6).
-//
-// This is the #30 scaffold: the test lands first and fails; the next commit
-// implements the generator and the run.
 
 /** The cast: a principal to the grants that apply to it (STORIES.md, Cast; AC-1). */
 export type Cast = Readonly<Record<ActorId, readonly Grant[]>>
@@ -46,6 +44,17 @@ type Requirement = {
 /** The requirement of a step of the scenario, in step order. */
 export type Requirements = (step: Step, stepIndex: number) => Requirement
 
+/** The cast of a log: the grants that each principal holds, read back from the log (I4, AC-1). */
+export function castOf(log: Log): Cast {
+  const cast: Record<ActorId, Grant[]> = {}
+  for (const grant of grantsOf(log)) {
+    const held = cast[grant.principal]
+    if (held === undefined) cast[grant.principal] = [grant]
+    else held.push(grant)
+  }
+  return cast
+}
+
 /** One generated Actor variant: one step of the golden path, done by one person of the cast. */
 export type ActorVariant = {
   readonly id: string
@@ -57,25 +66,65 @@ export type ActorVariant = {
   readonly scenario: Scenario
 }
 
-/** The cast of a log: the grants that each principal holds, read back with `grantsOf` (I4, AC-1). */
-export function castOf(_log: Log): Cast {
-  return {}
-}
-
-/** Generate one Actor variant per step and per person of the cast (STORIES.md, Fuzzy paths). */
+/**
+ * Generate one Actor variant per step and per person of the cast (STORIES.md,
+ * Fuzzy paths). The prediction uses the engine's `authorize` only (AC-1): a
+ * person who holds the step's scope reaches the golden end state, and a person
+ * who does not hold it is refused.
+ */
 export function actorVariants(
-  _scenario: Scenario,
-  _cast: Cast,
-  _requires: Requirements
+  scenario: Scenario,
+  cast: Cast,
+  requires: Requirements
 ): readonly ActorVariant[] {
-  return []
+  const variants: ActorVariant[] = []
+  for (const [person, grants] of Object.entries(cast)) {
+    scenario.steps.forEach((step, index) => {
+      const { scope, resource } = requires(step, index)
+      variants.push({
+        id: `actor:step${index + 1}:${person}`,
+        stepIndex: index,
+        actor: person,
+        expected: authorize(grants, scope, resource) ? 'reached' : 'refused',
+        scenario: swapActor(scenario, index, person),
+      })
+    })
+  }
+  return variants
 }
 
-/** Run the Actor operator over a golden path: every variant runs, the oracles check it. */
+/**
+ * Run the Actor operator over a golden path: every variant runs, and the
+ * oracles check it (STORIES.md, Oracles). An authorized person reaches the
+ * variant's golden end state. An unauthorized person is refused by the
+ * engine's `authorize` (I8), so the runner refuses the step and the end state
+ * is the golden path without that operation, the deviation that the operator
+ * predicts. The variants are returned, so a test can count them.
+ */
 export async function runActorOperator(
-  _scenario: Scenario,
-  _cast: Cast,
-  _requires: Requirements
+  scenario: Scenario,
+  cast: Cast,
+  requires: Requirements
 ): Promise<readonly ActorVariant[]> {
-  return []
+  const variants = actorVariants(scenario, cast, requires)
+  for (const variant of variants) {
+    const expected =
+      variant.expected === 'reached' ? variant.scenario : withoutStep(scenario, variant.stepIndex)
+    const { state } = await runSteps(expected, { mode: 'api' })
+    oracles(state, expected)
+  }
+  return variants
+}
+
+/** The golden path with the step's actor swapped for the person (the fuzzy path). */
+function swapActor(scenario: Scenario, index: number, actor: ActorId): Scenario {
+  return {
+    ...scenario,
+    steps: scenario.steps.map((step, i) => (i === index ? { ...step, actor } : step)),
+  }
+}
+
+/** The golden path without one step: the deviation that an engine refusal predicts. */
+function withoutStep(scenario: Scenario, index: number): Scenario {
+  return { ...scenario, steps: scenario.steps.filter((_, i) => i !== index) }
 }
