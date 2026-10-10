@@ -28,7 +28,7 @@ function enform(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-test.fails('#38 flow init writes a canonical flow file (S01, DF-1)', () => {
+test('#38 flow init writes a canonical flow file (S01, DF-1)', () => {
   const cwd = workdir()
   const result = enform(['flow', 'init', 'course-overload'], cwd)
   expect(result.status, result.stderr).toBe(0)
@@ -37,7 +37,7 @@ test.fails('#38 flow init writes a canonical flow file (S01, DF-1)', () => {
   expect(text).toBe(serialize(parse(text)))
 })
 
-test.fails('#38 flow validate names the error and changes nothing (S01, DF-1)', () => {
+test('#38 flow validate names the error and changes nothing (S01, DF-1)', () => {
   const cwd = workdir()
   const path = join(cwd, 'bad.flow.json')
   const bad = '{ "schemaVersion": 2, "steps": [] }'
@@ -50,7 +50,7 @@ test.fails('#38 flow validate names the error and changes nothing (S01, DF-1)', 
   expect(readFileSync(path, 'utf8')).toBe(bad)
 })
 
-test.fails('#38 flow pull reproduces the canonical file byte for byte (S01, DF-4, I9)', () => {
+test('#38 flow pull reproduces the canonical file byte for byte (S01, DF-4, I9)', () => {
   const cwd = workdir()
   const path = join(cwd, 'course-overload.flow.json')
   expect(enform(['flow', 'init', 'course-overload'], cwd).status).toBe(0)
@@ -72,7 +72,7 @@ test.fails('#38 flow pull reproduces the canonical file byte for byte (S01, DF-4
   expect(readFileSync(path, 'utf8')).toBe(pulled)
 })
 
-test.fails('#38 --json prints machine-readable JSON (S01, DX-3)', () => {
+test('#38 --json prints machine-readable JSON (S01, DX-3)', () => {
   const result = enform(['flow', 'init', 'course-overload', '--json'], workdir())
   expect(result.status, result.stderr).toBe(0)
   expect(result.stdout.trim()).toBe(
