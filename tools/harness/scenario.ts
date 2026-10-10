@@ -49,6 +49,16 @@ export function fromView(view: StateView): State {
 }
 
 /**
+ * The injected clock of a golden path (I6): it gives the time of each step.
+ * The engine reads no clock of its own, so a caller can move it (the Clock
+ * operator) and get the same state with different `at` values.
+ */
+export type StepClock = (stepIndex: number) => number
+
+/** The golden step clock (I6): step i happens at time i + 1. */
+export const goldenClock: StepClock = (index) => index + 1
+
+/**
  * The operation that one step appends (I2): a step with side effects carries
  * them in the same operation, so one `apply` commits the state change and its
  * side effects together. A step with no side effect keeps its payload.

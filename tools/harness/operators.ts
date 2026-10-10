@@ -339,3 +339,36 @@ function runFault(scenario: Scenario, variant: FaultVariant): void {
   }
   oracles(end, scenario)
 }
+
+// Issue #35, STORIES.md Fuzzy paths: the Clock operator moves the injected
+// clock forward, back or skews it at each step of a golden path, near
+// deadlines and idle limits. The engine reads no clock of its own (I6), so a
+// moved clock changes the `at` of the operations but never the state, and the
+// timeline's `at` values follow the injected clock. The runner generates the
+// variants in step order, then move order, so no fuzzy test is written by
+// hand and the run is deterministic (I6).
+//
+// This is the #35 scaffold: the test lands first and fails; the next commit
+// implements the generator and the run.
+
+/** One clock move of the Clock operator (STORIES.md, Fuzzy paths). */
+export type ClockMove = 'forward' | 'back' | 'skew'
+
+/** One generated Clock variant: one step of the golden path, with the clock moved there. */
+export type ClockVariant = {
+  readonly id: string
+  readonly stepIndex: number
+  readonly move: ClockMove
+  /** The injected clock of the variant (I6): it gives the time of each step. */
+  readonly clock: (stepIndex: number) => number
+}
+
+/** Generate one Clock variant per step and per move (STORIES.md, Fuzzy paths). */
+export function clockVariants(_scenario: Scenario): readonly ClockVariant[] {
+  return []
+}
+
+/** Run the Clock operator over a golden path: move the clock at every step, check the oracles. */
+export async function runClockOperator(_scenario: Scenario): Promise<readonly ClockVariant[]> {
+  return []
+}
