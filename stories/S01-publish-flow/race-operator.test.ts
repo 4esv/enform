@@ -60,7 +60,7 @@ function grantsLog(grants: readonly Grant[]): Log {
   return state.log
 }
 
-test.fails('#32 the Race operator adds a competing action at each S01 step (S01)', () => {
+test('#32 the Race operator adds a competing action at each S01 step (S01)', () => {
   const people = castOf(grantsLog(cast))
   expect(Object.keys(people)).toHaveLength(8)
 
