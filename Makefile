@@ -1,5 +1,5 @@
 # The five commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup check lint typecheck test rules invariants stories stack
+.PHONY: setup check lint typecheck test rules client invariants stories stack
 
 setup:
 	pnpm install --frozen-lockfile
@@ -23,6 +23,12 @@ test:
 rules:
 	node tools/matrix-rule.mjs
 	node tools/public-api-rule.mjs
+
+# Regenerate the interface API client from api/openapi.yaml (DX-4, I12). The
+# generated client is checked in, and tools/client.test.ts fails when it drifts
+# from the generator output.
+client:
+	node tools/generate-client.mjs
 
 invariants:
 	pnpm exec vitest run --project invariants

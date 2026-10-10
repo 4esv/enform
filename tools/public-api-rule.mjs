@@ -7,6 +7,12 @@
 // interface markup are not public"), so an import of one from the interface
 // is a violation.
 //
+// Issue #93, DX-4: the interface reaches the API through the generated client
+// only. The generated client, `interface/client/client.ts`, is the one file
+// that names a `/api/v1` path (its header names the generator that writes it).
+// A `/api/v1` string in any other interface file is a hand-written call, and
+// a violation.
+//
 // Usage: node tools/public-api-rule.mjs [repo]
 // The repository defaults to the one that contains this script.
 
@@ -25,17 +31,30 @@ const interfaceDir = join(repo, 'interface')
 // engine's public entry, which re-exports the engine's public modules.
 const PUBLIC_ENGINE = new Set(['engine/index.ts', 'engine/index.js'])
 
+// The generated client (DX-4). It is the one interface file that performs an
+// HTTP call, so it is the one file that may name a `/api/v1` path.
+const GENERATED_CLIENT = 'interface/client/client.ts'
+
+// A `/api/v1` path inside a string or a template. A comment that names the
+// prefix without a quote before it does not match.
+const API_PATH = /['"`][^'"`\n]*\/api\/v1/
+
 const files = sourceFiles(interfaceDir)
 const failures = []
 
 for (const file of files) {
-  for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
+  const text = readFileSync(file, 'utf8')
+  const path = relative(repo, file).split(sep).join('/')
+  for (const specifier of importSpecifiers(text)) {
     const fromRepo = relative(repo, resolve(dirname(file), specifier))
       .split(sep)
       .join('/')
     if (!fromRepo.startsWith('engine/')) continue
     if (PUBLIC_ENGINE.has(fromRepo)) continue
-    failures.push(`${relative(repo, file)} imports the engine internal ${specifier}`)
+    failures.push(`${path} imports the engine internal ${specifier}`)
+  }
+  if (path !== GENERATED_CLIENT && API_PATH.test(text)) {
+    failures.push(`${path} calls /api/v1 by hand; use the generated client (DX-4)`)
   }
 }
 
@@ -45,7 +64,7 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log(`public API rule: the interface imports no engine internal (${files.length} files)`)
+console.log(`public API rule: the interface uses only the public API (${files.length} files)`)
 
 // Every module specifier of a source file: `from '...'`, `import '...'` and
 // `import('...')`, so that a re-export counts like an import.

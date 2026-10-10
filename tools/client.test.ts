@@ -34,7 +34,7 @@ function run(args: string[]): { status: number; stdout: string; stderr: string }
   }
 }
 
-test.fails('#93 DX-4 the generator reproduces the checked-in client byte for byte', () => {
+test('#93 DX-4 the generator reproduces the checked-in client byte for byte', () => {
   const out = join(temp, 'client.ts')
   const result = run([generator, out])
   expect(result.status, result.stderr).toBe(0)
@@ -44,7 +44,7 @@ test.fails('#93 DX-4 the generator reproduces the checked-in client byte for byt
   )
 })
 
-test.fails('#93 DX-4 the generated client exposes the three typed operations (I12)', () => {
+test('#93 DX-4 the generated client exposes the three typed operations (I12)', () => {
   expect(existsSync(clientPath), 'the generated client is checked in').toBe(true)
   const source = readFileSync(clientPath, 'utf8')
   expect(source, 'appendOperation takes an Operation and returns an Event').toContain(
@@ -58,7 +58,7 @@ test.fails('#93 DX-4 the generated client exposes the three typed operations (I1
   )
 })
 
-test.fails('#93 DX-4 a hand-written /api/v1 call in the interface fails the rule (I12)', () => {
+test('#93 DX-4 a hand-written /api/v1 call in the interface fails the rule (I12)', () => {
   const dir = mkdtempSync(join(temp, 'rule-'))
   mkdirSync(join(dir, 'interface', 'client'), { recursive: true })
   writeFileSync(

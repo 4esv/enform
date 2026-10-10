@@ -76,3 +76,28 @@ test('#18 the rule fails when the interface imports an engine internal (I12)', (
   expect(result.status, 'the rule rejects the engine internal').toBe(1)
   expect(result.stderr, 'the rule names the internal').toContain('engine/instance.js')
 })
+
+// Issue #93, DX-4: the interface reaches the API through the generated client
+// only. A `/api/v1` path in any other interface file is a hand-written call.
+test('#93 the rule fails when the interface calls /api/v1 by hand (I12, DX-4)', () => {
+  const dir = makeRepo({
+    'interface/app.ts': [
+      'export async function load() {',
+      "  return fetch('/api/v1/state')",
+      '}',
+      '',
+    ].join('\n'),
+    'interface/client/client.ts': '// the generated client (DX-4)\n',
+  })
+  const result = run([rule, dir])
+  expect(result.status, 'the rule rejects the hand-written call').toBe(1)
+  expect(result.stderr, 'the rule names the interface file').toContain('interface/app.ts')
+})
+
+test('#93 the rule allows the generated client to name the /api/v1 paths (I12, DX-4)', () => {
+  const dir = makeRepo({
+    'interface/client/client.ts': "export const path = '/api/v1/state'\n",
+  })
+  const result = run([rule, dir])
+  expect(result.status, result.stderr).toBe(0)
+})
