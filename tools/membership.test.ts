@@ -16,9 +16,6 @@ import { type Membership, refreshAssignees } from '../engine/resolve.js'
 // member who joined is included with no new publication. A deprovisioned user
 // is released: the task that they held returns to the pool (A1), and the
 // append-only log records the change, attributed and versioned (I4, I14).
-//
-// The check is marked as expected to fail until the membership synchronization
-// lands (#73, ID-5).
 
 /** The time of the operations (I6): the clock is injected. */
 const AT = 1_700_000_000_000
@@ -88,7 +85,7 @@ const draft: Instance = {
   starter: STARTER,
 }
 
-test.fails('#73 ID-5 group membership synchronizes and a deprovision releases claimed tasks', () => {
+test('#73 ID-5 group membership synchronizes and a deprovision releases claimed tasks', () => {
   // (a) The synchronization makes the enform membership equal to the directory
   // (ID-5): Ana, who joined, is present, and Lee, who left, is absent. The
   // membership is a pure function of the directory (I6), so two syncs agree.
