@@ -56,7 +56,7 @@ function assertNoAcknowledgedEditLost(session: DraftSession): void {
   }
 }
 
-test.fails('#21 a saved edit is synced or recoverable until a deliberate discard (I15)', () => {
+test('#21 a saved edit is synced or recoverable until a deliberate discard (I15)', () => {
   const draft1: Draft = { id: 'draft-1', edit: EDIT, state: 'saved' }
   const saved = saveDraft(saveDraft(emptySession, draft1.id, draft1.edit), 'draft-2', OTHER_EDIT)
   expect(saved.saved).toEqual([draft1, { id: 'draft-2', edit: OTHER_EDIT, state: 'saved' }])

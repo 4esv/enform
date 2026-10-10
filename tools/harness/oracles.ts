@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { apply, rebuild, type State } from '../../engine/apply.js'
+import type { DraftSession } from '../../engine/drafts.js'
 import type { Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
@@ -17,6 +18,11 @@ export type RunResult = {
   readonly scenario: Scenario
   /** The injected step clock of the run (I6). Absent means the golden step clock. */
   readonly clock?: StepClock
+  /**
+   * The local-first draft session of the run (I15). Absent means the run holds
+   * no drafts, which is every run before the realtime path (RT-3).
+   */
+  readonly drafts?: DraftSession
 }
 
 /** One invariant oracle (I1 to I16). A later milestone adds a new entry to the registry. */
@@ -101,10 +107,40 @@ const I14: InvariantOracle = {
 }
 
 /**
+ * I15: every edit that the device saved is synced or still recoverable, so a
+ * saved edit is released only by a deliberate discard, and every held draft
+ * shows the difference between "Saved on this device" and "Synced". A run
+ * before the realtime path (RT-3) carries no drafts, so the check is empty
+ * until a run supplies them.
+ */
+const I15: InvariantOracle = {
+  id: 'I15',
+  check: ({ drafts }) => {
+    if (drafts === undefined) return
+    for (const saved of drafts.saved) {
+      const held = drafts.held.find((draft) => draft.id === saved.id)
+      if (held === undefined && !drafts.discarded.includes(saved.id)) {
+        throw new Error(
+          `I15: the saved edit on draft ${saved.id} disappeared without a sync or a deliberate discard`
+        )
+      }
+    }
+    for (const draft of drafts.held) {
+      if (draft.state !== 'saved' && draft.state !== 'synced') {
+        throw new Error(`I15: draft ${draft.id} does not show whether it is saved or synced`)
+      }
+      if (draft.state === 'saved' && Object.keys(draft.edit).length === 0) {
+        throw new Error(`I15: the saved edit on draft ${draft.id} is not recoverable`)
+      }
+    }
+  },
+}
+
+/**
  * The registered invariant oracles. A later milestone adds an invariant
  * without a change to the runner: it appends one entry here.
  */
-export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14]
+export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14, I15]
 
 /**
  * Run the three checks of #28 in order over a finished run, and throw on the
@@ -113,8 +149,13 @@ export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I1
  * operator) passes the moved clock so that the golden end state and the
  * timeline are read under the same clock as the run.
  */
-export function oracles(state: State, scenario: Scenario, clock?: StepClock): void {
-  assertInvariants({ state, scenario, clock })
+export function oracles(
+  state: State,
+  scenario: Scenario,
+  clock?: StepClock,
+  drafts?: DraftSession
+): void {
+  assertInvariants({ state, scenario, clock, drafts })
   assertGoldenEndState(state, scenario, clock)
   assertTimeline(state, clock)
 }

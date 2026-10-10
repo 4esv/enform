@@ -9,10 +9,6 @@
 // either becomes `synced`, or it stays `saved` and recoverable, until a
 // deliberate discard. This model is pure and deterministic (I6): it reads no
 // clock, no random source and no I/O of its own.
-//
-// The store is a scaffold: the types and the surface below are fixed, and the
-// behavior arrives in the next commit, when the suite stops expecting the
-// first check to fail (#21).
 
 /**
  * The state of one held draft (I15). `saved` is "Saved on this device": the
@@ -51,26 +47,57 @@ export type DraftSession = {
 /** The session before any edit (I15): nothing saved, nothing held, nothing discarded. */
 export const emptySession: DraftSession = { saved: [], held: [], discarded: [] }
 
-/** Save one edit under `id` (I15, RT-3). Not implemented yet (#21). */
+/**
+ * Save one edit under `id` (I15, RT-3): the edit becomes a held draft in state
+ * `saved`, so the interface shows "Saved on this device" until the server
+ * acknowledges it. Saving an id again replaces its held edit and returns it to
+ * `saved`, because the newer edit is not acknowledged yet. The `saved` record
+ * keeps every save, so a dropped edit stays visible (I15).
+ */
 export function saveDraft(
-  _session: DraftSession,
-  _id: string,
-  _edit: Readonly<Record<string, unknown>>
+  session: DraftSession,
+  id: string,
+  edit: Readonly<Record<string, unknown>>
 ): DraftSession {
-  throw new Error('drafts: saveDraft is not implemented yet (I15, #21)')
+  const draft: Draft = { id, edit, state: 'saved' }
+  return {
+    saved: [...session.saved, draft],
+    held: [...session.held.filter((entry) => entry.id !== id), draft],
+    discarded: session.discarded.filter((discarded) => discarded !== id),
+  }
 }
 
-/** Mark the held draft `id` synced (I15). Not implemented yet (#21). */
-export function syncDraft(_session: DraftSession, _id: string): DraftSession {
-  throw new Error('drafts: syncDraft is not implemented yet (I15, #21)')
+/**
+ * Mark the held draft `id` synced (I15): the server acknowledged the edit, so
+ * the interface shows "Synced". A draft that the device does not hold leaves
+ * the session unchanged.
+ */
+export function syncDraft(session: DraftSession, id: string): DraftSession {
+  return {
+    ...session,
+    held: session.held.map((draft) => (draft.id === id ? { ...draft, state: 'synced' } : draft)),
+  }
 }
 
-/** Discard the held draft `id` (I15). Not implemented yet (#21). */
-export function discardDraft(_session: DraftSession, _id: string): DraftSession {
-  throw new Error('drafts: discardDraft is not implemented yet (I15, #21)')
+/**
+ * Discard the held draft `id` (I15): a deliberate deletion releases the edit
+ * from the device, and it is the only operation that removes a held draft. The
+ * id stays on the record as a deliberate discard, so it is not a loss.
+ */
+export function discardDraft(session: DraftSession, id: string): DraftSession {
+  return {
+    saved: session.saved,
+    held: session.held.filter((draft) => draft.id !== id),
+    discarded: [...session.discarded, id],
+  }
 }
 
-/** The recoverable drafts of a store (I15). Not implemented yet (#21). */
-export function recoverable(_store: DraftStore): DraftStore {
-  throw new Error('drafts: recoverable is not implemented yet (I15, #21)')
+/**
+ * The recoverable drafts (I15): the drafts of a store that are saved on the
+ * device and not yet synced. They are the edits that the device must not lose
+ * before a deliberate discard, and the ones that the interface marks "Saved on
+ * this device".
+ */
+export function recoverable(store: DraftStore): DraftStore {
+  return store.filter((draft) => draft.state === 'saved')
 }
