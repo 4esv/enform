@@ -2,6 +2,8 @@ import { isDeepStrictEqual } from 'node:util'
 import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { type CompletionResult, completeStep } from '../../engine/concurrency.js'
+import type { FlowDefinition } from '../../engine/definition.js'
+import type { FlowVersion } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import type { ActorId, Log, Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
@@ -444,4 +446,64 @@ function logShape(view: StateView): readonly unknown[] {
     actor: event.actor,
     payload: event.payload,
   }))
+}
+
+// Issue #37, STORIES.md Fuzzy paths: the Version operator publishes a new
+// definition version between two steps of a golden path. A published version
+// is immutable and carries a content hash (DF-2), and an instance stays on the
+// version that it started on (DF-2). The engine stamps each instance with the
+// hash of the definition that it started on and never moves it (instance.ts),
+// so a publication between two steps leaves an instance in progress on its
+// version, gives the new version a different hash, and records the change on
+// the log, which the timeline projects (I4). The runner generates one variant
+// per step boundary from the golden path, so no fuzzy test is written by hand
+// and the run is deterministic (I6).
+//
+// This is the #37 scaffold: the test lands first and fails; the next commit
+// implements the generator and the run.
+
+/**
+ * How the Version operator publishes a new definition version between two
+ * steps (STORIES.md, Fuzzy paths): the actor who publishes, the flow slug, the
+ * new definition to publish, and the definition that an instance in progress
+ * started on.
+ */
+export type Versioning = {
+  /** The actor who pushes and publishes the new version (I14). */
+  readonly actor: ActorId
+  /** The slug of the flow that the publication names (VT-6). */
+  readonly slug: string
+  /** The new definition that the operator pushes and publishes (DF-4). */
+  readonly definition: FlowDefinition
+  /** The definition that an instance in progress started on, before the publication (DF-2). */
+  readonly started: FlowDefinition
+}
+
+/** One generated Version variant: the step boundary where a new version is published. */
+export type VersionVariant = {
+  readonly id: string
+  /** How many golden steps run before the publication (1 to n). */
+  readonly boundary: number
+  /** The golden path with the definition change and its publication inserted at the boundary. */
+  readonly scenario: Scenario
+  /** The definition that an instance in progress started on (DF-2). */
+  readonly started: FlowDefinition
+  /** The version that the inserted publication creates (DF-2, VT-6). */
+  readonly published: FlowVersion
+}
+
+/** Generate one Version variant per step boundary (STORIES.md, Fuzzy paths). */
+export function versionVariants(
+  _scenario: Scenario,
+  _versioning: Versioning
+): readonly VersionVariant[] {
+  return []
+}
+
+/** Run the Version operator over a golden path: publish a new version at every boundary. */
+export async function runVersionOperator(
+  _scenario: Scenario,
+  _versioning: Versioning
+): Promise<readonly VersionVariant[]> {
+  return []
 }

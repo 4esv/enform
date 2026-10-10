@@ -21,7 +21,7 @@ Refs: ID-1, DF-1, DF-2, DF-4, DR-1, DR-5, DX-3, VT-6, I9, I14
 | Offline | - | - | - | - |
 | Clock | run | - | - | - |
 | Data | - | - | - | - |
-| Version | - | - | - | - |
+| Version | run | - | - | - |
 
 ## S02: Grant access by scope (`grant-scopes`)
 
