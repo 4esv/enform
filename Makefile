@@ -15,12 +15,14 @@ typecheck:
 test:
 	pnpm exec vitest run
 
-# The document rule of STORIES.md Coverage (the matrix of story, operator
-# and mode). CI runs it after `make check`, like the invariant and changelog
-# rules, so that `make check` stays green on the layout copy without test
-# files (#95).
+# The rules that CI runs next to `make check`: the document rule of STORIES.md
+# Coverage (the matrix of story, operator and mode) and the public API rule of
+# I12 (the interface uses only the public API). CI runs them after `make check`,
+# like the invariant and changelog rules, so that `make check` stays green on
+# the layout copy without test files (#95).
 rules:
 	node tools/matrix-rule.mjs
+	node tools/public-api-rule.mjs
 
 invariants:
 	pnpm exec vitest run --project invariants

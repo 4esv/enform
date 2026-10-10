@@ -50,3 +50,6 @@ jobs:
 
       - name: Matrix rule (STORIES.md Coverage)
         run: node tools/matrix-rule.mjs
+
+      - name: Public API rule (I12, MVP.md A3, A9)
+        run: node tools/public-api-rule.mjs
