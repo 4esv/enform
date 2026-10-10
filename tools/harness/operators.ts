@@ -2,7 +2,13 @@ import { isDeepStrictEqual } from 'node:util'
 import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { type CompletionResult, completeStep } from '../../engine/concurrency.js'
-import { DEFINITION_CHANGED, type FlowDefinition } from '../../engine/definition.js'
+import {
+  DEFINITION_CHANGED,
+  type Field,
+  type FlowDefinition,
+  type JsonValue,
+} from '../../engine/definition.js'
+import type { FieldError } from '../../engine/fields.js'
 import { DEFINITION_PUBLISHED, type FlowVersion } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { contentHash, createInstance } from '../../engine/instance.js'
@@ -614,4 +620,54 @@ function publicationsBefore(scenario: Scenario, boundary: number): number {
     if (scenario.steps[i].type === DEFINITION_PUBLISHED) count += 1
   }
   return count
+}
+
+// Issue #36, STORIES.md Fuzzy paths: the Data operator generates valid and
+// invalid form data from the flow schema, with property-based generation. The
+// golden path of a field-bearing flow carries the form data on its submission
+// step, in the step payload's `data` record. For each field of the flow's steps
+// the operator generates one value that the field's control accepts and one
+// that it refuses; the engine's validator (validateField, FM-4) is the oracle,
+// so an accepted value reaches the golden state and a refused value deviates
+// by the submission step, with the failure naming the field path (FM-1). The
+// runner generates the variants; no fuzzy test is written by hand.
+//
+// This is the #36 scaffold: the test lands first and fails; the next commit
+// implements the generator and the run.
+
+/**
+ * One value that a field's control can receive (FM-1): a JSON value, or no
+ * value at all (a static control takes no value).
+ */
+export type FormValue = JsonValue | undefined
+
+/** One generated Data variant: one field of the flow, with one submitted value (FM-1). */
+export type DataVariant = {
+  readonly id: string
+  /** The field whose value the variant submits (FM-1). */
+  readonly field: Field
+  /** The value that the variant submits (FM-1). */
+  readonly value: FormValue
+  /** The engine's prediction (FM-4): the control accepts the value, or it refuses it. */
+  readonly expected: 'accepted' | 'refused'
+  /** The predicted deviation of a refused value: the failure that names the field path (FM-1). */
+  readonly deviation?: FieldError
+  /** The golden path with the field's value injected into the submission step. */
+  readonly scenario: Scenario
+}
+
+/** Generate one valid and one invalid variant per field (STORIES.md, Fuzzy paths). */
+export function dataVariants(
+  _scenario: Scenario,
+  _fields: readonly Field[]
+): readonly DataVariant[] {
+  return []
+}
+
+/** Run the Data operator over a golden path: run every variant, check the oracles. */
+export async function runDataOperator(
+  _scenario: Scenario,
+  _fields: readonly Field[]
+): Promise<readonly DataVariant[]> {
+  return []
 }
