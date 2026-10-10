@@ -3,7 +3,7 @@ import { apply, rebuild, type State } from '../../engine/apply.js'
 import type { Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
-import { goldenView, type Scenario, toView } from './scenario.js'
+import { goldenView, type Scenario, type StepClock, toView } from './scenario.js'
 
 // Issue #28, STORIES.md Test method: the oracle pipeline that every run,
 // golden or generated, passes through in this order: (1) all invariants are
@@ -15,6 +15,8 @@ import { goldenView, type Scenario, toView } from './scenario.js'
 export type RunResult = {
   readonly state: State
   readonly scenario: Scenario
+  /** The injected step clock of the run (I6). Absent means the golden step clock. */
+  readonly clock?: StepClock
 }
 
 /** One invariant oracle (I1 to I16). A later milestone adds a new entry to the registry. */
@@ -74,11 +76,11 @@ const I4: InvariantOracle = {
   },
 }
 
-/** I6: the end state equals the golden end state, the deterministic engine replay. */
+/** I6: the end state equals the golden end state, the deterministic replay under the run's clock. */
 const I6: InvariantOracle = {
   id: 'I6',
-  check: ({ state, scenario }) => {
-    if (!isDeepStrictEqual(toView(state), goldenView(scenario))) {
+  check: ({ state, scenario, clock }) => {
+    if (!isDeepStrictEqual(toView(state), goldenView(scenario, clock))) {
       throw new Error('I6: the end state differs from the golden end state (determinism)')
     }
   },
@@ -104,11 +106,17 @@ const I14: InvariantOracle = {
  */
 export const INVARIANT_ORACLES: readonly InvariantOracle[] = [I1, I3, I4, I6, I14]
 
-/** Run the three checks of #28 in order over a finished run, and throw on the first failure. */
-export function oracles(state: State, scenario: Scenario): void {
-  assertInvariants({ state, scenario })
-  assertGoldenEndState(state, scenario)
-  assertTimeline(state)
+/**
+ * Run the three checks of #28 in order over a finished run, and throw on the
+ * first failure. The step clock is the injected source of the run (I6): absent
+ * it is the golden step clock, and a caller that moves the clock (the Clock
+ * operator) passes the moved clock so that the golden end state and the
+ * timeline are read under the same clock as the run.
+ */
+export function oracles(state: State, scenario: Scenario, clock?: StepClock): void {
+  assertInvariants({ state, scenario, clock })
+  assertGoldenEndState(state, scenario, clock)
+  assertTimeline(state, clock)
 }
 
 /** Check 1: all registered invariants are true. The check does not depend on the variation. */
@@ -116,15 +124,19 @@ function assertInvariants(run: RunResult): void {
   for (const oracle of INVARIANT_ORACLES) oracle.check(run)
 }
 
-/** Check 2: the end state is the golden end state (the deterministic engine replay). */
-function assertGoldenEndState(state: State, scenario: Scenario): void {
-  if (!isDeepStrictEqual(toView(state), goldenView(scenario))) {
+/** Check 2: the end state is the golden end state (the deterministic replay under the run's clock). */
+function assertGoldenEndState(state: State, scenario: Scenario, clock?: StepClock): void {
+  if (!isDeepStrictEqual(toView(state), goldenView(scenario, clock))) {
     throw new Error('the end state is not the golden end state')
   }
 }
 
-/** Check 3: the timeline is one global order (seq 1..n), and every event is attributed. */
-function assertTimeline(state: State): void {
+/**
+ * Check 3: the timeline is one global order (seq 1..n), and every event is
+ * attributed. A run with an injected clock also has its `at` values checked
+ * against the clock's readings (I6): a moved clock moves `at` and nothing else.
+ */
+function assertTimeline(state: State, clock?: StepClock): void {
   for (let i = 0; i < state.log.length; i += 1) {
     const event = state.log[i]
     if (event.seq !== i + 1) {
@@ -132,6 +144,11 @@ function assertTimeline(state: State): void {
     }
     if (event.actor === undefined) {
       throw new Error(`the timeline has an unattributed event: ${event.seq} (${event.type})`)
+    }
+    if (clock !== undefined && event.at !== clock(i)) {
+      throw new Error(
+        `the timeline does not follow the injected clock: event ${event.seq} is at ${event.at}, not ${clock(i)} (I6)`
+      )
     }
   }
 }

@@ -6,7 +6,15 @@ import type { Operation } from '../../engine/operation.js'
 import { type OutboxEntry, outboxOf } from '../../engine/outbox.js'
 import { runSteps as engineRunSteps } from '../../engine/run.js'
 import { oracles } from './oracles.js'
-import { fromView, type Scenario, type StateView, stepOperation, toView } from './scenario.js'
+import {
+  fromView,
+  goldenClock,
+  type Scenario,
+  type StateView,
+  type StepClock,
+  stepOperation,
+  toView,
+} from './scenario.js'
 import { startApi } from './server.js'
 
 // Issue #24, STORIES.md Test method: the golden-path runner. A scenario runs
@@ -30,10 +38,12 @@ export type RunOutcome = {
   readonly intents: readonly OutboxEntry[]
 }
 
-/** The options of a run: the mode, and how many times api mode delivers each step. */
+/** The options of a run: the mode, how many times api mode delivers each step, and the step clock. */
 export type RunOptions = {
   readonly mode: Mode
   readonly deliveries?: Deliveries
+  /** The injected step clock of the run (I6). Absent means the golden step clock. */
+  readonly clock?: StepClock
 }
 
 /** Delivery once per step, the golden path. */
@@ -53,7 +63,7 @@ const TS_RESOLVE = join(HARNESS_DIR, 'ts-resolve.ts')
 export async function runSteps(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
   if (options.mode === 'dry') return dryRun(scenario)
   if (options.mode === 'cli') return cliRun(scenario)
-  return apiRun(scenario, options.deliveries ?? ONCE)
+  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? goldenClock)
 }
 
 /**
@@ -122,13 +132,17 @@ function runCli(args: readonly string[]): Promise<string> {
 }
 
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */
-async function apiRun(scenario: Scenario, deliveries: Deliveries): Promise<RunOutcome> {
+async function apiRun(
+  scenario: Scenario,
+  deliveries: Deliveries,
+  clock: StepClock
+): Promise<RunOutcome> {
   const api = startApi(emptyState)
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
     for (let i = 0; i < scenario.steps.length; i++) {
-      const operation = stepOperation(scenario.steps[i], i)
+      const operation = stepOperation(scenario.steps[i], i, clock)
       for (let d = 0; d < deliveries(i); d += 1) {
         const response = await fetch(`http://127.0.0.1:${api.port()}/api/v1/operations`, {
           method: 'POST',

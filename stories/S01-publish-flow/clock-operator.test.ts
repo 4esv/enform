@@ -11,7 +11,7 @@ import { golden } from './scenario.js'
 // injected clock. The runner generates the variants from the golden path; no
 // fuzzy test is written by hand.
 
-test.fails('#35 the Clock operator moves the clock at each S01 step (S01)', async () => {
+test('#35 the Clock operator moves the clock at each S01 step (S01)', async () => {
   // One variant per step and per move, generated in step order, then move
   // order, so the generation is deterministic (I6).
   const generated = clockVariants(golden)

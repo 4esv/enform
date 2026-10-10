@@ -8,7 +8,16 @@ import { outboxOf } from '../../engine/outbox.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
 import { oracles } from './oracles.js'
 import { type Deliveries, runSteps } from './runner.js'
-import { type Scenario, type Step, stepOperation } from './scenario.js'
+import {
+  goldenClock,
+  goldenView,
+  type Scenario,
+  type StateView,
+  type Step,
+  type StepClock,
+  stepOperation,
+  toView,
+} from './scenario.js'
 
 // Issue #31, STORIES.md Fuzzy paths: variation operators generate fuzzy paths
 // from a golden path. Duplicate sends each operation two times; the end state
@@ -342,17 +351,38 @@ function runFault(scenario: Scenario, variant: FaultVariant): void {
 
 // Issue #35, STORIES.md Fuzzy paths: the Clock operator moves the injected
 // clock forward, back or skews it at each step of a golden path, near
-// deadlines and idle limits. The engine reads no clock of its own (I6), so a
-// moved clock changes the `at` of the operations but never the state, and the
-// timeline's `at` values follow the injected clock. The runner generates the
-// variants in step order, then move order, so no fuzzy test is written by
-// hand and the run is deterministic (I6).
-//
-// This is the #35 scaffold: the test lands first and fails; the next commit
-// implements the generator and the run.
+// deadlines and idle limits. The engine reads no clock of its own (I6): the
+// clock is a source of a run, so a moved clock changes the `at` of the
+// operations and nothing else. The same steps give the same state under any
+// clock, and the timeline's `at` values follow the injected clock. The runner
+// generates the variants in step order, then move order, so no fuzzy test is
+// written by hand and the run is deterministic (I6).
 
 /** One clock move of the Clock operator (STORIES.md, Fuzzy paths). */
 export type ClockMove = 'forward' | 'back' | 'skew'
+
+/** The moves of the Clock operator, in generation order (I6). */
+const CLOCK_MOVES: readonly ClockMove[] = ['forward', 'back', 'skew']
+
+/**
+ * How far a moved clock jumps past a deadline and an idle limit (STORIES.md,
+ * Fuzzy paths), in the unit of the step clock. The engine measures idle time
+ * and deadlines in milliseconds (takeover.ts, reminders.ts).
+ */
+const IDLE_LIMIT = 60_000
+
+/** How far a skewed clock drifts off the step time: a fraction of a step, so it stays a skew. */
+const SKEW = 0.5
+
+/**
+ * The injected clock of one variant (I6): the golden step clock, moved at the
+ * variant's step and left in force after it. A forward or back move jumps by
+ * an idle limit; a skew drifts by a fraction of a step.
+ */
+function movedClock(move: ClockMove, movedIndex: number): StepClock {
+  const shift = move === 'forward' ? IDLE_LIMIT : move === 'back' ? -IDLE_LIMIT : SKEW
+  return (index) => goldenClock(index) + (index >= movedIndex ? shift : 0)
+}
 
 /** One generated Clock variant: one step of the golden path, with the clock moved there. */
 export type ClockVariant = {
@@ -360,15 +390,58 @@ export type ClockVariant = {
   readonly stepIndex: number
   readonly move: ClockMove
   /** The injected clock of the variant (I6): it gives the time of each step. */
-  readonly clock: (stepIndex: number) => number
+  readonly clock: StepClock
 }
 
-/** Generate one Clock variant per step and per move (STORIES.md, Fuzzy paths). */
-export function clockVariants(_scenario: Scenario): readonly ClockVariant[] {
-  return []
+/**
+ * Generate one Clock variant per step and per move (STORIES.md, Fuzzy paths).
+ * A variant moves the clock at one step, so the golden path of n steps gives
+ * 3n variants, in step order, then move order, so the generation is
+ * deterministic (I6).
+ */
+export function clockVariants(scenario: Scenario): readonly ClockVariant[] {
+  const variants: ClockVariant[] = []
+  scenario.steps.forEach((_step, index) => {
+    for (const move of CLOCK_MOVES) {
+      variants.push({
+        id: `clock:${move}:step${index + 1}`,
+        stepIndex: index,
+        move,
+        clock: movedClock(move, index),
+      })
+    }
+  })
+  return variants
 }
 
-/** Run the Clock operator over a golden path: move the clock at every step, check the oracles. */
-export async function runClockOperator(_scenario: Scenario): Promise<readonly ClockVariant[]> {
-  return []
+/**
+ * Run the Clock operator over a golden path: every variant runs in api mode
+ * under its moved clock, and the oracles check it (STORIES.md, Oracles, I6).
+ * The clock is the only source that moves, so a moved clock shifts the `at` of
+ * the operations but not the log's shape: the end state equals the golden end
+ * state in everything but `at`, and the timeline's `at` values are the
+ * clock's readings. The variants are returned, so a test can count them.
+ */
+export async function runClockOperator(scenario: Scenario): Promise<readonly ClockVariant[]> {
+  const variants = clockVariants(scenario)
+  const goldenShape = logShape(goldenView(scenario))
+  for (const variant of variants) {
+    const { state } = await runSteps(scenario, { mode: 'api', clock: variant.clock })
+    oracles(state, scenario, variant.clock)
+    if (!isDeepStrictEqual(logShape(toView(state)), goldenShape)) {
+      throw new Error(`${variant.id}: the moved clock changed the state, not only the times (I6)`)
+    }
+  }
+  return variants
+}
+
+/** The log shape of a state view without the clock's `at` (I6): a moved clock must not change it. */
+function logShape(view: StateView): readonly unknown[] {
+  return view.log.map((event) => ({
+    seq: event.seq,
+    operationId: event.operationId,
+    type: event.type,
+    actor: event.actor,
+    payload: event.payload,
+  }))
 }

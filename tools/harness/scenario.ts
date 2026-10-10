@@ -61,10 +61,15 @@ export const goldenClock: StepClock = (index) => index + 1
 /**
  * The operation that one step appends (I2): a step with side effects carries
  * them in the same operation, so one `apply` commits the state change and its
- * side effects together. A step with no side effect keeps its payload.
+ * side effects together. A step with no side effect keeps its payload. The
+ * operation's `at` comes from the step clock (I6).
  */
-export function stepOperation(step: Step, index: number): Operation {
-  const deps = { clock: () => index + 1, ids: () => `op-${index + 1}` }
+export function stepOperation(
+  step: Step,
+  index: number,
+  clock: StepClock = goldenClock
+): Operation {
+  const deps = { clock: () => clock(index), ids: () => `op-${index + 1}` }
   const outbox = step.outbox ?? []
   return outbox.length > 0
     ? createOutboxOperation(step.type, step.payload, outbox, deps, step.actor)
@@ -72,11 +77,11 @@ export function stepOperation(step: Step, index: number): Operation {
 }
 
 // The engine-side replay of the steps (I6): the golden end state that a run
-// must reproduce. The clock is the step index and the IDs are `op-N`.
-export function goldenView(value: Scenario): StateView {
+// must reproduce. The clock is the step clock and the IDs are `op-N`.
+export function goldenView(value: Scenario, clock: StepClock = goldenClock): StateView {
   let state = emptyState
   value.steps.forEach((step, i) => {
-    state = apply(stepOperation(step, i), state)
+    state = apply(stepOperation(step, i, clock), state)
   })
   return toView(state)
 }
