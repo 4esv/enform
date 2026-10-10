@@ -244,3 +244,32 @@ function assertAccepted(result: CompletionResult, id: string, side: string): voi
 function assertRefused(result: CompletionResult, id: string, side: string): void {
   if (result.accepted) throw new Error(`${id}: the version check accepted ${side}, two succeeded`)
 }
+
+// Issue #33, STORIES.md Fuzzy paths: the Fault operator interrupts a golden
+// path at each step boundary: it restarts the server, stops the realtime
+// connection and stops the worker (STORIES.md, Fuzzy paths). There is no
+// realtime and no worker yet, so the fault is modelled at the engine boundary
+// (MVP.md I1, I3, I4): the runner rebuilds the state from the log so far (I4),
+// re-applies the operations (I1) and redelivers the side effects (I3), then
+// continues the golden path. The engine is fault tolerant by construction, so
+// every run reaches the golden end state, and the run is deterministic (I6).
+//
+// This is the #33 scaffold: the test lands first and fails; the next commit
+// implements the generator and the run.
+
+/** One generated Fault variant: the step boundary where the run is interrupted. */
+export type FaultVariant = {
+  readonly id: string
+  /** How many steps ran before the fault: the run rebuilds and redelivers here. */
+  readonly boundary: number
+}
+
+/** Generate one Fault variant per step boundary (STORIES.md, Fuzzy paths). */
+export function faultVariants(_scenario: Scenario): readonly FaultVariant[] {
+  return []
+}
+
+/** Run the Fault operator over a golden path: fault at every boundary, check the oracles. */
+export function runFaultOperator(_scenario: Scenario): readonly FaultVariant[] {
+  return []
+}
