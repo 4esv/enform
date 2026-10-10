@@ -1,12 +1,14 @@
-// Issue #38, S01, DF-1, DF-4, DX-3, I9: the `enform` command, unit 1. The
-// command groups are `login`, `flow`, `grant`, `instance`, `task`, `undo` and
-// `log` (cli/README.md); this unit covers the stateless `flow` file commands:
-// `init`, `validate` and `pull`. The CLI is file-backed and in-process: it
-// imports the engine and never uses a server or the network. The CLI holds no
-// correctness logic (A9); it parses the arguments, calls the engine and
-// reports. Every command accepts `--json`. The command names, flags, exit
-// codes and `--json` output are a public surface (MVP.md 9.1), so the shapes
-// below change only with that surface. The CLI is deterministic (I6).
+// Issue #38, S01, DF-1, DF-4, DX-3, I9: the `enform` command. The command
+// groups are `login`, `flow`, `grant`, `instance`, `task`, `undo` and `log`
+// (cli/README.md); this commit covers the stateless `flow` file commands:
+// `init`, `validate` and `pull`, and scaffolds the stateful `push`, `publish`,
+// `diff` and `dry-run` commands as stubs. The next commit fills them in and
+// unmarks their checks. The CLI is file-backed and in-process: it imports the
+// engine and never uses a server or the network. The CLI holds no correctness
+// logic (A9); it parses the arguments, calls the engine and reports. Every
+// command accepts `--json`. The command names, flags, exit codes and `--json`
+// output are a public surface (MVP.md 9.1), so the shapes below change only
+// with that surface. The CLI is deterministic (I6).
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -52,7 +54,19 @@ function run(args: readonly string[], json: boolean, cwd: string): number {
   if (action === 'init') return flowInit(name, json, cwd)
   if (action === 'validate') return flowValidate(name, json, cwd)
   if (action === 'pull') return flowPull(name, json, cwd)
+  if (action === 'push') return notImplemented('flow push')
+  if (action === 'publish') return notImplemented('flow publish')
+  if (action === 'diff') return notImplemented('flow diff')
+  if (action === 'dry-run') return notImplemented('flow dry-run')
   throw new Error(`unknown flow command: ${action ?? ''}`.trim())
+}
+
+/**
+ * Refuse a command that the next commit implements. The check that covers it is
+ * marked expected to fail until then, so the suite stays green (issue #38).
+ */
+function notImplemented(command: string): number {
+  throw new Error(`${command}: not implemented yet`)
 }
 
 /**
