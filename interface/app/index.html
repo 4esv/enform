@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>enform</title>
+  </head>
+  <body data-base-url="" data-token="" data-slug="" data-actor="">
+    <main id="app"></main>
+    <script type="module">
+      import { mountApp } from './app.ts'
+
+      const config = document.body.dataset
+      mountApp({
+        root: document.getElementById('app'),
+        baseUrl: config.baseUrl ?? '',
+        token: config.token ?? '',
+        slug: config.slug ?? '',
+        actor: config.actor ?? '',
+      })
+    </script>
+  </body>
+</html>

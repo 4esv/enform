@@ -9,12 +9,8 @@ import { type Control, controlKind, formModel, isSingleInput } from './form.js'
 // the values that the form holds (FM-7). The model is a presentation view
 // only: the engine stays authoritative for validation, authorization and
 // routing (A9, FM-3).
-//
-// This is the failing test of the issue (AGENTS.md): the assertions fail until
-// formModel, controlKind and isSingleInput exist, so each test is marked as
-// expected to fail. The marks come off with the implementation.
 
-test.fails('#181 the form model reads a flat step and its visible and editable fields', () => {
+test('#181 the form model reads a flat step and its visible and editable fields', () => {
   const definition = {
     schemaVersion: 2,
     steps: [
@@ -82,7 +78,7 @@ test.fails('#181 the form model reads a flat step and its visible and editable f
   })
 })
 
-test.fails('#181 the form model reads sections and the absent visible and editable defaults', () => {
+test('#181 the form model reads sections and the absent visible and editable defaults', () => {
   const definition = {
     schemaVersion: 2,
     steps: [
@@ -120,11 +116,11 @@ test.fails('#181 the form model reads sections and the absent visible and editab
   }
 })
 
-test.fails('#181 the form model refuses a schemaVersion it does not read', () => {
+test('#181 the form model refuses a schemaVersion it does not read', () => {
   expect(() => formModel({ schemaVersion: 9, steps: [] }, 'request')).toThrow(/schemaVersion 9/)
 })
 
-test.fails('#181 the form model maps each FM-1 control to what the DOM needs', () => {
+test('#181 the form model maps each FM-1 control to what the DOM needs', () => {
   const kinds: Record<Control, string> = {
     text: 'single-line',
     'long-text': 'textarea',

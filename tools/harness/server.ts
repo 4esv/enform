@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { publishedFlow } from '../../engine/flow.js'
 import type { Operation } from '../../engine/operation.js'
@@ -7,12 +10,20 @@ import type { Operation } from '../../engine/operation.js'
 // describes. It delegates to the engine (apply, the append-only log). It is
 // harness infrastructure, not the release server (deploy/compose.yaml defers
 // that image to a later milestone).
+//
+// Issue #181, FM-1, ADR 0009: it also serves the app shell from interface/app
+// so a browser can open it. The TypeScript source is served as a JavaScript
+// module; gui mode supplies the type stripping. The app files are read from
+// disk here; the server never imports an interface module.
 
 export type Api = {
   server: Server
   state: () => State
   port: () => number
 }
+
+/** The directory that holds the browser app (index.html, app.ts, form.ts). */
+const APP_DIR = fileURLToPath(new URL('../../interface/app/', import.meta.url))
 
 function isOperation(value: unknown): value is Operation {
   if (typeof value !== 'object' || value === null) return false
@@ -42,6 +53,57 @@ function readBody(req: IncomingMessage): Promise<string> {
 function json(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify(value))
+}
+
+/** The content type of an app asset, or undefined for an unknown extension. */
+function appContentType(path: string): string | undefined {
+  if (path.endsWith('.html')) return 'text/html; charset=utf-8'
+  if (path.endsWith('.js')) return 'text/javascript; charset=utf-8'
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8'
+  if (path.endsWith('.json')) return 'application/json; charset=utf-8'
+  if (path.endsWith('.svg')) return 'image/svg+xml'
+  if (path.endsWith('.ts')) return 'text/javascript; charset=utf-8'
+  return undefined
+}
+
+/**
+ * Resolve one /app/ subpath to a file inside interface/app, and refuse any
+ * path that escapes the directory (I12, ADR 0009). An unknown extension or a
+ * malformed path answers undefined.
+ */
+function appAsset(subpath: string): { file: string; type: string } | undefined {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(subpath)
+  } catch {
+    return undefined
+  }
+  if (decoded.includes('\0')) return undefined
+  const file = resolve(APP_DIR, decoded)
+  const rel = relative(APP_DIR, file)
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return undefined
+  }
+  const type = appContentType(file)
+  if (type === undefined) return undefined
+  return { file, type }
+}
+
+function serveApp(res: ServerResponse, subpath: string): void {
+  const asset = appAsset(subpath)
+  if (asset === undefined) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  let body: Buffer
+  try {
+    body = readFileSync(asset.file)
+  } catch {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  res.writeHead(200, { 'content-type': asset.type })
+  res.end(body)
 }
 
 export function startApi(state: State = emptyState): Api {
@@ -77,6 +139,10 @@ export function startApi(state: State = emptyState): Api {
           contentHash: published.contentHash,
           definition: published.definition,
         })
+      }
+      if (method === 'GET' && (url === '/app' || url === '/app/' || url.startsWith('/app/'))) {
+        const subpath = url === '/app' || url === '/app/' ? 'index.html' : url.slice('/app/'.length)
+        return serveApp(res, subpath)
       }
       return json(res, 404, { error: 'not found' })
     } catch {

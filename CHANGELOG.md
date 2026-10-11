@@ -63,6 +63,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The flow definition format is version 2. The engine still reads version 1 and writes version 2 (#170).
 - The HTTP API reads a flow by slug: GET /api/v1/flows/{slug} (#172).
 - The engine records the values that a form holds: a start and a submit carry them (FM-7) (#177).
+- The web interface ships the first browser form: a pure form model narrows a v2 definition into the fields a step shows, and the app shell loads the published flow, renders the form and submits it as an instance.started@1 operation (FM-1, FM-3, FM-7, DX-4, I12) (#181).
 
 ## [0.0.0] - 2026-10-08
 

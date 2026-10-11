@@ -125,7 +125,7 @@ test('#172 the api-mode server reads the published flow by slug', async () => {
   }
 })
 
-test.fails('#181 the harness server serves the app shell and refuses escapes', async () => {
+test('#181 the harness server serves the app shell and refuses escapes', async () => {
   const index = await fetch(`http://127.0.0.1:${port}/app/`)
   expect(index.status).toBe(200)
   expect(index.headers.get('content-type')).toContain('text/html')
