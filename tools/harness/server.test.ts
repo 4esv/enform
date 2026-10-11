@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { createFlow, publish, publishedFlow, push } from '../../engine/flow.js'
 import { addGrant } from '../../engine/grants.js'
-import { SLUG, samGrants, versionV1 } from '../../stories/S06-start-submission/scenario.js'
+import { resolve, SLUG, samGrants, versionV1 } from '../../stories/S06-start-submission/scenario.js'
 import { startApi } from './server.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the api-mode story runs against the HTTP API
@@ -199,9 +199,10 @@ function intentState(): State {
 /** Start the server on a loopback port, and close it when the callback returns. */
 async function withApi(
   state: State,
+  options: Parameters<typeof startApi>[1],
   body: (base: string, api: ReturnType<typeof startApi>) => Promise<void>
 ): Promise<void> {
-  const api = startApi(state)
+  const api = startApi(state, options)
   await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
   try {
     await body(`http://127.0.0.1:${api.port()}`, api)
@@ -212,8 +213,8 @@ async function withApi(
   }
 }
 
-test.fails('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
-  await withApi(intentState(), async (base, api) => {
+test('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
+  await withApi(intentState(), { resolve }, async (base, api) => {
     const intent = {
       id: 'intent-1',
       type: 'instance.started@1',
@@ -221,6 +222,7 @@ test.fails('#184 a posted intent resolves to the engine operation and keeps the 
       actor: 'user:sam',
       payload: { flow: SLUG, values: { urgent: false } },
     }
+    const before = api.state().log.length
     const response = await fetch(`${base}/api/v1/operations`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -245,12 +247,13 @@ test.fails('#184 a posted intent resolves to the engine operation and keeps the 
       starter: 'user:sam',
       values: { urgent: false },
     })
-    expect(api.state().log).toHaveLength(1)
+    expect(api.state().log).toHaveLength(before + 1)
+    expect(api.state().log.at(-1)?.operationId).toBe('intent-1')
   })
 })
 
-test.fails('#184 an unresolvable intent is refused with a named error and appends nothing', async () => {
-  await withApi(emptyState, async (base, api) => {
+test('#184 an unresolvable intent is refused with a named error and appends nothing', async () => {
+  await withApi(emptyState, {}, async (base, api) => {
     const intent = {
       id: 'intent-2',
       type: 'instance.started@1',

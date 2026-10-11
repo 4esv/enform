@@ -1,12 +1,11 @@
-// Issue #181, FM-1, FM-3, FM-7, DX-4, I12, A9: the app shell, the first
-// browser surface. It loads the published flow through the generated client,
-// builds the form that the model describes, reads the values back, and posts
-// them as an instance.started@1 operation. The shell decides nothing: it runs
-// no validation, no authorization and no routing (A9). The engine stays
-// authoritative, so `assignees` stays empty here and the step key is only the
-// form that the shell shows; the engine routes a start and resolves the
-// assignees. The shell reaches the API only through the generated client, so
-// it never names an API path by hand (I12).
+// Issue #181, #184, FM-1, FM-3, FM-7, DX-4, I12, A9, ADR 0010: the app
+// shell, the first browser surface. It loads the published flow through the
+// generated client, builds the form that the model describes, reads the values
+// back, and posts an intent: the flow and the values it collected. The shell
+// decides nothing: it runs no validation, no authorization and no routing
+// (A9). The server resolves the start through the engine, so the shell names
+// no `currentStep` and no `assignees`. The shell reaches the API only through
+// the generated client, so it never names an API path by hand (I12).
 //
 // The clock and the ID source enter at one place, the mount options, so a
 // caller can inject them. The defaults are Date.now and crypto.randomUUID.
@@ -89,20 +88,17 @@ export async function mountApp(options: AppOptions): Promise<void> {
     submit.type = 'button'
     submit.textContent = 'Submit'
     submit.addEventListener('click', () => {
-      const operation: Operation = {
+      const intent: Operation = {
         id: ids(),
         type: INSTANCE_STARTED,
         at: clock(),
         actor: options.actor,
         payload: {
-          definitionVersion: flow.contentHash,
-          currentStep: stepKey,
-          assignees: [],
-          starter: options.actor,
+          flow: options.slug,
           values: readValues(),
         },
       }
-      void appendOperation(operation)
+      void appendOperation(intent)
         .then(() => {
           status.textContent = 'Synced'
         })

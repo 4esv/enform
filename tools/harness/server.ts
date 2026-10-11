@@ -4,8 +4,12 @@ import { stripTypeScriptTypes } from 'node:module'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
 import { publishedFlow } from '../../engine/flow.js'
+import { grantsOf } from '../../engine/grants.js'
 import type { Operation } from '../../engine/operation.js'
+import type { TargetResolver } from '../../engine/routing.js'
+import { resolveIntent } from '../../engine/submission.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
 // describes. It delegates to the engine (apply, the append-only log). It is
@@ -25,6 +29,21 @@ export type Api = {
   state: () => State
   port: () => number
 }
+
+/**
+ * The injected sources that resolve a client intent (ADR 0010, I6). The
+ * directory resolver maps a target to its principals, and the grants are the
+ * scopes that apply to the acting principal. A caller that gives none of
+ * these reads the grants back from the log, and resolves no target to a
+ * member.
+ */
+export type ApiOptions = {
+  readonly grants?: readonly Grant[]
+  readonly resolve?: TargetResolver
+}
+
+/** The resolver when none is injected: no target resolves to a member (I10). */
+const noMembers: TargetResolver = () => []
 
 /**
  * The directory that holds the interface: the app shell and the generated
@@ -148,7 +167,7 @@ function serveInterface(res: ServerResponse, urlPath: string): void {
   res.end(asset.file.endsWith('.ts') ? transpileApp(source) : source)
 }
 
-export function startApi(state: State = emptyState): Api {
+export function startApi(state: State = emptyState, options: ApiOptions = {}): Api {
   let current = state
   const server = createServer(async (req, res) => {
     try {
@@ -160,6 +179,23 @@ export function startApi(state: State = emptyState): Api {
           parsed = JSON.parse(await readBody(req))
         } catch {
           return json(res, 400, { error: 'invalid JSON body' })
+        }
+        let resolved: Operation | undefined
+        try {
+          resolved = resolveIntent(
+            current.log,
+            parsed,
+            options.resolve ?? noMembers,
+            options.grants ?? grantsOf(current.log)
+          )
+        } catch (error) {
+          return json(res, 400, {
+            error: error instanceof Error ? error.message : 'invalid intent',
+          })
+        }
+        if (resolved !== undefined) {
+          current = apply(resolved, current)
+          return json(res, 201, current.log[current.log.length - 1])
         }
         if (!isOperation(parsed)) return json(res, 400, { error: 'invalid operation' })
         current = apply(parsed, current)

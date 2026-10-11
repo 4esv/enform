@@ -24,6 +24,20 @@ export interface Operation {
 }
 
 /**
+ * A start intent (ADR 0010): the parts a client can honestly send on the write path. It carries
+ * the operation ID it chose (I1), the event type, the actor, and the flow and values it
+ * collected (FM-7). The server resolves the route, the assignees and the version stamp through
+ * the engine before it appends.
+ */
+export interface Intent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * An immutable, ordered record of an occurrence. The single writer assigns `seq` (ADR 0004).
  */
 export interface Event {

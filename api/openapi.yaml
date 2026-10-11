@@ -19,7 +19,11 @@ paths:
       summary: Append one operation to the log
       description: >-
         The engine applies the operation idempotently by its client-created
-        ID (I1) and appends the event it records (I4).
+        ID (I1) and appends the event it records (I4). A client may post a
+        start intent instead of a resolved operation: it names the flow and
+        the values it collected, and the server resolves the route, the
+        assignees and the version stamp through the engine before it appends
+        (ADR 0010). The appended event keeps the client's ID and time.
       requestBody:
         required: true
         content:
@@ -34,7 +38,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Event'
         '400':
-          description: The operation is invalid
+          description: >-
+            The operation is invalid, or the intent cannot be resolved
   /api/v1/log:
     get:
       operationId: readLog
@@ -125,6 +130,43 @@ components:
         payload:
           type: object
           description: The change payload.
+    Intent:
+      type: object
+      description: >-
+        A start intent (ADR 0010): the parts a client can honestly send on
+        the write path. It carries the operation ID it chose (I1), the event
+        type, the actor, and the flow and values it collected (FM-7). The
+        server resolves the route, the assignees and the version stamp
+        through the engine before it appends.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.started@1`.
+          examples:
+            - instance.started@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The flow and the values the client collected (FM-7).
+          required: [flow, values]
+          properties:
+            flow:
+              type: string
+              description: The flow slug (ID-1).
+            values:
+              type: object
+              description: >-
+                The values that the form holds: one field key to one JSON
+                value (FM-7).
+              additionalProperties: true
     Event:
       type: object
       description: >-

@@ -19,9 +19,16 @@
 import { authorize, type Grant } from './authorize.js'
 import type { ConditionData } from './condition.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
-import type { Flow } from './flow.js'
+import { type Flow, publishedFlow } from './flow.js'
 import { createInstance, type Instance } from './instance.js'
-import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
+import {
+  type ActorId,
+  createOperation,
+  type Log,
+  type Operation,
+  type OperationDeps,
+  type OperationId,
+} from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
 import { isStepSkipped } from './workflow.js'
@@ -90,6 +97,94 @@ export function startInstance(
   }
   const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
   return { instance, operation }
+}
+
+/**
+ * The client intent for a start (ADR 0010): the pieces a browser honestly
+ * knows. It carries the ID the client chose (I1), the time it read (I6), the
+ * principal it acts as (ID-2), the flow slug, and the values it collected
+ * (FM-7). Everything else is the engine's to resolve.
+ */
+export type StartIntent = {
+  readonly id: OperationId
+  readonly type: typeof INSTANCE_STARTED
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: {
+    readonly flow: string
+    readonly values: ConditionData
+  }
+}
+
+/**
+ * Resolve a client intent into the operation the engine records (ADR 0010,
+ * DX-1, A9, WF-1, I13, DF-2, FM-7). A start intent names a flow and the values
+ * it collected; the engine reads the flow's newest published version from the
+ * log (DF-2) and runs the same `startInstance` path that the api-mode runner
+ * uses, so the route (WF-1), the assignees (I13), the version stamp, the
+ * starter and the values (FM-7) are all engine decisions. The client's ID and
+ * time survive because they are the injected sources (I1, I6): the function
+ * reads no clock and no random source of its own.
+ *
+ * It answers `undefined` when `value` is not a start intent, so an already
+ * resolved operation keeps the low-level append path. A value shaped as a
+ * start intent but unresolvable throws a named error.
+ */
+export function resolveIntent(
+  log: Log,
+  value: unknown,
+  resolve: TargetResolver,
+  grants?: readonly Grant[]
+): Operation | undefined {
+  const intent = asStartIntent(value)
+  if (intent === undefined) return undefined
+  const version = publishedFlow(log, intent.payload.flow)
+  if (version === undefined) {
+    throw new Error(
+      `intent: the flow ${intent.payload.flow} has no published version to start on (DF-2)`
+    )
+  }
+  const flow: Flow = { slug: intent.payload.flow, versions: [version] }
+  return startInstance(
+    flow,
+    intent.payload.values,
+    intent.actor,
+    { clock: () => intent.at, ids: () => intent.id },
+    resolve,
+    grants
+  ).operation
+}
+
+/**
+ * Read a start intent from an unknown value, or undefined when it is not one
+ * (ADR 0010). A resolved start carries `definitionVersion`; an intent names
+ * `flow`. The detector answers by that shape, so the resolved operation keeps
+ * the low-level append path.
+ */
+function asStartIntent(value: unknown): StartIntent | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as Record<string, unknown>
+  if (candidate.type !== INSTANCE_STARTED) return undefined
+  const payload = candidate.payload
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  const change = payload as Record<string, unknown>
+  if (typeof change.flow !== 'string') return undefined
+  if (typeof candidate.id !== 'string') throw new Error('intent: the id must be a string (I1)')
+  if (typeof candidate.at !== 'number') throw new Error('intent: the at must be a number (I6)')
+  if (typeof candidate.actor !== 'string') {
+    throw new Error('intent: the actor must name a principal (ID-2)')
+  }
+  const values = change.values
+  if (typeof values !== 'object' || values === null || Array.isArray(values)) {
+    throw new Error('intent: the values must be an object (FM-7)')
+  }
+  return {
+    id: candidate.id,
+    type: INSTANCE_STARTED,
+    at: candidate.at,
+    actor: candidate.actor,
+    payload: { flow: change.flow, values: values as ConditionData },
+  }
 }
 
 /**
