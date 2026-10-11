@@ -138,10 +138,35 @@ test('#181 the harness server serves the app shell and refuses escapes', async (
   const script = await fetch(`http://127.0.0.1:${port}/app/app.ts`)
   expect(script.status).toBe(200)
   expect(script.headers.get('content-type')).toContain('text/javascript')
+  expect(await script.text(), 'a .ts request is served as JavaScript').not.toMatch(
+    /^export interface /m
+  )
+
+  // A module specifier in the app names the emitted .js file, and no build
+  // step exists (ADR 0009), so the server stands the source in for it (#181).
+  const module = await fetch(`http://127.0.0.1:${port}/app/form.js`)
+  expect(module.status).toBe(200)
+  expect(module.headers.get('content-type')).toContain('text/javascript')
+  const source = await module.text()
+  expect(source, 'the served module is JavaScript, not TypeScript').not.toMatch(
+    /^export interface /m
+  )
+  expect(source, 'the module keeps a specifier the browser can fetch').toContain('export function')
+
+  // The app imports the generated client as a sibling of its own directory,
+  // so the interface is served at the site root (I12, ADR 0009).
+  const client = await fetch(`http://127.0.0.1:${port}/client/client.js`)
+  expect(client.status).toBe(200)
+  expect(await client.text()).toContain('export async function')
+
+  // The form link carries the flow, so the query string is not part of the path.
+  const link = await fetch(`http://127.0.0.1:${port}/app/?slug=course-overload`)
+  expect(link.status).toBe(200)
+  expect(link.headers.get('content-type')).toContain('text/html')
 
   const unknown = await fetch(`http://127.0.0.1:${port}/app/not-here.js`)
   expect(unknown.status).toBe(404)
 
-  const traversal = await fetch(`http://127.0.0.1:${port}/app/%2e%2e/%2e%2e/Makefile`)
+  const traversal = await fetch(`http://127.0.0.1:${port}/app/%2e%2e/%2e%2e/package.json`)
   expect(traversal.status).toBe(404)
 })

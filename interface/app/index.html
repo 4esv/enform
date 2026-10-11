@@ -5,18 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>enform</title>
   </head>
-  <body data-base-url="" data-token="" data-slug="" data-actor="">
+  <body>
     <main id="app"></main>
     <script type="module">
-      import { mountApp } from './app.ts'
+      // The form link carries the flow and the principal (S06: Sam opens the
+      // form link): /app/?slug=<flow>&actor=<principal>. The page and the API
+      // share one origin, so baseUrl defaults to it, and gui mode can point a
+      // browser at any flow without changing the app.
+      import { mountApp } from './app.js'
 
-      const config = document.body.dataset
+      const params = new URLSearchParams(location.search)
       mountApp({
         root: document.getElementById('app'),
-        baseUrl: config.baseUrl ?? '',
-        token: config.token ?? '',
-        slug: config.slug ?? '',
-        actor: config.actor ?? '',
+        baseUrl: params.get('baseUrl') ?? location.origin,
+        token: params.get('token') ?? '',
+        slug: params.get('slug') ?? '',
+        actor: params.get('actor') ?? '',
       })
     </script>
   </body>
