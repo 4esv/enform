@@ -1,21 +1,29 @@
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { emptyState, type State } from '../../engine/apply.js'
+import { isDeepStrictEqual } from 'node:util'
+import { chromium, type Page } from 'playwright'
+import { apply, emptyState, type State } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
 import type { Operation } from '../../engine/operation.js'
 import { type OutboxEntry, outboxOf } from '../../engine/outbox.js'
+import type { TargetResolver } from '../../engine/routing.js'
 import { runSteps as engineRunSteps } from '../../engine/run.js'
 import { oracles } from './oracles.js'
 import {
   fromView,
+  type GuiAction,
+  type GuiFillValue,
+  type GuiStep,
   goldenClock,
+  goldenViewPrefix,
   type Scenario,
   type StateView,
   type StepClock,
   stepOperation,
   toView,
 } from './scenario.js'
-import { startApi } from './server.js'
+import { type Api, startApi } from './server.js'
 
 // Issue #24, STORIES.md Test method: the golden-path runner. A scenario runs
 // in one mode. In api mode each step is an HTTP request against the in-process
@@ -26,8 +34,8 @@ import { startApi } from './server.js'
 // state: the invariants, the golden end state, then the timeline. A golden
 // path is deterministic, so the runner never retries.
 
-/** The run modes of a scenario (STORIES.md, Golden path): api, cli and dry; gui arrives later. */
-export type Mode = 'api' | 'dry' | 'cli'
+/** The run modes of a scenario (STORIES.md, Golden path): api, cli, dry and gui. */
+export type Mode = 'api' | 'dry' | 'cli' | 'gui'
 
 /** How many times to deliver each step's operation (same ID). */
 export type Deliveries = (stepIndex: number) => number
@@ -44,6 +52,12 @@ export type RunOptions = {
   readonly deliveries?: Deliveries
   /** The injected step clock of the run (I6). Absent means the golden step clock. */
   readonly clock?: StepClock
+  /** The directory resolver that resolves a start intent (ADR 0010); gui mode uses it. */
+  readonly resolve?: TargetResolver
+  /** The grants that apply to the acting principal; gui mode passes them to the API. */
+  readonly grants?: readonly Grant[]
+  /** The initial server state (the published flow); gui mode reads it, absent is empty. */
+  readonly seed?: State
 }
 
 /** Delivery once per step, the golden path. */
@@ -63,6 +77,7 @@ const TS_RESOLVE = join(HARNESS_DIR, 'ts-resolve.ts')
 export async function runSteps(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
   if (options.mode === 'dry') return dryRun(scenario)
   if (options.mode === 'cli') return cliRun(scenario)
+  if (options.mode === 'gui') return guiRun(scenario, options)
   return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? goldenClock)
 }
 
@@ -129,6 +144,15 @@ function runCli(args: readonly string[]): Promise<string> {
       else resolve(stdout)
     })
   })
+}
+
+/**
+ * gui mode (Issue #27, STORIES.md Golden path): the interface path runs in a
+ * browser. The shape of the mode lands with its check; the run itself lands
+ * with the implementation, so this fails until that does.
+ */
+function guiRun(_scenario: Scenario, _options: RunOptions): Promise<RunOutcome> {
+  return Promise.reject(new Error('gui mode: not implemented yet (#27)'))
 }
 
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */

@@ -1,8 +1,8 @@
-import { apply, emptyState } from '../../engine/apply.js'
+import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { ConditionData } from '../../engine/condition.js'
 import { type FlowDefinition, parse } from '../../engine/definition.js'
-import type { Flow, FlowVersion } from '../../engine/flow.js'
+import { createFlow, type Flow, type FlowVersion, publish, push } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
@@ -25,11 +25,18 @@ export const SLUG = 'course-overload'
 
 /** The definition of version 1, the version that a start pins the instance to (DF-1, DF-2). */
 export const definitionV1: FlowDefinition = parse(`{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "steps": [
     {
       "key": "triage",
       "targets": [{ "group": "CS-Chairs" }],
+      "fields": [
+        { "key": "summary", "control": "text", "required": true },
+        { "key": "overload_credits", "control": "number" },
+        { "key": "urgent", "control": "yes-no" },
+        { "key": "details", "control": "long-text" }
+      ],
+      "editable": ["summary", "overload_credits", "urgent", "details"],
       "skipWhen": { "==": [{ "var": "urgent" }, false] }
     },
     {
@@ -56,8 +63,28 @@ export const versionV1: FlowVersion = {
 /** The flow of the story: version 1 published, ready for a start (DF-2). */
 export const flow: Flow = { slug: SLUG, versions: [versionV1] }
 
-/** The data of Sam's request: it is not urgent, so the triage step is skipped (WF-1). */
-export const samData: ConditionData = { urgent: false }
+/**
+ * The server state that gui mode starts from (DF-2): version 1 published in
+ * the log, so the app can read it back and the engine can resolve the start
+ * intent against it. The grants and the directory arrive as injected sources.
+ */
+export function flowState(): State {
+  const deps = (id: string): OperationDeps => ({ clock: () => 0, ids: () => id })
+  const pushed = push(createFlow(SLUG), definitionV1, deps('flow-push'), 'user:dana')
+  const published = publish(pushed.flow, deps('flow-publish'), 'user:dana')
+  return apply(published.operation, apply(pushed.operation, emptyState))
+}
+
+/**
+ * The data of Sam's request: it is not urgent, so the triage step is skipped
+ * (WF-1). The other entries are the values of the form that Sam fills (FM-7).
+ */
+export const samData: ConditionData = {
+  summary: 'three extra credits',
+  overload_credits: 3,
+  urgent: false,
+  details: 'I need three extra credits to graduate on time.',
+}
 
 /** The grants that apply to Sam: the All-Students group may start the flow (S02, ID-4, AC-1). */
 export const samGrants: readonly Grant[] = [
@@ -110,4 +137,20 @@ function submissionSteps(): readonly Step[] {
   ]
 }
 
-export const golden = scenario({ slug: 'start-submission', steps: submissionSteps() })
+export const golden = scenario({
+  slug: 'start-submission',
+  flowSlug: SLUG,
+  steps: submissionSteps(),
+  gui: [
+    {
+      actions: [
+        { fill: { field: 'summary', value: 'three extra credits' } },
+        { fill: { field: 'overload_credits', value: 3 } },
+        { fill: { field: 'urgent', value: false } },
+        { fill: { field: 'details', value: 'I need three extra credits to graduate on time.' } },
+        { click: 'button[type="button"]' },
+        { expect: 'Synced' },
+      ],
+    },
+  ],
+})

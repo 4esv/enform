@@ -24,9 +24,36 @@ export type Step = {
   readonly outbox?: readonly OutboxEntry[]
 }
 
+/** One value that a gui action fills into a control (FM-1, FM-7). */
+export type GuiFillValue = string | number | boolean
+
+/** One gui action: fill a field, click a control, or expect a status text. */
+export type GuiAction =
+  | { readonly fill: { readonly field: string; readonly value: GuiFillValue } }
+  | { readonly click: string }
+  | { readonly expect: string }
+
+/** One gui step, index-aligned with the scenario step at the same index (STORIES.md). */
+export type GuiStep = {
+  /** An interface page within the app; absent means the default form page. */
+  readonly page?: string
+  readonly actions: readonly GuiAction[]
+}
+
 export type Scenario = {
+  /** The story slug (STORIES.md): it names the story, not the flow. */
   readonly slug: string
+  /** The flow slug that the interface path opens (the `/app/?slug=` value). */
+  readonly flowSlug?: string
   readonly steps: readonly Step[]
+  /**
+   * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
+   * the same steps in a browser). A gui step maps to the engine step at the
+   * same index. The path may declare fewer steps than `steps`, because an
+   * interface path that does not yet exist covers only a prefix; it may never
+   * be longer than `steps`.
+   */
+  readonly gui?: readonly GuiStep[]
 }
 
 /** The state as the HTTP API returns it (applied IDs as an array). */
@@ -36,7 +63,18 @@ export type StateView = {
 }
 
 export function scenario(value: Scenario): Scenario {
+  assertGuiPath(value)
   return value
+}
+
+/** Refuse a gui path longer than the steps it maps to (STORIES.md, Golden path). */
+function assertGuiPath(value: Scenario): void {
+  if (value.gui !== undefined && value.gui.length > value.steps.length) {
+    throw new Error('gui: the gui path is longer than the scenario steps')
+  }
+  if (value.gui !== undefined && value.flowSlug === undefined) {
+    throw new Error('gui: the gui path needs a flowSlug to open the form')
+  }
 }
 
 export function toView(state: State): StateView {
@@ -83,5 +121,22 @@ export function goldenView(value: Scenario, clock: StepClock = goldenClock): Sta
   value.steps.forEach((step, i) => {
     state = apply(stepOperation(step, i, clock), state)
   })
+  return toView(state)
+}
+
+/**
+ * The golden end state of a prefix of a scenario's steps (I6): the state after
+ * the first `count` steps. A gui run covers a prefix, so its end state is this
+ * view, not the full golden view. `count` must not exceed the scenario's steps.
+ */
+export function goldenViewPrefix(
+  value: Scenario,
+  count: number,
+  clock: StepClock = goldenClock
+): StateView {
+  let state = emptyState
+  for (let i = 0; i < count; i += 1) {
+    state = apply(stepOperation(value.steps[i], i, clock), state)
+  }
   return toView(state)
 }
