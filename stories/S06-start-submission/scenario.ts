@@ -4,6 +4,7 @@ import { type FlowDefinition, parse } from '../../engine/definition.js'
 import type { Flow, FlowVersion } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { TargetResolver } from '../../engine/routing.js'
+import { scenario } from '../../tools/harness/scenario.js'
 
 // S06: Sam starts and submits a submission (STORIES.md). He opens the form
 // link, fills it in and submits it. The engine never creates an anonymous
@@ -61,3 +62,6 @@ export const samGrants: readonly Grant[] = [
 
 /** The directory of the story (ID-4, AS-4): a user target names its principal, and a group or team resolves to nobody. */
 export const resolve: TargetResolver = (target) => ('user' in target ? [target.user] : [])
+
+/** The golden path of S06 (STORIES.md): the start and submit steps arrive with the runner check. */
+export const golden = scenario({ slug: 'start-submission', steps: [] })
