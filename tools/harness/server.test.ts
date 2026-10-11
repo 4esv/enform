@@ -124,3 +124,24 @@ test('#172 the api-mode server reads the published flow by slug', async () => {
     )
   }
 })
+
+test.fails('#181 the harness server serves the app shell and refuses escapes', async () => {
+  const index = await fetch(`http://127.0.0.1:${port}/app/`)
+  expect(index.status).toBe(200)
+  expect(index.headers.get('content-type')).toContain('text/html')
+  expect(await index.text()).toContain('id="app"')
+
+  const html = await fetch(`http://127.0.0.1:${port}/app/index.html`)
+  expect(html.status).toBe(200)
+  expect(html.headers.get('content-type')).toContain('text/html')
+
+  const script = await fetch(`http://127.0.0.1:${port}/app/app.ts`)
+  expect(script.status).toBe(200)
+  expect(script.headers.get('content-type')).toContain('text/javascript')
+
+  const unknown = await fetch(`http://127.0.0.1:${port}/app/not-here.js`)
+  expect(unknown.status).toBe(404)
+
+  const traversal = await fetch(`http://127.0.0.1:${port}/app/%2e%2e/%2e%2e/Makefile`)
+  expect(traversal.status).toBe(404)
+})
