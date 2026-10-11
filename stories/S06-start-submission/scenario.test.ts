@@ -65,14 +65,16 @@ test('#43 a start routes a draft and the submit records the assignment email (S0
   expect(started.instance.definitionVersion).toBe(versionV1.contentHash)
   expect(started.instance.currentStep).toBe('advisor')
   expect(started.instance.submitted).toBe(false)
+  expect(started.instance.values).toEqual(samData)
   expect(started.instance.assignees).toEqual([
     { step: 'advisor', target: { user: OKAFOR }, members: [OKAFOR] },
   ])
 
   // (b) The submit marks the instance submitted and records the assignment
   // email to the first assignee in one operation (S06, I2, SE-1).
-  const submitted = submitInstance(started.instance, SAM, deps())
+  const submitted = submitInstance(started.instance, SAM, deps(), samData)
   expect(submitted.instance.submitted).toBe(true)
+  expect(submitted.instance.values).toEqual(samData)
   expect(submitted.operation.type).toBe(INSTANCE_SUBMITTED)
   expect(submitted.operation.actor).toBe(SAM)
 

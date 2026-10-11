@@ -17,6 +17,9 @@ importers:
       '@types/node':
         specifier: 26.6.4
         version: 26.6.4
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       playwright:
         specifier: 1.64.0
         version: 1.64.0

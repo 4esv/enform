@@ -6,7 +6,10 @@
 // only the engine decides whether that principal may start (AC-1, I8), through
 // the grants that apply to it. A start routes the draft to the assignees of the
 // first step whose skip condition is false (WF-1, I10) and stamps the instance
-// with its definition version and those assignees (DF-2, I13). A submit marks
+// with its definition version and those assignees (DF-2, I13). Both a start
+// and a submit record the values that the form holds (FM-7): the start records
+// the values that it routed with, and the submit records the values that the
+// step captured, merged over what the instance already held. A submit marks
 // the instance submitted and, in the same operation, records the assignment
 // email that the first assignee receives (I2, SE-1): one apply commits the
 // state change and its side effect together, and a worker delivers it later.
@@ -48,14 +51,15 @@ export type SubmittedInstance = {
 }
 
 /**
- * Start a submission (S06, ID-2, AC-1, DF-2, I10, I13). A start needs a
+ * Start a submission (S06, ID-2, AC-1, DF-2, I10, I13, FM-7). A start needs a
  * signed-in principal (ID-2), and when `grants` are given the acting principal
  * must hold `instance.start` on `flow:<slug>` (AC-1, I8); the caller passes its
  * own grants and those of the groups and the teams that it belongs to, as
  * `grantsOf` reads them from the log. The function routes the draft to the
- * assignees of the first step whose skip condition is false (WF-1, I10) and
- * stamps the instance with the content hash of the flow's latest published
- * version (DF-2, I13). It is pure and deterministic (I6).
+ * assignees of the first step whose skip condition is false (WF-1, I10), stamps
+ * the instance with the content hash of the flow's latest published version
+ * (DF-2, I13), and records the values that it routed with (FM-7). It is pure
+ * and deterministic (I6).
  */
 export function startInstance(
   flow: Flow,
@@ -75,36 +79,36 @@ export function startInstance(
     currentStep: step.key,
     submitted: false,
     starter: actor,
+    values: data,
   }
   const change = {
     definitionVersion: instance.definitionVersion,
     currentStep: step.key,
     assignees,
     starter: actor,
+    values: data,
   }
   const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
   return { instance, operation }
 }
 
 /**
- * Submit a submission (S06, I2, SE-1). The instance becomes submitted, and one
- * operation records both the mark and the assignment email that the first
- * assignee receives, so one apply commits the state change and its side effect
- * together (I2). The engine records the email; a worker delivers it later
- * (SE-1). The function is pure and deterministic (I6).
- *
- * Issue #177, FM-7: the values that the step captured arrive here. Until the
- * implementation lands the parameter is accepted and not recorded, so the
- * FM-7 test fails on purpose.
+ * Submit a submission (S06, I2, SE-1, FM-7). The instance becomes submitted,
+ * and one operation records the mark, the values that the step captured merged
+ * over what the instance already held (FM-7), and the assignment email that the
+ * first assignee receives, so one apply commits the state change and its side
+ * effect together (I2). The engine records the email; a worker delivers it
+ * later (SE-1). The function is pure and deterministic (I6).
  */
 export function submitInstance(
   instance: Instance,
   actor: ActorId,
   deps: OperationDeps,
-  _values?: Readonly<Record<string, JsonValue>>
+  values: Readonly<Record<string, JsonValue>>
 ): SubmittedInstance {
-  const submitted: Instance = { ...instance, submitted: true }
-  const change = { currentStep: instance.currentStep, submitted: true }
+  const merged = mergeValues(instance.values, values)
+  const submitted: Instance = { ...instance, submitted: true, values: merged }
+  const change = { currentStep: instance.currentStep, submitted: true, values: merged }
   const operation = createOutboxOperation(
     INSTANCE_SUBMITTED,
     change,
@@ -113,6 +117,18 @@ export function submitInstance(
     actor
   )
   return { instance: submitted, operation }
+}
+
+/**
+ * The values that a submit records (FM-7): the values that the step captured,
+ * merged over what the instance already held. The captured value wins for a key
+ * that the step set again.
+ */
+function mergeValues(
+  held: Readonly<Record<string, JsonValue>> | undefined,
+  captured: Readonly<Record<string, JsonValue>>
+): Readonly<Record<string, JsonValue>> {
+  return { ...held, ...captured }
 }
 
 /**

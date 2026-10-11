@@ -14,11 +14,6 @@ import { startInstance, submitInstance } from '../engine/submission.js'
 // are read back through the public API only (A3). The start keeps the routing
 // that WF-1 defines, and the submit keeps the outbox entry in the same
 // operation (I2).
-//
-// This is the failing test of the issue (AGENTS.md): the first assertions fail
-// on purpose until startInstance and submitInstance record the values, so the
-// test is marked as expected to fail. The mark comes off with the
-// implementation.
 
 const SLUG = 'course-overload'
 const SAM = 'user:sam'
@@ -59,7 +54,7 @@ function deps(): OperationDeps {
 const startedValues: ConditionData = { summary: 'hello', urgent: false }
 const captured: ConditionData = { summary: 'hello', detail: 'more detail' }
 
-test.fails('#177 FM-7 a start and a submit carry the values that the form holds', () => {
+test('#177 FM-7 a start and a submit carry the values that the form holds', () => {
   const started = startInstance(flow, startedValues, SAM, deps(), resolve, grants)
 
   // A start records the values of the step that it routes to (FM-7): the

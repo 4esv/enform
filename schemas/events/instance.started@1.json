@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/instance.started@1.json",
+  "title": "enform instance.started@1 event payload",
+  "description": "The payload of an instance.started@1 event (#43, #177, S06, FM-7, DF-2, I13). A start routes a draft to the first step whose skip condition is false (WF-1), stamps the instance with its definition version and resolved assignees (DF-2, I13), names the starter (AC-5), and records the values that the form holds (FM-7).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["definitionVersion", "currentStep", "assignees", "starter", "values"],
+  "properties": {
+    "definitionVersion": {
+      "description": "The content hash of the definition version that the instance started on (DF-2).",
+      "type": "string"
+    },
+    "currentStep": {
+      "description": "The key of the step that the start routed the draft to (WF-1, S06).",
+      "type": "string"
+    },
+    "assignees": {
+      "description": "The resolved assignees of the first active step, with their membership snapshots (I13, AS-4).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/assignee" }
+    },
+    "starter": {
+      "description": "The principal that started the instance (S06, AC-5).",
+      "type": "string"
+    },
+    "values": { "$ref": "#/$defs/values" }
+  },
+  "$defs": {
+    "values": {
+      "description": "The values that the form holds: one field key to one JSON value (FM-7).",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "jsonValue": {
+      "description": "One JSON value: a string, number, boolean, null, array or object (FM-7, DF-1).",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "assignee": {
+      "description": "One resolved assignee of a step, with the membership snapshot that resolution produced (I13, AS-4).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "target", "members"],
+      "properties": {
+        "step": { "type": "string" },
+        "target": { "$ref": "#/$defs/target" },
+        "members": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "target": {
+      "description": "A task recipient: exactly one kind, per AS-1. Dynamic targets are starter, field and manager-of.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "user": { "type": "string" },
+        "group": { "type": "string" },
+        "team": { "type": "string" },
+        "field": { "type": "string" },
+        "starter": { "type": "string" },
+        "manager-of": { "type": "string" }
+      }
+    }
+  }
+}

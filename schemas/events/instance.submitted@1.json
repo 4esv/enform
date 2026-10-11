@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/instance.submitted@1.json",
+  "title": "enform instance.submitted@1 event payload",
+  "description": "The payload of an instance.submitted@1 event (#43, #177, S06, FM-7, I2, SE-1). A submit marks the instance submitted, records the values that the step captured merged over what the instance already held (FM-7), and carries the assignment email outbox entry in the same operation (I2, SE-1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["currentStep", "submitted", "values", "outbox"],
+  "properties": {
+    "currentStep": {
+      "description": "The key of the step that the submit closed (S06, WF-1).",
+      "type": "string"
+    },
+    "submitted": {
+      "description": "True after a submit (S06).",
+      "const": true
+    },
+    "values": { "$ref": "#/$defs/values" },
+    "outbox": {
+      "description": "The side effects that the submit causes, committed with the state change (I2, SE-1).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/outboxEntry" }
+    }
+  },
+  "$defs": {
+    "values": {
+      "description": "The values that the form holds: one field key to one JSON value (FM-7).",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "jsonValue": {
+      "description": "One JSON value: a string, number, boolean, null, array or object (FM-7, DF-1).",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "outboxEntry": {
+      "description": "One side effect (SE-1): the connector operation, the connector, and its payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "target", "payload"],
+      "properties": {
+        "operation": { "type": "string" },
+        "target": { "type": "string" },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}
