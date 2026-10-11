@@ -6,7 +6,7 @@
 
 import { createHash } from 'node:crypto'
 import type { Version } from './concurrency.js'
-import { type FlowDefinition, serialize, type Target } from './definition.js'
+import { type FlowDefinition, type JsonValue, serialize, type Target } from './definition.js'
 import type { ActorId } from './operation.js'
 
 /**
@@ -42,14 +42,22 @@ export type ConnectorCall = {
 /**
  * One instance (MVP.md 3). It records the definition version that it started
  * on (DF-2), its resolved assignees with their membership snapshots (I13,
- * AS-4), and an append-only log of connector calls (I13). The engine appends
- * to the log; it does not update or delete an entry (I4).
+ * AS-4), an append-only log of connector calls (I13), and the values that the
+ * form holds (FM-7). The engine appends to the log; it does not update or
+ * delete an entry (I4).
  */
 export type Instance = {
   /** The content hash of the definition version that the instance started on (DF-2). */
   readonly definitionVersion: string
   readonly assignees: readonly Assignee[]
   readonly connectorCalls: readonly ConnectorCall[]
+  /**
+   * The values that the form holds (#177, FM-7): an immutable record of field
+   * keys to JSON values. It is absent before a start sets it, a start records
+   * the values that it routed with, and a submit merges the step's captured
+   * values over what the instance already held.
+   */
+  readonly values?: Readonly<Record<string, JsonValue>>
   /**
    * The principal that started the instance (S06, AC-5). A start sets it. The
    * starter can always read the instance and, unless the flow prevents it, may

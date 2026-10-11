@@ -1,5 +1,5 @@
-// Issue #43, S06, ID-2, AC-1, I2, I6, I10, I13, I14, SE-1: start and submit a
-// submission.
+// Issue #43, #177, S06, ID-2, AC-1, I2, I6, I10, I13, I14, SE-1, FM-7:
+// start and submit a submission.
 //
 // S06: Sam opens a form link, fills it in and submits it. The engine never
 // creates an anonymous draft (ID-2): a start needs a signed-in principal, and
@@ -15,7 +15,7 @@
 
 import { authorize, type Grant } from './authorize.js'
 import type { ConditionData } from './condition.js'
-import type { FlowDefinition, FlowStep } from './definition.js'
+import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import type { Flow } from './flow.js'
 import { createInstance, type Instance } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
@@ -92,11 +92,16 @@ export function startInstance(
  * assignee receives, so one apply commits the state change and its side effect
  * together (I2). The engine records the email; a worker delivers it later
  * (SE-1). The function is pure and deterministic (I6).
+ *
+ * Issue #177, FM-7: the values that the step captured arrive here. Until the
+ * implementation lands the parameter is accepted and not recorded, so the
+ * FM-7 test fails on purpose.
  */
 export function submitInstance(
   instance: Instance,
   actor: ActorId,
-  deps: OperationDeps
+  deps: OperationDeps,
+  _values?: Readonly<Record<string, JsonValue>>
 ): SubmittedInstance {
   const submitted: Instance = { ...instance, submitted: true }
   const change = { currentStep: instance.currentStep, submitted: true }
