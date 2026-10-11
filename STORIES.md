@@ -300,7 +300,7 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Measures.** From link to submission, there are no screens other than SSO and the form. Submissions without sign-in: 0.
 
-**Refs.** ID-2, ID-3, RT-3, SE-1, VT-2, I2, I15
+**Refs.** ID-2, ID-3, RT-3, SE-1, VT-2, FM-7, I2, I15
 
 ### S07: Lose the connection during fill-in (`lose-connection`)
 

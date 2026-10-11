@@ -85,7 +85,7 @@ Refs: WF-1, FM-5, DR-1, I6, I7, I13
 
 ## S06: Start a submission (`start-submission`)
 
-Refs: ID-2, ID-3, RT-3, SE-1, VT-2, I2, I15
+Refs: ID-2, ID-3, RT-3, SE-1, VT-2, FM-7, I2, I15
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|

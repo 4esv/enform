@@ -140,6 +140,7 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 | FM-4 | The server runs all rules and validation again at each submission. The server does not trust client state. | I8 |
 | FM-5 | All rules use one expression format: a JSON expression tree (ADR 0008). The visual condition builder writes it. A TypeScript rule is one node type of the tree. It runs in a sandbox with CPU, memory and time limits and no network access. | A3, I6 |
 | FM-6 | Connector `read` operations can supply option lists and default values. | A3 |
+| FM-7 | The engine records the values that a form holds. A start records the values of the step that it routes to, a step completion records the values that the step captured, and the values are read back through the public API only. | A3, A7 |
 
 ### 5.4 Workflow (WF)
 
@@ -309,7 +310,7 @@ All criteria must be true for 14 consecutive days, in production, on the pilot f
 | `0.1.0` | Foundation | Repository layout, CI, Compose stack, PostgreSQL, Keycloak with AD and Entra ID (ID-1, ID-4), the OpenAPI document (DX-1), the log and the operation model (I1, I4, I6, I14), the invariant and story harness. | A user signs in. Operations are idempotent. State rebuilds from the log. |
 | `0.2.0` | Engine | ID-2, ID-3, ID-5, DF-1, DF-2, WF-1 to WF-3, WF-5, AS-1 to AS-6, AC-1 to AC-4, DX-3, the side-effect sink with live and dry-run modes (I2, I5, I7 to I10, I13). | A flow runs from start to end through the API and the CLI, live and dry. |
 | `0.3.0` | Side effects | WF-4, AC-5, SE-1 to SE-7, DR-1 to DR-6, I3. | Reminders and escalations fire on a simulated clock. Email status is visible. |
-| `0.4.0` | Forms | FM-1 to FM-6, OU-1. The web interface starts: the generated API client (DX-4, I12) and the form. | A dynamic form shows, validates on the server and prints. |
+| `0.4.0` | Forms | FM-1 to FM-7, OU-1. The web interface starts: the generated API client (DX-4, I12) and the form. | A dynamic form shows, validates on the server and prints. |
 | `0.5.0` | Realtime and resilience | RT-1 to RT-5, DX-2, I11, I15, I16. | The network fails during an edit. After a refresh, no work is lost and the state is correct. |
 | `0.6.0` | Builder | DF-3 to DF-6, RT-6 and the multiplayer builder. | Two builders and one CLI push edit one flow at the same time. |
 | `0.7.0` | Visibility | VT-1 to VT-6. | A requester finds the status of a submission without help. |
@@ -476,3 +477,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | FM-5: the one format is a JSON expression tree. A TypeScript rule is a node of it, run in the sandbox. | FM-5 | FM-5 and S05 pointed at different formats (#103). ADR 0008 records the decision. |
 | 2026-10-08 | D7 names the pilot flow: `information-request`. | D7 | The real flow sets the limits of the MVP (#104). |
 | 2026-10-08 | Reviewer-only work is a named variant of S09 and S11. No S17. | AC-4, WF-2 | S02 and S11 already test the reviewer's limits (#105). |
+| 2026-10-11 | 5.3 gains FM-7: the engine records the values that a form holds, a start and a step completion carry them, and the public API reads them back. Section 8 places FM-7 at `0.4.0`. S06 cites it. | FM-7 | FM-1 validates a value and FM-4 re-validates a submission, but no value reached the server: `Instance` had no field for values, the `instance.started@1` and `instance.submitted@1` payloads recorded only the route, and no event type carried one, so the form, its PDF (OU-1) and its re-validation had no data (#175). |
