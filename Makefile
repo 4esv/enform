@@ -1,8 +1,16 @@
 # The five commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup check lint typecheck test rules client invariants stories stack
+.PHONY: setup browsers check lint typecheck test rules client invariants stories stack
 
 setup:
 	pnpm install --frozen-lockfile
+	pnpm exec playwright install chromium
+
+# The Chromium build that `gui` mode uses (ADR 0009, STORIES.md Test method). It
+# downloads once, into the shared Playwright cache. The browser OS libraries are
+# system packages, which `playwright install-deps` installs on Linux only, so CI
+# does that in a step of its own.
+browsers:
+	pnpm exec playwright install chromium
 
 check: lint typecheck test
 

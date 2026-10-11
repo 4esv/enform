@@ -38,6 +38,12 @@ jobs:
       - name: Install the dependencies
         run: make setup
 
+      # make setup installs Chromium into the shared Playwright cache. Its OS
+      # libraries are system packages, and install-deps is Linux only, which is
+      # why the Makefile does not run it (ADR 0009).
+      - name: Install the browser OS libraries
+        run: pnpm exec playwright install-deps chromium
+
       - name: Run the complete local check
         run: make check
 
