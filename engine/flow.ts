@@ -19,7 +19,13 @@ import { configOperation } from './config.js'
 import { type FlowDefinition, parse, serialize } from './definition.js'
 import { classifyChange, type DefinitionChange } from './edit.js'
 import { contentHash } from './instance.js'
-import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
+import {
+  type ActorId,
+  createOperation,
+  type Log,
+  type Operation,
+  type OperationDeps,
+} from './operation.js'
 
 /** The versioned event type of a publication (DF-2, VT-6). */
 export const DEFINITION_PUBLISHED = 'config.definition.published@1'
@@ -154,4 +160,9 @@ export function publish(flow: Flow, deps: OperationDeps, actor: ActorId): Publis
   }
   const operation = createOperation(DEFINITION_PUBLISHED, payload, deps, actor)
   return { flow: { ...flow, versions: [...flow.versions, published] }, operation }
+}
+
+/** Derive the newest published version of one flow from the log (#172, I4, I6, DF-2). */
+export function publishedFlow(_log: Log, _slug: string): FlowVersion | undefined {
+  return undefined
 }

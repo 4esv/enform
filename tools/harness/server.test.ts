@@ -1,5 +1,7 @@
 import type { Server } from 'node:http'
 import { afterAll, beforeAll, expect, test } from 'vitest'
+import { apply, emptyState } from '../../engine/apply.js'
+import { createFlow, publish, publishedFlow, push } from '../../engine/flow.js'
 import { startApi } from './server.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the api-mode story runs against the HTTP API
@@ -57,4 +59,68 @@ test('#24 the api-mode server serves the /api/v1 contract', async () => {
   expect(state.status).toBe(200)
   const body = (await state.json()) as { applied: string[] }
   expect(body.applied).toEqual(['op-1'])
+})
+
+test.fails('#172 the api-mode server reads the published flow by slug', async () => {
+  // Build a log with two published versions of one flow (DF-2). The newest
+  // publication is the one that the read must return.
+  const slug = 'registration'
+  const first = { schemaVersion: 1, steps: [{ key: 'submit', targets: [{ user: 'dana' }] }] }
+  const second = {
+    schemaVersion: 1,
+    steps: [
+      { key: 'submit', targets: [{ user: 'dana' }] },
+      { key: 'review', targets: [{ user: 'chris' }] },
+    ],
+  }
+  const deps = (index: number) => ({ clock: () => index, ids: () => `op-${index}` })
+
+  let flow = createFlow(slug)
+  const firstPush = push(flow, first, deps(1), 'dana')
+  flow = firstPush.flow
+  const firstPublish = publish(flow, deps(2), 'dana')
+  flow = firstPublish.flow
+  const secondPush = push(flow, second, deps(3), 'dana')
+  flow = secondPush.flow
+  const secondPublish = publish(flow, deps(4), 'dana')
+  flow = secondPublish.flow
+  const [, pinned] = flow.versions
+
+  let state = emptyState
+  for (const operation of [
+    firstPush.operation,
+    firstPublish.operation,
+    secondPush.operation,
+    secondPublish.operation,
+  ]) {
+    state = apply(operation, state)
+  }
+
+  // The engine derives the newest publication from the log, and returns
+  // undefined when the log has none for the slug.
+  expect(publishedFlow(state.log, slug)).toEqual(pinned)
+  expect(publishedFlow(state.log, 'missing')).toBeUndefined()
+  expect(publishedFlow([], slug)).toBeUndefined()
+
+  // The server serves the same derivation over HTTP (DX-1).
+  const api = startApi(state)
+  await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
+  try {
+    const base = `http://127.0.0.1:${api.port()}`
+    const read = await fetch(`${base}/api/v1/flows/${slug}`)
+    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual({
+      slug,
+      version: pinned.version,
+      contentHash: pinned.contentHash,
+      definition: pinned.definition,
+    })
+
+    const missing = await fetch(`${base}/api/v1/flows/missing`)
+    expect(missing.status).toBe(404)
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      api.server.close((err) => (err ? reject(err) : resolve()))
+    )
+  }
 })
