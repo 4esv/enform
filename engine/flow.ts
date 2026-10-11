@@ -162,7 +162,25 @@ export function publish(flow: Flow, deps: OperationDeps, actor: ActorId): Publis
   return { flow: { ...flow, versions: [...flow.versions, published] }, operation }
 }
 
-/** Derive the newest published version of one flow from the log (#172, I4, I6, DF-2). */
-export function publishedFlow(_log: Log, _slug: string): FlowVersion | undefined {
+/**
+ * Derive the newest published version of one flow from the log (#172, I4, I6,
+ * DF-2). It reads the events whose type is DEFINITION_PUBLISHED and whose
+ * payload slug matches, and returns the last one: the log is append-only and
+ * ordered (I4), so the newest publication is the last matching event. It is a
+ * pure function of the log: no clock, no random source, no I/O (I6). It never
+ * rewrites an event (I4) and never re-derives a definition from the draft
+ * (DF-2). An unknown slug gives undefined.
+ */
+export function publishedFlow(log: Log, slug: string): FlowVersion | undefined {
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const event = log[i]
+    if (event.type !== DEFINITION_PUBLISHED) continue
+    if (event.payload.slug !== slug) continue
+    return {
+      version: event.payload.version as number,
+      contentHash: event.payload.contentHash as string,
+      definition: event.payload.definition as FlowDefinition,
+    }
+  }
   return undefined
 }

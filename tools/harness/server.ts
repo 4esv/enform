@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { apply, emptyState, type State } from '../../engine/apply.js'
+import { publishedFlow } from '../../engine/flow.js'
 import type { Operation } from '../../engine/operation.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
@@ -65,6 +66,17 @@ export function startApi(state: State = emptyState): Api {
       }
       if (method === 'GET' && url === '/api/v1/state') {
         return json(res, 200, { applied: [...current.applied], log: current.log })
+      }
+      if (method === 'GET' && url.startsWith('/api/v1/flows/')) {
+        const slug = decodeURIComponent(url.slice('/api/v1/flows/'.length))
+        const published = publishedFlow(current.log, slug)
+        if (published === undefined) return json(res, 404, { error: 'not found' })
+        return json(res, 200, {
+          slug,
+          version: published.version,
+          contentHash: published.contentHash,
+          definition: published.definition,
+        })
       }
       return json(res, 404, { error: 'not found' })
     } catch {

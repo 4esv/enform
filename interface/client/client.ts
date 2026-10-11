@@ -48,6 +48,17 @@ export interface State {
   readonly log: Log
 }
 
+/**
+ * One published version of a flow, read by its slug (DF-2). The version is immutable and the
+ * definition is frozen.
+ */
+export interface PublishedFlow {
+  readonly slug: string
+  readonly version: number
+  readonly contentHash: string
+  readonly definition: Record<string, unknown>
+}
+
 export interface ClientConfig {
   readonly baseUrl: string
   readonly token: string
@@ -76,6 +87,15 @@ export async function appendOperation(operation: Operation): Promise<Event> {
   })
   if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
   return (await response.json()) as Event
+}
+
+export async function readFlow(slug: string): Promise<PublishedFlow> {
+  const response = await fetch(`${configured().baseUrl}/api/v1/flows/${slug}`, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  return (await response.json()) as PublishedFlow
 }
 
 export async function readLog(): Promise<Log> {

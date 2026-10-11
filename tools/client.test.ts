@@ -44,7 +44,7 @@ test('#93 DX-4 the generator reproduces the checked-in client byte for byte', ()
   )
 })
 
-test('#93 DX-4 the generated client exposes the three typed operations (I12)', () => {
+test('#93 DX-4 the generated client exposes the four typed operations (I12)', () => {
   expect(existsSync(clientPath), 'the generated client is checked in').toBe(true)
   const source = readFileSync(clientPath, 'utf8')
   expect(source, 'appendOperation takes an Operation and returns an Event').toContain(
@@ -55,6 +55,9 @@ test('#93 DX-4 the generated client exposes the three typed operations (I12)', (
   )
   expect(source, 'readState returns a State').toContain(
     'export async function readState(): Promise<State> {'
+  )
+  expect(source, 'readFlow takes a slug and returns a PublishedFlow').toContain(
+    'export async function readFlow(slug: string): Promise<PublishedFlow> {'
   )
 })
 

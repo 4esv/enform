@@ -15,12 +15,14 @@ const repo = join(import.meta.dirname, '..')
 const documentPath = join(repo, 'api', 'openapi.yaml')
 
 // The 0.1.0 HTTP API: append an operation, read the log, read the rebuilt
-// state (issue #91, DX-1). Configuration changes are operations whose type is
-// `config.<kind>.changed@1` (I14), not a separate endpoint.
+// state, read a published flow by slug (issue #91, #172, DX-1). Configuration
+// changes are operations whose type is `config.<kind>.changed@1` (I14), not a
+// separate endpoint.
 const operations = [
   ['/api/v1/operations', 'post'],
   ['/api/v1/log', 'get'],
   ['/api/v1/state', 'get'],
+  ['/api/v1/flows/{slug}', 'get'],
 ] as const
 
 test('#91 DX-1 api/openapi.yaml is valid OpenAPI 3.1 for /api/v1', async () => {

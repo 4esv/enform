@@ -61,6 +61,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/State'
+  /api/v1/flows/{slug}:
+    get:
+      operationId: readFlow
+      summary: Read the published flow by slug
+      description: >-
+        The newest published version of the flow with this slug, derived from
+        the append-only log (I4). An unknown slug answers 404.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The newest published version of the flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedFlow'
+        '404':
+          description: No flow has this slug
 components:
   securitySchemes:
     keycloak:
@@ -144,3 +167,24 @@ components:
             $ref: '#/components/schemas/OperationId'
         log:
           $ref: '#/components/schemas/Log'
+    PublishedFlow:
+      type: object
+      description: >-
+        One published version of a flow, read by its slug (DF-2). The version
+        is immutable and the definition is frozen.
+      required: [slug, version, contentHash, definition]
+      properties:
+        slug:
+          type: string
+          description: The flow slug (ID-1).
+        version:
+          type: integer
+          minimum: 1
+          description: The version number, from 1 up (DF-2).
+        contentHash:
+          type: string
+          description: >-
+            The content hash of the frozen definition, in lowercase hex (DF-2).
+        definition:
+          type: object
+          description: The frozen flow definition (DF-1, DF-2).

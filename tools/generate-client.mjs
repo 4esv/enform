@@ -100,16 +100,32 @@ function clientSection() {
   ].join('\n')
 }
 
+// Substitute the `{name}` placeholders of a path with `${name}` template
+// expressions, so the emitted fetch interpolates the path arguments.
+function renderPath(path, pathParams) {
+  let rendered = path
+  for (const param of pathParams) {
+    rendered = rendered.replace(`{${param.name}}`, `\${${param.name}}`)
+  }
+  return rendered
+}
+
 // One function per operation: the method and the path come from the document,
-// the request parameter and the return type come from the schemas.
+// the request parameter and the return type come from the schemas. A path
+// parameter (for example `{slug}`) becomes a function argument and is
+// substituted into the URL.
 function renderOperation({ path, method, operation }) {
   const request = operation.requestBody?.content?.['application/json']?.schema
   const parameter = request === undefined ? undefined : lowerFirst(refName(request.$ref))
   const parameterType = request === undefined ? undefined : refName(request.$ref)
   const success = Object.entries(operation.responses).find(([status]) => /^2\d\d$/.test(status))
   const returnType = refName(success[1].content['application/json'].schema.$ref)
+  const pathParams = (operation.parameters ?? []).filter((param) => param.in === 'path')
 
-  const args = parameter === undefined ? '' : `${parameter}: ${parameterType}`
+  const args = [
+    ...(parameter === undefined ? [] : [`${parameter}: ${parameterType}`]),
+    ...pathParams.map((param) => `${param.name}: ${typeOf(param.schema)}`),
+  ].join(', ')
   const init = [`    method: '${method}',`]
   if (parameter === undefined) init.push('    headers: headers(),')
   else {
@@ -119,7 +135,7 @@ function renderOperation({ path, method, operation }) {
 
   return [
     `export async function ${operation.operationId}(${args}): Promise<${returnType}> {`,
-    `  const response = await fetch(\`\${configured().baseUrl}${path}\`, {`,
+    `  const response = await fetch(\`\${configured().baseUrl}${renderPath(path, pathParams)}\`, {`,
     ...init,
     '  })',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.

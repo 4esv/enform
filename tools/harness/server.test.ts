@@ -61,7 +61,7 @@ test('#24 the api-mode server serves the /api/v1 contract', async () => {
   expect(body.applied).toEqual(['op-1'])
 })
 
-test.fails('#172 the api-mode server reads the published flow by slug', async () => {
+test('#172 the api-mode server reads the published flow by slug', async () => {
   // Build a log with two published versions of one flow (DF-2). The newest
   // publication is the one that the read must return.
   const slug = 'registration'
