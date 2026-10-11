@@ -88,7 +88,7 @@ Commit messages use [Conventional Commits 1.0.0](https://www.conventionalcommits
 
 | Command | Does |
 |---|---|
-| `make setup` | Installs the dependencies that `pnpm-lock.yaml` pins. Needs Node 26 and pnpm 10. |
+| `make setup` | Needs Node 26 and pnpm 10. It installs the pinned dependencies and the Chromium build that `gui` mode uses. |
 | `make check` | The local check: lint and format checks, type checks, unit tests, invariant suites and story suites. |
 | `make invariants` | The invariant suites in `invariants/` only. |
 | `make stories` | The story suites in `stories/` only. |
