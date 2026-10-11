@@ -147,12 +147,177 @@ function runCli(args: readonly string[]): Promise<string> {
 }
 
 /**
- * gui mode (Issue #27, STORIES.md Golden path): the interface path runs in a
- * browser. The shape of the mode lands with its check; the run itself lands
- * with the implementation, so this fails until that does.
+ * gui mode (Issue #27, STORIES.md Golden path): run the scenario's declared
+ * gui prefix in a browser. Each gui step opens the app at the step's actor,
+ * performs its actions in order, and appends exactly one event; the runner
+ * then checks that the event equals the engine step at the same index. The
+ * browser's intent carries the injected step clock and ID source, so it reads
+ * `op-<i+1>` and `at = <i+1>` exactly as `stepOperation` builds them (I6). The
+ * run returns the prefix end state, which the caller compares to api mode's
+ * prefix; there is no retry (I6).
  */
-function guiRun(_scenario: Scenario, _options: RunOptions): Promise<RunOutcome> {
-  return Promise.reject(new Error('gui mode: not implemented yet (#27)'))
+async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
+  const gui = scenario.gui
+  if (gui === undefined) throw new Error('gui mode: the scenario declares no gui path')
+  if (gui.length > scenario.steps.length) {
+    throw new Error('gui mode: the gui path is longer than the scenario steps')
+  }
+  const clock = options.clock ?? goldenClock
+  const flowSlug = scenario.flowSlug
+  if (flowSlug === undefined) {
+    throw new Error('gui mode: the scenario declares no flowSlug')
+  }
+  const api = startApi(options.seed ?? emptyState, {
+    resolve: options.resolve,
+    grants: options.grants,
+  })
+  const server = api.server
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const seedLength = api.state().log.length
+  const browser = await chromium.launch()
+  try {
+    const context = await browser.newContext()
+    for (let i = 0; i < gui.length; i += 1) {
+      const page = await context.newPage()
+      try {
+        await page.addInitScript(
+          `globalThis.__enformSources = { clock: () => ${clock(i)}, ids: () => 'op-${i + 1}' }`
+        )
+        await page.goto(guiUrl(api.port(), flowSlug, scenario.steps[i].actor, gui[i]))
+        // The app loads the flow and renders the form asynchronously; wait for
+        // the submit control before the step's actions touch the fields.
+        await page.waitForSelector('form button[type="button"]', { timeout: 5000 })
+        await performGuiActions(page, gui[i].actions)
+        await waitForEvent(api, seedLength + i + 1)
+        const state = api.state()
+        if (state.log.length !== seedLength + i + 1) {
+          throw new Error(
+            `gui mode: step ${i + 1} appended ${state.log.length - seedLength - i} events, not one`
+          )
+        }
+        const event = state.log[state.log.length - 1]
+        const expected = stepOperation(scenario.steps[i], i, clock)
+        const actual: Operation = {
+          id: event.operationId,
+          type: event.type,
+          at: event.at,
+          actor: event.actor,
+          payload: event.payload,
+        }
+        if (!isDeepStrictEqual(actual, expected)) {
+          throw new Error(`gui mode: step ${i + 1} did not map to its engine step`)
+        }
+      } finally {
+        await page.close()
+      }
+    }
+    const state = api.state()
+    const scenarioState = replayPrefix(state, seedLength)
+    if (!isDeepStrictEqual(toView(scenarioState), goldenViewPrefix(scenario, gui.length, clock))) {
+      throw new Error('gui mode: the gui prefix differs from the engine prefix')
+    }
+    return { state: scenarioState, intents: outboxOf(scenarioState.log) }
+  } finally {
+    await browser.close()
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve()))
+    )
+  }
+}
+
+/** The app URL of one gui step: the flow, the step's actor, and its optional page. */
+function guiUrl(port: number, slug: string, actor: string, step: GuiStep): string {
+  const url = new URL('/app/', `http://127.0.0.1:${port}`)
+  if (step.page !== undefined) url.pathname = `/app/${step.page}`
+  url.searchParams.set('slug', slug)
+  url.searchParams.set('actor', actor)
+  return url.toString()
+}
+
+/** Perform one gui step's actions in order (STORIES.md, Interface path). */
+async function performGuiActions(page: Page, actions: readonly GuiAction[]): Promise<void> {
+  for (const action of actions) {
+    if ('fill' in action) {
+      await fillField(page, action.fill.field, action.fill.value)
+    } else if ('click' in action) {
+      await page.locator(action.click).click()
+    } else {
+      await page.waitForFunction(
+        (expected) => {
+          const status = document.querySelector('.status')
+          return status !== null && status.textContent === expected
+        },
+        action.expect,
+        { timeout: 5000 }
+      )
+    }
+  }
+}
+
+/** Fill one form control by its field key (FM-1, FM-7). */
+async function fillField(page: Page, field: string, value: GuiFillValue): Promise<void> {
+  const element = page.locator(`[name="${field}"]`)
+  const count = await element.count()
+  if (count !== 1) {
+    throw new Error(`gui mode: the field ${field} matched ${count} controls, not one`)
+  }
+  const control = element.first()
+  const tag = await control.evaluate((node) => node.tagName.toLowerCase())
+  if (tag === 'textarea') {
+    await control.fill(String(value))
+    return
+  }
+  if (tag === 'select') {
+    await control.selectOption(String(value))
+    return
+  }
+  if (tag === 'input') {
+    const type = await control.getAttribute('type')
+    if (type === 'checkbox') {
+      await control.setChecked(Boolean(value))
+      return
+    }
+    if (type === 'file' || type === 'radio') {
+      throw new Error(`gui mode: cannot fill a ${type} control (${field})`)
+    }
+    await control.fill(String(value))
+    return
+  }
+  throw new Error(`gui mode: cannot fill a ${tag} control (${field})`)
+}
+
+/** Wait for the in-process server to reach `length` events (one async browser submit). */
+async function waitForEvent(api: Api, length: number): Promise<void> {
+  const deadline = Date.now() + 5000
+  while (api.state().log.length < length) {
+    if (Date.now() > deadline) {
+      throw new Error('gui mode: the interface did not append its event in time')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
+/**
+ * The scenario events of a gui run, replayed from the seeded server log. The
+ * server appends the interface's events after the seed, so their `seq` counts
+ * the seed too; a replay from the empty state renumbers them 1..n, exactly as
+ * api mode produces them (I4).
+ */
+function replayPrefix(serverState: State, seedLength: number): State {
+  let state = emptyState
+  for (const event of serverState.log.slice(seedLength)) {
+    state = apply(
+      {
+        id: event.operationId,
+        type: event.type,
+        at: event.at,
+        actor: event.actor,
+        payload: event.payload,
+      },
+      state
+    )
+  }
+  return state
 }
 
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */

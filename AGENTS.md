@@ -35,6 +35,7 @@ A change is done when it meets `MVP.md` section 11.6. All items, each time.
 | `make check` | The local check: lint and format checks, type checks, unit tests, invariant suites and story suites. |
 | `make invariants` | The invariant suites in `invariants/` only. |
 | `make stories` | The story suites in `stories/` only. |
+| `make browser` | The browser suite in `stories/` only: `gui` mode drives Chromium (#27). |
 | `make stack` | The local stack from `deploy/compose.yaml` (#97). |
 
 ## CI

@@ -1,5 +1,5 @@
 # The five commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup browsers check lint typecheck test rules client invariants stories stack
+.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack
 
 setup:
 	pnpm install --frozen-lockfile
@@ -12,7 +12,7 @@ setup:
 browsers:
 	pnpm exec playwright install chromium
 
-check: lint typecheck test
+check: lint typecheck test browser
 
 lint:
 	pnpm exec biome check .
@@ -20,8 +20,14 @@ lint:
 typecheck:
 	pnpm exec tsc --noEmit
 
+# The unit, invariant and story suites. The browser suite runs on its own
+# (vitest.config.ts), so no test starves while Chromium starts.
 test:
-	pnpm exec vitest run
+	pnpm exec vitest run --project unit --project invariants --project stories
+
+# The browser suite: `gui` mode drives Chromium (#27).
+browser:
+	pnpm exec vitest run --project browser
 
 # The rules that CI runs next to `make check`: the document rule of STORIES.md
 # Coverage (the matrix of story, operator and mode) and the public API rule of

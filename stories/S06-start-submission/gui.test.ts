@@ -17,7 +17,7 @@ import { flowState, golden, resolve, samGrants } from './scenario.js'
 // uses, so the browser's intent carries `op-1` and `at = 1` exactly, and the
 // resolved event equals the engine's start (I6).
 
-test.fails('#27 the S06 gui path maps its declared prefix to the engine steps', async () => {
+test('#27 the S06 gui path maps its declared prefix to the engine steps', async () => {
   const declared = golden.gui?.length ?? 0
   expect(declared, 'the gui path declares a non-empty prefix').toBeGreaterThan(0)
   expect(declared, 'the gui path covers only the prefix the interface path declares').toBeLessThan(

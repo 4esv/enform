@@ -292,6 +292,8 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Interface path.** Sam opens a link while he is not signed in. SSO signs him in and returns him to the form. As he types, each field shows "Saved on this device", then "Synced". He submits. The step tracker shows "Waiting for Dr. Okafor. Not opened."
 
+The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The submit step has no browser path yet: a submit intent would have to name its instance, and an `instance.started@1` event carries no instance identity (#27).
+
 **Acceptance**
 
 - Given Sam is not signed in, when he opens the link, then SSO signs him in and he returns to the same form. The engine never creates an anonymous draft.

@@ -84,7 +84,7 @@ Commit messages use [Conventional Commits 1.0.0](https://www.conventionalcommits
 
 ## Local check
 
-`make check` is the local check. It runs lint and format checks (Biome), type checks (tsc), the unit tests, the invariant suites and the story suites (Vitest). Nothing goes to the remote until it is green.
+`make check` is the local check. It runs lint and format checks (Biome), type checks (tsc), the unit tests, the invariant suites, the story suites and the browser suite (Vitest). Nothing goes to the remote until it is green.
 
 | Command | Does |
 |---|---|
@@ -92,6 +92,7 @@ Commit messages use [Conventional Commits 1.0.0](https://www.conventionalcommits
 | `make check` | The local check: lint and format checks, type checks, unit tests, invariant suites and story suites. |
 | `make invariants` | The invariant suites in `invariants/` only. |
 | `make stories` | The story suites in `stories/` only. |
+| `make browser` | The browser suite in `stories/` only: `gui` mode drives Chromium (#27). |
 | `make stack` | The local stack from `deploy/compose.yaml` (#97). |
 
 ### CI

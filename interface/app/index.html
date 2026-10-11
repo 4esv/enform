@@ -14,6 +14,12 @@
       // browser at any flow without changing the app.
       import { mountApp } from './app.js'
 
+      // The deterministic sources that gui mode injects (I6). A real user never
+      // sets them, so the app behaves identically; gui mode supplies the same
+      // step clock and ID source that stepOperation uses, so the browser's
+      // intent carries the golden `op-<i+1>` and `at = <i+1>` exactly.
+      const sources = globalThis.__enformSources
+
       const params = new URLSearchParams(location.search)
       mountApp({
         root: document.getElementById('app'),
@@ -21,6 +27,7 @@
         token: params.get('token') ?? '',
         slug: params.get('slug') ?? '',
         actor: params.get('actor') ?? '',
+        ...(sources ? { clock: sources.clock, ids: sources.ids } : {}),
       })
     </script>
   </body>
