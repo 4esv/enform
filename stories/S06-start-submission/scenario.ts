@@ -1,10 +1,14 @@
+import { apply, emptyState } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { ConditionData } from '../../engine/condition.js'
 import { type FlowDefinition, parse } from '../../engine/definition.js'
 import type { Flow, FlowVersion } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
+import type { OperationDeps } from '../../engine/operation.js'
+import { outboxOf } from '../../engine/outbox.js'
 import type { TargetResolver } from '../../engine/routing.js'
-import { scenario } from '../../tools/harness/scenario.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
 
 // S06: Sam starts and submits a submission (STORIES.md). He opens the form
 // link, fills it in and submits it. The engine never creates an anonymous
@@ -63,5 +67,47 @@ export const samGrants: readonly Grant[] = [
 /** The directory of the story (ID-4, AS-4): a user target names its principal, and a group or team resolves to nobody. */
 export const resolve: TargetResolver = (target) => ('user' in target ? [target.user] : [])
 
-/** The golden path of S06 (STORIES.md): the start and submit steps arrive with the runner check. */
-export const golden = scenario({ slug: 'start-submission', steps: [] })
+/** Sam, the signed-in principal who starts the submission (S06, ID-2). */
+const SAM = 'user:sam'
+
+/**
+ * The runner's injected sources (I6): the clock is the step index and the IDs
+ * are `op-N`, exactly as `stepOperation` builds them, so the operations that
+ * the engine produces equal the scenario's steps.
+ */
+function depsFor(index: number): OperationDeps {
+  return { clock: () => index + 1, ids: () => `op-${index + 1}` }
+}
+
+/**
+ * The state-change payload without the outbox key. The runner wraps the step's
+ * outbox back into the payload through `createOutboxOperation` (I2), so the
+ * step carries the change and the side effect separately.
+ */
+function withoutOutbox(
+  payload: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> {
+  return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'outbox'))
+}
+
+/** The golden path of S06 (STORIES.md): Sam starts, then submits (ID-2, WF-1, I2, SE-1, FM-7). */
+function submissionSteps(): readonly Step[] {
+  const started = startInstance(flow, samData, SAM, depsFor(0), resolve, samGrants)
+  const submitted = submitInstance(started.instance, SAM, depsFor(1), samData)
+
+  return [
+    {
+      actor: started.operation.actor ?? SAM,
+      type: started.operation.type,
+      payload: started.operation.payload,
+    },
+    {
+      actor: submitted.operation.actor ?? SAM,
+      type: submitted.operation.type,
+      payload: withoutOutbox(submitted.operation.payload),
+      outbox: outboxOf(apply(submitted.operation, emptyState).log),
+    },
+  ]
+}
+
+export const golden = scenario({ slug: 'start-submission', steps: submissionSteps() })

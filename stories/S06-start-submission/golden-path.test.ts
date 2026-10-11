@@ -38,7 +38,7 @@ function submissionOperations(): readonly Operation[] {
 // carry the values that the form holds (FM-7). Marked expected to fail until
 // the golden scenario is exported.
 
-test.fails('#179 the golden path of S06 runs through the runner in api mode (S06)', async () => {
+test('#179 the golden path of S06 runs through the runner in api mode (S06)', async () => {
   expect(submissionOperations()).toEqual(
     golden.steps.map((step, index) => stepOperation(step, index))
   )
