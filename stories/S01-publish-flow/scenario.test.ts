@@ -54,7 +54,7 @@ test('#38 the lifecycle publishes an immutable version and pins an instance to v
   flow = first.flow
   expect(flow.draft).toEqual(draftV1)
   expect(validate(serialize(draftV1))).toEqual(draftV1)
-  expect(() => validate('{ "schemaVersion": 2, "steps": [] }')).toThrow(/schemaVersion/)
+  expect(() => validate('{ "schemaVersion": 3, "steps": [] }')).toThrow(/schemaVersion/)
 
   // Publish freezes the draft as version 1 with a content hash (DF-2).
   const published = publish(flow, stepDeps(1), 'dana')

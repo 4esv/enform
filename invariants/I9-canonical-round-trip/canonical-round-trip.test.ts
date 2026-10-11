@@ -22,7 +22,7 @@ const deps = { clock: () => NOW, ids: () => 'op-1' }
 
 /** The canonical file of the pilot flow `course-overload` (STORIES.md, S05). */
 const FILE = `{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "steps": [
     {
       "key": "request",
@@ -92,7 +92,7 @@ const NON_CANONICAL = `{
       "key": "request"
     }
   ],
-  "schemaVersion": 1
+  "schemaVersion": 2
 }
 `
 

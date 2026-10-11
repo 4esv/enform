@@ -24,7 +24,7 @@ const repo = join(import.meta.dirname, '..')
 
 /** A canonical definition with one field of each of the sixteen controls (FM-1). */
 const FILE = `{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "steps": [
     {
       "key": "request",

@@ -147,20 +147,20 @@ const V2_FILE = `{
 }
 `
 
-test.fails('#170 a v1 file migrates to v2 with nothing added (DF-1, I9, 9.3)', () => {
+test('#170 a v1 file migrates to v2 with nothing added (DF-1, I9, 9.3)', () => {
   const migrated = parse(V1_FILE)
   expect(migrated.schemaVersion).toBe(2)
   // The migration is the whole rule: the only change is schemaVersion 2.
   expect(serialize(migrated)).toBe(V1_MIGRATED_FILE)
 })
 
-test.fails('#170 a canonical v2 file round trips byte for byte (I9)', () => {
+test('#170 a canonical v2 file round trips byte for byte (I9)', () => {
   const definition = parse(V2_FILE)
   expect(definition.schemaVersion).toBe(2)
   expect(serialize(definition)).toBe(V2_FILE)
 })
 
-test.fails('#170 the v2 schema agrees with what the read path accepts and rejects (DF-1)', () => {
+test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-1)', () => {
   const schema = JSON.parse(readFileSync(join(repo, 'schemas', 'flow', 'v2.json'), 'utf8'))
 
   // The published schema keeps its objects closed and pins the version to 2.

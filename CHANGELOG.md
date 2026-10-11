@@ -60,6 +60,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The flow definition gains the sixteen form controls as step fields, with per-control value validation (FM-1) (#74).
 - The story harness runs the Data fuzzy-path operator: it generates one valid and one invalid value per field and checks each against the oracles (FM-1) (#36).
 - The interface API client is generated from the OpenAPI document, and a hand-written /api/v1 call in the interface fails the public-API rule (DX-4, I12) (#93).
+- The flow definition format is version 2. The engine still reads version 1 and writes version 2 (#170).
 
 ## [0.0.0] - 2026-10-08
 

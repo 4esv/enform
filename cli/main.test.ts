@@ -77,7 +77,7 @@ test('#38 flow init writes a canonical flow file (S01, DF-1)', () => {
 test('#38 flow validate names the error and changes nothing (S01, DF-1)', () => {
   const cwd = workdir()
   const path = join(cwd, 'bad.flow.json')
-  const bad = '{ "schemaVersion": 2, "steps": [] }'
+  const bad = '{ "schemaVersion": 3, "steps": [] }'
   writeFileSync(path, bad)
   const result = enform(['flow', 'validate', 'bad.flow.json', '--json'], cwd)
   expect(result.status).not.toBe(0)
@@ -100,7 +100,7 @@ test('#38 flow pull reproduces the canonical file byte for byte (S01, DF-4, I9)'
   // Any valid file is normalized to the canonical form of its own definition,
   // and a second pull is stable.
   const compact =
-    '{"steps":[{"targets":[{"starter":"starter"}],"key":"start"}],"schemaVersion":1}\n'
+    '{"steps":[{"targets":[{"starter":"starter"}],"key":"start"}],"schemaVersion":2}\n'
   writeFileSync(path, compact)
   expect(enform(['flow', 'pull', 'course-overload'], cwd).status).toBe(0)
   expect(readFileSync(path, 'utf8')).toBe(serialize(parse(compact)))
