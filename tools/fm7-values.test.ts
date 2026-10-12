@@ -54,8 +54,11 @@ function deps(): OperationDeps {
 const startedValues: ConditionData = { summary: 'hello', urgent: false }
 const captured: ConditionData = { summary: 'hello', detail: 'more detail' }
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 test('#177 FM-7 a start and a submit carry the values that the form holds', () => {
-  const started = startInstance(flow, startedValues, SAM, deps(), resolve, grants)
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
 
   // A start records the values of the step that it routes to (FM-7): the
   // returned instance holds them, and the operation payload carries them.

@@ -3,7 +3,13 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { createFlow, publish, publishedFlow, push } from '../../engine/flow.js'
 import { addGrant } from '../../engine/grants.js'
-import { resolve, SLUG, samGrants, versionV1 } from '../../stories/S06-start-submission/scenario.js'
+import {
+  INSTANCE_ID,
+  resolve,
+  SLUG,
+  samGrants,
+  versionV1,
+} from '../../stories/S06-start-submission/scenario.js'
 import { startApi } from './server.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the api-mode story runs against the HTTP API
@@ -213,14 +219,16 @@ async function withApi(
   }
 }
 
-test('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
+// Expected to fail until the engine records the instance id that the intent
+// carries (#187); the intent already sends it and the payload must keep it.
+test.fails('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
   await withApi(intentState(), { resolve }, async (base, api) => {
     const intent = {
       id: 'intent-1',
       type: 'instance.started@1',
       at: 5,
       actor: 'user:sam',
-      payload: { flow: SLUG, values: { urgent: false } },
+      payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
     }
     const before = api.state().log.length
     const response = await fetch(`${base}/api/v1/operations`, {
@@ -241,6 +249,7 @@ test('#184 a posted intent resolves to the engine operation and keeps the client
     expect(event.type).toBe('instance.started@1')
     expect(event.actor).toBe('user:sam')
     expect(event.payload).toEqual({
+      instanceId: INSTANCE_ID,
       definitionVersion: versionV1.contentHash,
       currentStep: 'advisor',
       assignees: [{ step: 'advisor', target: { user: 'user:okafor' }, members: ['user:okafor'] }],
@@ -259,7 +268,7 @@ test('#184 an unresolvable intent is refused with a named error and appends noth
       type: 'instance.started@1',
       at: 6,
       actor: 'user:sam',
-      payload: { flow: 'missing', values: {} },
+      payload: { flow: 'missing', instanceId: INSTANCE_ID, values: {} },
     }
     const response = await fetch(`${base}/api/v1/operations`, {
       method: 'POST',
@@ -269,5 +278,32 @@ test('#184 an unresolvable intent is refused with a named error and appends noth
     expect(response.status).toBe(400)
     expect(((await response.json()) as { error: string }).error).toMatch(/no published version/)
     expect(api.state().log).toHaveLength(0)
+  })
+})
+
+// Issue #187, DX-1, ADR 0010, I1, I13: the intent carries the instance id the
+// client minted, and the server refuses an intent that lacks one by shape, as
+// it already does for the id, the time, the actor and the values.
+
+test.fails('#187 an intent without an instance id is refused with a named error and appends nothing', async () => {
+  await withApi(intentState(), { resolve }, async (base, api) => {
+    const intent = {
+      id: 'intent-3',
+      type: 'instance.started@1',
+      at: 7,
+      actor: 'user:sam',
+      payload: { flow: SLUG, values: { urgent: false } },
+    }
+    const before = api.state().log.length
+    const response = await fetch(`${base}/api/v1/operations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(intent),
+    })
+    expect(response.status).toBe(400)
+    expect(((await response.json()) as { error: string }).error).toMatch(
+      /instanceId must be a string/
+    )
+    expect(api.state().log).toHaveLength(before)
   })
 })

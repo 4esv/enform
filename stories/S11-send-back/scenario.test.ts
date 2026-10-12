@@ -33,6 +33,9 @@ import {
 /** The note that Jordan attaches to the send back (WF-3, SE-2). */
 const COMMENT = 'Attach your degree audit'
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
 function deps(): OperationDeps {
   let next = 0
@@ -86,7 +89,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
 
   // The start routes the request to the request step, whose starter target
   // resolves to Sam (S06, WF-1, I13).
-  const started = startInstance(flow, data, STARTER, sources, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   const startState = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
   expect(started.instance.assignees).toEqual([

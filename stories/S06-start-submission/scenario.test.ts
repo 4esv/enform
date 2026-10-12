@@ -12,7 +12,7 @@ import {
   startInstance,
   submitInstance,
 } from '../../engine/submission.js'
-import { flow, resolve, SLUG, samData, samGrants, versionV1 } from './scenario.js'
+import { flow, INSTANCE_ID, resolve, SLUG, samData, samGrants, versionV1 } from './scenario.js'
 
 /** Sam, the signed-in principal who starts the submission (S06, ID-2). */
 const SAM = 'user:sam'
@@ -54,7 +54,7 @@ function grantsFromLog(grants: readonly Grant[]): readonly Grant[] {
 test('#43 a start routes a draft and the submit records the assignment email (S06)', () => {
   // (a) Sam holds instance.start on the flow, read back from the log (AC-1, I4).
   const grants = grantsFromLog(samGrants)
-  const started = startInstance(flow, samData, SAM, deps(), resolve, grants)
+  const started = startInstance(flow, INSTANCE_ID, samData, SAM, deps(), resolve, grants)
   expect(started.operation.type).toBe(INSTANCE_STARTED)
   expect(started.operation.actor).toBe(SAM)
 
@@ -93,19 +93,19 @@ test('#43 a start routes a draft and the submit records the assignment email (S0
 
   // (c) The engine never creates an anonymous draft (ID-2): a start with no
   // principal is refused.
-  expect(() => startInstance(flow, samData, undefined, deps(), resolve, grants)).toThrow(
-    /signed-in principal/
-  )
+  expect(() =>
+    startInstance(flow, INSTANCE_ID, samData, undefined, deps(), resolve, grants)
+  ).toThrow(/signed-in principal/)
 
   // A start without instance.start on the flow is refused (AC-1, I8).
   const noStart: readonly Grant[] = [
     { principal: SAM, scopes: ['flow.read'], resource: `flow:${SLUG}` },
   ]
-  expect(() => startInstance(flow, samData, SAM, deps(), resolve, noStart)).toThrow(
+  expect(() => startInstance(flow, INSTANCE_ID, samData, SAM, deps(), resolve, noStart)).toThrow(
     /instance\.start/
   )
 
   // (d) I6: the same inputs give the same draft and the same route.
-  const twice = startInstance(flow, samData, SAM, deps(), resolve, grants)
+  const twice = startInstance(flow, INSTANCE_ID, samData, SAM, deps(), resolve, grants)
   expect(twice.instance).toEqual(started.instance)
 })

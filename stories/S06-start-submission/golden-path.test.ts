@@ -11,7 +11,7 @@ import {
 } from '../../engine/submission.js'
 import { runGolden } from '../../tools/harness/runner.js'
 import { goldenView, stepOperation } from '../../tools/harness/scenario.js'
-import { flow, golden, resolve, samData, samGrants } from './scenario.js'
+import { flow, golden, INSTANCE_ID, resolve, samData, samGrants } from './scenario.js'
 
 /** Sam, the signed-in principal who starts the submission (S06, ID-2). */
 const SAM = 'user:sam'
@@ -26,7 +26,7 @@ function depsFor(index: number): { clock: () => number; ids: () => string } {
 
 /** The golden path through S06 (start then submit), as the engine's own operations (I6). */
 function submissionOperations(): readonly Operation[] {
-  const started = startInstance(flow, samData, SAM, depsFor(0), resolve, samGrants)
+  const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
   const submitted = submitInstance(started.instance, SAM, depsFor(1), samData)
   return [started.operation, submitted.operation]
 }

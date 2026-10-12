@@ -29,6 +29,9 @@ import {
   terminalDefinition,
 } from './scenario.js'
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
 function deps(): OperationDeps {
   let next = 0
@@ -60,7 +63,7 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
 
   // The start routes the request to the registrar step, whose team target
   // resolves to Lee, Ana and Jordan (S06, I10, I13).
-  const started = startInstance(flow, data, STARTER, sources, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   const state = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
   expect(started.instance.assignees).toEqual([

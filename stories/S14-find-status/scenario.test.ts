@@ -41,6 +41,9 @@ const SEND_BACK_COMMENT = 'The advisor signature is missing'
 /** The time of every event (I6): the clock is injected and the path reads no random source. */
 const NOW = 1_700_000_000_000
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
 function deps(): OperationDeps {
   let next = 0
@@ -79,7 +82,7 @@ test('#51 the status line shows the step, the holder and the wait state, and I8 
   // (a) S05, WF-1: for two overload credits the chair step is skipped, so the
   // start routes past it to the request step (S06, I10).
   expect(isStepSkipped(definition.steps[0], data)).toBe(true)
-  const started = startInstance(flow, data, STARTER, sources, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   let state = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
 

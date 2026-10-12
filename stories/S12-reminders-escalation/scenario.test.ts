@@ -37,6 +37,9 @@ import {
   timers,
 } from './scenario.js'
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** A deterministic ID generator, so two runs of the same steps give the same operations (I6). */
 function idGen(): () => string {
   let next = 0
@@ -84,7 +87,7 @@ test('#49 a stuck task reminds at each interval, escalates at the deadline and c
 
   // Sam starts the request; the advisor target resolves to Okafor, so the
   // draft routes to the advisor step (S06, WF-1, I13).
-  const started = startInstance(flow, data, STARTER, deps, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
   expect(started.instance.currentStep).toBe(ADVISOR_STEP)
   let state = apply(started.operation, emptyState)
 

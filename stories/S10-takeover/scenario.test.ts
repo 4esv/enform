@@ -34,6 +34,9 @@ const TWO_DAYS = 2 * 24 * 60 * 60 * 1000
 /** The reason that Ana gives for the takeover (AS-3, I14). */
 const REASON = 'Lee is out until 10/19'
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The injected sources of the path (I6): the clock is a settable time and the IDs are `op-N`. */
 function sources(clock: () => number): OperationDeps {
   let next = 0
@@ -66,7 +69,7 @@ test('#47 a peer takes over a claimed task after the idle period, with a reason 
 
   // The start routes the request to the registrar step, whose team target
   // resolves to Lee, Ana and Jordan (S06, I10, I13).
-  const started = startInstance(flow, data, STARTER, deps, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
   const state = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
   expect(started.instance.assignees).toEqual([

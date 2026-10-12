@@ -47,6 +47,14 @@ export type ConnectorCall = {
  * delete an entry (I4).
  */
 export type Instance = {
+  /**
+   * The id that identifies the instance (DX-1, #187). The client mints it, as
+   * it mints the operation id (ADR 0004), and a start stamps the instance with
+   * it, exactly as it stamps the starter and the current step. It is absent
+   * before a start sets it, so two starts that give the same instance id are
+   * the same instance (I1).
+   */
+  readonly instanceId?: string
   /** The content hash of the definition version that the instance started on (DF-2). */
   readonly definitionVersion: string
   readonly assignees: readonly Assignee[]

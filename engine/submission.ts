@@ -58,18 +58,21 @@ export type SubmittedInstance = {
 }
 
 /**
- * Start a submission (S06, ID-2, AC-1, DF-2, I10, I13, FM-7). A start needs a
- * signed-in principal (ID-2), and when `grants` are given the acting principal
- * must hold `instance.start` on `flow:<slug>` (AC-1, I8); the caller passes its
- * own grants and those of the groups and the teams that it belongs to, as
- * `grantsOf` reads them from the log. The function routes the draft to the
- * assignees of the first step whose skip condition is false (WF-1, I10), stamps
- * the instance with the content hash of the flow's latest published version
- * (DF-2, I13), and records the values that it routed with (FM-7). It is pure
- * and deterministic (I6).
+ * Start a submission (S06, ID-2, AC-1, DF-2, DX-1, I10, I13, FM-7). A start
+ * needs a signed-in principal (ID-2), and when `grants` are given the acting
+ * principal must hold `instance.start` on `flow:<slug>` (AC-1, I8); the caller
+ * passes its own grants and those of the groups and the teams that it belongs
+ * to, as `grantsOf` reads them from the log. The client mints the instance id
+ * that `instanceId` carries, as it mints the operation id (ADR 0004), and the
+ * start stamps the instance with it (#187). The function routes the draft to
+ * the assignees of the first step whose skip condition is false (WF-1, I10),
+ * stamps the instance with the content hash of the flow's latest published
+ * version (DF-2, I13), and records the values that it routed with (FM-7). It
+ * is pure and deterministic (I6).
  */
 export function startInstance(
   flow: Flow,
+  instanceId: string,
   data: ConditionData,
   actor: ActorId | undefined,
   deps: OperationDeps,
@@ -83,6 +86,7 @@ export function startInstance(
   const assignees = resolveAssignees(step, resolve)
   const instance: Instance = {
     ...createInstance(definition, assignees),
+    instanceId,
     currentStep: step.key,
     submitted: false,
     starter: actor,
@@ -102,8 +106,9 @@ export function startInstance(
 /**
  * The client intent for a start (ADR 0010): the pieces a browser honestly
  * knows. It carries the ID the client chose (I1), the time it read (I6), the
- * principal it acts as (ID-2), the flow slug, and the values it collected
- * (FM-7). Everything else is the engine's to resolve.
+ * principal it acts as (ID-2), the flow slug, the instance id it minted
+ * (DX-1, #187), and the values it collected (FM-7). Everything else is the
+ * engine's to resolve.
  */
 export type StartIntent = {
   readonly id: OperationId
@@ -112,19 +117,21 @@ export type StartIntent = {
   readonly actor: ActorId
   readonly payload: {
     readonly flow: string
+    readonly instanceId: string
     readonly values: ConditionData
   }
 }
 
 /**
  * Resolve a client intent into the operation the engine records (ADR 0010,
- * DX-1, A9, WF-1, I13, DF-2, FM-7). A start intent names a flow and the values
- * it collected; the engine reads the flow's newest published version from the
- * log (DF-2) and runs the same `startInstance` path that the api-mode runner
- * uses, so the route (WF-1), the assignees (I13), the version stamp, the
- * starter and the values (FM-7) are all engine decisions. The client's ID and
- * time survive because they are the injected sources (I1, I6): the function
- * reads no clock and no random source of its own.
+ * DX-1, A9, WF-1, I13, DF-2, FM-7). A start intent names a flow, the instance
+ * id it minted and the values it collected; the engine reads the flow's newest
+ * published version from the log (DF-2) and runs the same `startInstance` path
+ * that the api-mode runner uses, so the route (WF-1), the assignees (I13), the
+ * version stamp, the starter and the values (FM-7) are all engine decisions.
+ * The client's ID, time and instance id survive because they are the injected
+ * sources (I1, I6): the function reads no clock and no random source of its
+ * own.
  *
  * It answers `undefined` when `value` is not a start intent, so an already
  * resolved operation keeps the low-level append path. A value shaped as a
@@ -147,6 +154,7 @@ export function resolveIntent(
   const flow: Flow = { slug: intent.payload.flow, versions: [version] }
   return startInstance(
     flow,
+    intent.payload.instanceId,
     intent.payload.values,
     intent.actor,
     { clock: () => intent.at, ids: () => intent.id },
@@ -158,8 +166,8 @@ export function resolveIntent(
 /**
  * Read a start intent from an unknown value, or undefined when it is not one
  * (ADR 0010). A resolved start carries `definitionVersion`; an intent names
- * `flow`. The detector answers by that shape, so the resolved operation keeps
- * the low-level append path.
+ * `flow` and the instance id it minted. The detector answers by that shape, so
+ * the resolved operation keeps the low-level append path.
  */
 function asStartIntent(value: unknown): StartIntent | undefined {
   if (typeof value !== 'object' || value === null) return undefined
@@ -169,6 +177,7 @@ function asStartIntent(value: unknown): StartIntent | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   const change = payload as Record<string, unknown>
   if (typeof change.flow !== 'string') return undefined
+  if (typeof change.instanceId !== 'string') return undefined
   if (typeof candidate.id !== 'string') throw new Error('intent: the id must be a string (I1)')
   if (typeof candidate.at !== 'number') throw new Error('intent: the at must be a number (I6)')
   if (typeof candidate.actor !== 'string') {
@@ -183,7 +192,7 @@ function asStartIntent(value: unknown): StartIntent | undefined {
     type: INSTANCE_STARTED,
     at: candidate.at,
     actor: candidate.actor,
-    payload: { flow: change.flow, values: values as ConditionData },
+    payload: { flow: change.flow, instanceId: change.instanceId, values: values as ConditionData },
   }
 }
 

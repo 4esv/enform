@@ -19,6 +19,7 @@ import {
   goldenViewPrefix,
   type Scenario,
   type StateView,
+  type Step,
   type StepClock,
   stepOperation,
   toView,
@@ -151,10 +152,11 @@ function runCli(args: readonly string[]): Promise<string> {
  * gui prefix in a browser. Each gui step opens the app at the step's actor,
  * performs its actions in order, and appends exactly one event; the runner
  * then checks that the event equals the engine step at the same index. The
- * browser's intent carries the injected step clock and ID source, so it reads
- * `op-<i+1>` and `at = <i+1>` exactly as `stepOperation` builds them (I6). The
- * run returns the prefix end state, which the caller compares to api mode's
- * prefix; there is no retry (I6).
+ * browser's intent carries the injected step clock, operation ID source and
+ * instance ID source (#187), so it reads `op-<i+1>`, `at = <i+1>` and the
+ * instance id that the step declares, exactly as `stepOperation` builds them
+ * (I6). The run returns the prefix end state, which the caller compares to api
+ * mode's prefix; there is no retry (I6).
  */
 async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
   const gui = scenario.gui
@@ -180,9 +182,7 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
     for (let i = 0; i < gui.length; i += 1) {
       const page = await context.newPage()
       try {
-        await page.addInitScript(
-          `globalThis.__enformSources = { clock: () => ${clock(i)}, ids: () => 'op-${i + 1}' }`
-        )
+        await page.addInitScript(guiSources(scenario.steps[i], i, clock))
         await page.goto(guiUrl(api.port(), flowSlug, scenario.steps[i].actor, gui[i]))
         // The app loads the flow and renders the form asynchronously; wait for
         // the submit control before the step's actions touch the fields.
@@ -223,6 +223,21 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
       server.close((err) => (err ? reject(err) : resolve()))
     )
   }
+}
+
+/**
+ * The injected sources of one gui step (I6): the step clock, the operation ID
+ * source `op-<n>`, and, when the declared step's payload holds one, the
+ * instance id that the step's start minted (DX-1, #187). gui mode reads the
+ * instance id back from the step's payload, so the browser and the golden step
+ * agree without a second convention, and it JSON-escapes the id, so the
+ * injected source returns exactly the string the step declares.
+ */
+function guiSources(step: Step, index: number, clock: StepClock): string {
+  const instanceId = step.payload.instanceId
+  const instanceIds =
+    typeof instanceId === 'string' ? `, instanceIds: () => ${JSON.stringify(instanceId)}` : ''
+  return `globalThis.__enformSources = { clock: () => ${clock(index)}, ids: () => 'op-${index + 1}'${instanceIds} }`
 }
 
 /** The app URL of one gui step: the flow, the step's actor, and its optional page. */

@@ -35,6 +35,9 @@ export const DANA: ActorId = 'user:dana'
 /** Sam, the student who starts the request (S06, AC-5). */
 export const SAM: ActorId = 'user:sam'
 
+/** The instance id that Sam's start mints (DX-1, #187): deterministic, like every injected source (I6). */
+export const INSTANCE_ID = 'inst-1'
+
 /** The worker, which records the connector calls that it runs (SE-1, I13). */
 export const SYSTEM: ActorId = 'system'
 
@@ -154,7 +157,7 @@ export function investigationLog(): Log {
       { kind: 'template', actor: DANA, payload: { name: 'assignment-email' } },
       sources
     ),
-    startInstance(flow, {}, SAM, sources, resolve, starterGrants).operation,
+    startInstance(flow, INSTANCE_ID, {}, SAM, sources, resolve, starterGrants).operation,
     createOperation(CONNECTOR_CALLED, { ...call }, sources, SYSTEM),
   ]
   return operations.reduce((state: State, operation) => apply(operation, state), emptyState).log

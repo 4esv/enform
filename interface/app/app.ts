@@ -1,16 +1,18 @@
-// Issue #181, #184, FM-1, FM-3, FM-7, DX-4, I12, A9, ADR 0010: the app
-// shell, the first browser surface. It loads the published flow through the
-// generated client, builds the form that the model describes, reads the values
-// back, and posts an intent: the flow and the values it collected. The shell
-// decides nothing: it runs no validation, no authorization and no routing
-// (A9). The server resolves the start through the engine, so the shell names
-// no `currentStep` and no `assignees`. The shell reaches the API only through
-// the generated client, so it never names an API path by hand (I12).
+// Issue #181, #184, #187, FM-1, FM-3, FM-7, DX-1, DX-4, I12, A9, ADR 0010: the
+// app shell, the first browser surface. It loads the published flow through
+// the generated client, builds the form that the model describes, reads the
+// values back, and posts an intent: the flow, the instance id it minted and
+// the values it collected. The shell decides nothing: it runs no validation,
+// no authorization and no routing (A9). The server resolves the start through
+// the engine, so the shell names no `currentStep` and no `assignees`. The
+// shell reaches the API only through the generated client, so it never names
+// an API path by hand (I12).
 //
-// The clock and the ID source enter at one place, the mount options, so a
-// caller can inject them. The defaults are Date.now and crypto.randomUUID.
-// This mirrors the engine's injected sources (I6); gui mode will inject its
-// own.
+// The clock and the ID sources enter at one place, the mount options, so a
+// caller can inject them. The defaults are Date.now and crypto.randomUUID, and
+// the instance id has a source of its own, because it is not the operation id
+// (DX-1, #187). This mirrors the engine's injected sources (I6); gui mode will
+// inject its own.
 
 import { appendOperation, type Operation, readFlow, setClient } from '../client/client.js'
 import { controlKind, type FormField, formModel, type JsonValue, stepKeys } from './form.js'
@@ -28,14 +30,17 @@ export interface AppOptions {
   readonly actor: string
   /** The injected clock (I6); absent means Date.now. */
   readonly clock?: () => number
-  /** The injected ID source (I1, I6); absent means crypto.randomUUID. */
+  /** The injected operation ID source (I1, I6); absent means crypto.randomUUID. */
   readonly ids?: () => string
+  /** The injected instance ID source (DX-1, #187, I6); absent means crypto.randomUUID. */
+  readonly instanceIds?: () => string
 }
 
 /** Load the flow, render its first step and wire the submit (FM-1, A9). */
 export async function mountApp(options: AppOptions): Promise<void> {
   const clock = options.clock ?? (() => Date.now())
   const ids = options.ids ?? (() => crypto.randomUUID())
+  const instanceIds = options.instanceIds ?? (() => crypto.randomUUID())
   const readers = new Map<string, () => JsonValue>()
 
   const readValues = (): Record<string, JsonValue> => {
@@ -95,6 +100,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
         actor: options.actor,
         payload: {
           flow: options.slug,
+          instanceId: instanceIds(),
           values: readValues(),
         },
       }

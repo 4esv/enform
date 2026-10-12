@@ -57,6 +57,9 @@ function deps(): OperationDeps {
 const startedValues: ConditionData = { summary: 'hello', urgent: false }
 const captured: ConditionData = { summary: 'hello', detail: 'more detail' }
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 const ajv = new Ajv2020({ logger: false })
 const validateStarted = ajv.compile(
   JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.started@1.json'), 'utf8'))
@@ -66,7 +69,7 @@ const validateSubmitted = ajv.compile(
 )
 
 test('#177 FM-7 the published event schemas match the payloads the engine writes', () => {
-  const started = startInstance(flow, startedValues, SAM, deps(), resolve, grants)
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
   const submitted = submitInstance(started.instance, SAM, deps(), captured)
 
   // The real payloads validate against the published schemas (MVP.md 9.1).
@@ -78,4 +81,20 @@ test('#177 FM-7 the published event schemas match the payloads the engine writes
   // true.
   expect(validateStarted({ ...started.operation.payload, values: 'not a record' })).toBe(false)
   expect(validateSubmitted({ ...submitted.operation.payload, submitted: false })).toBe(false)
+})
+
+// Issue #187, DX-1, ADR 0004, I4, FM-7: the published start schema carries the
+// instance id, so a client builds the operation payload from the schema (MVP.md
+// 9.1) and a reader of an event knows the instance the event started.
+
+test.fails('#187 the published start schema requires the instance id (DX-1)', () => {
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
+  const payload = started.operation.payload
+  const { instanceId, ...withoutInstanceId } = payload
+
+  expect(instanceId, 'the start payload carries the instance id').toBe(INSTANCE_ID)
+  expect(validateStarted(payload), 'the real start payload validates').toBe(true)
+  expect(validateStarted(withoutInstanceId), 'a payload without the instance id is rejected').toBe(
+    false
+  )
 })

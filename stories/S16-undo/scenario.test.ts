@@ -47,6 +47,9 @@ import {
 /** The reason that Lee gives for the undo (STORIES.md, S16). */
 const REASON = 'Approved the wrong request'
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The time of the first operation (I6): the clock is injected, one minute per operation. */
 const NOW = 1_700_000_000_000
 
@@ -120,7 +123,7 @@ test('#53 an undo appends a compensating event and marks the side effects that a
 
   // Sam starts the request: the start routes the draft to the request step,
   // whose starter target resolves to him (S06, WF-1, I13).
-  const started = startInstance(flow, data, STARTER, sources, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
   let state = apply(started.operation, emptyState)
 

@@ -47,6 +47,9 @@ const CLOSED_AT = 1_700_000_000_000
 /** One day: the undo period that the flow allows (WF-5, S13). */
 const UNDO_PERIOD = 24 * 60 * 60 * 1000
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 /** The injected sources of the path (I6): the clock is a settable time and the IDs are `op-N`. */
 function deps(clock: () => number): OperationDeps {
   let next = 0
@@ -92,7 +95,7 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
 
   // The start routes the request to the request step, whose starter target
   // resolves to Sam, and records him as the starter (S06, WF-1, AC-5).
-  const started = startInstance(flow, data, STARTER, sources, resolve, starterGrants)
+  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   expect(started.instance.starter).toBe(STARTER)
   let state = apply(started.operation, emptyState)
 

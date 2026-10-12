@@ -23,6 +23,13 @@ import { type Step, scenario } from '../../tools/harness/scenario.js'
 /** The flow slug of the story (STORIES.md, the example flow). */
 export const SLUG = 'course-overload'
 
+/**
+ * The instance id that Sam's start mints (DX-1, #187): deterministic, like
+ * every injected source (I6). The fixture and the browser cannot drift,
+ * because gui mode reads this id back from the start step's payload.
+ */
+export const INSTANCE_ID = 'inst-1'
+
 /** The definition of version 1, the version that a start pins the instance to (DF-1, DF-2). */
 export const definitionV1: FlowDefinition = parse(`{
   "schemaVersion": 2,
@@ -119,7 +126,7 @@ function withoutOutbox(
 
 /** The golden path of S06 (STORIES.md): Sam starts, then submits (ID-2, WF-1, I2, SE-1, FM-7). */
 function submissionSteps(): readonly Step[] {
-  const started = startInstance(flow, samData, SAM, depsFor(0), resolve, samGrants)
+  const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
   const submitted = submitInstance(started.instance, SAM, depsFor(1), samData)
 
   return [

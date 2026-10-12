@@ -63,6 +63,9 @@ function flowOf(definition: FlowDefinition): Flow {
 /** The injected sources of a start (I6): a fixed clock time and one operation ID. */
 const deps = { clock: () => 1_700_000_000_000, ids: () => 'op-1' }
 
+/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
+const INSTANCE_ID = 'inst-1'
+
 test('#71 ID-3 anonymous access is an explicit setting for each flow', () => {
   // (a) The default sends a visitor who is not signed in to SSO (ID-2): the
   // flow does not allow anonymous access, so the visitor cannot view it.
@@ -72,9 +75,9 @@ test('#71 ID-3 anonymous access is an explicit setting for each flow', () => {
 
   // The setting never creates a draft: a start with no principal is still
   // refused (ID-2).
-  expect(() => startInstance(flowOf(privateFlow), {}, undefined, deps, resolve)).toThrow(
-    /signed-in principal/
-  )
+  expect(() =>
+    startInstance(flowOf(privateFlow), INSTANCE_ID, {}, undefined, deps, resolve)
+  ).toThrow(/signed-in principal/)
 
   // (b) With the setting on, a visitor who is not signed in may open the form,
   // and the definition exposes the setting (ID-3, A4).
@@ -85,9 +88,9 @@ test('#71 ID-3 anonymous access is an explicit setting for each flow', () => {
   // (c) Viewing is not starting (ID-3 against ID-2): an anonymous flow still
   // refuses a start with no principal, so the engine never creates a draft
   // without sign-in.
-  expect(() => startInstance(flowOf(anonymousFlow), {}, undefined, deps, resolve)).toThrow(
-    /signed-in principal/
-  )
+  expect(() =>
+    startInstance(flowOf(anonymousFlow), INSTANCE_ID, {}, undefined, deps, resolve)
+  ).toThrow(/signed-in principal/)
 
   // (d) The canonical round trip carries the optional field (I9, DF-4): the
   // canonical file form includes the setting when the definition has it, and
