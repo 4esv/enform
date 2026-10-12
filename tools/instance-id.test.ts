@@ -51,7 +51,7 @@ const grants: readonly Grant[] = [
 
 const values: ConditionData = { summary: 'hello', urgent: false }
 
-test.fails('#187 a start carries the instance id that the client minted (DX-1)', () => {
+test('#187 a start carries the instance id that the client minted (DX-1)', () => {
   const deps: OperationDeps = { clock: () => 1_700_000_000_000, ids: () => OPERATION_ID }
   const started = startInstance(flow, INSTANCE_ID, values, SAM, deps, resolve, grants)
 

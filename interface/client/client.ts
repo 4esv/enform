@@ -25,9 +25,9 @@ export interface Operation {
 
 /**
  * A start intent (ADR 0010): the parts a client can honestly send on the write path. It carries
- * the operation ID it chose (I1), the event type, the actor, and the flow and values it
- * collected (FM-7). The server resolves the route, the assignees and the version stamp through
- * the engine before it appends.
+ * the operation ID and the instance ID it chose (I1, DX-1), the event type, the actor, and the
+ * flow and values it collected (FM-7). The server resolves the route, the assignees and the
+ * version stamp through the engine before it appends.
  */
 export interface Intent {
   readonly id: OperationId

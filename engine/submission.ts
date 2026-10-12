@@ -64,11 +64,12 @@ export type SubmittedInstance = {
  * passes its own grants and those of the groups and the teams that it belongs
  * to, as `grantsOf` reads them from the log. The client mints the instance id
  * that `instanceId` carries, as it mints the operation id (ADR 0004), and the
- * start stamps the instance with it (#187). The function routes the draft to
- * the assignees of the first step whose skip condition is false (WF-1, I10),
- * stamps the instance with the content hash of the flow's latest published
- * version (DF-2, I13), and records the values that it routed with (FM-7). It
- * is pure and deterministic (I6).
+ * start records it on the instance and in the `instance.started@1` payload, so
+ * the log names the instance that the event started (#187). The function routes
+ * the draft to the assignees of the first step whose skip condition is false
+ * (WF-1, I10), stamps the instance with the content hash of the flow's latest
+ * published version (DF-2, I13), and records the values that it routed with
+ * (FM-7). It is pure and deterministic (I6).
  */
 export function startInstance(
   flow: Flow,
@@ -93,6 +94,7 @@ export function startInstance(
     values: data,
   }
   const change = {
+    instanceId,
     definitionVersion: instance.definitionVersion,
     currentStep: step.key,
     assignees,
@@ -135,7 +137,9 @@ export type StartIntent = {
  *
  * It answers `undefined` when `value` is not a start intent, so an already
  * resolved operation keeps the low-level append path. A value shaped as a
- * start intent but unresolvable throws a named error.
+ * start intent but unresolvable throws a named error, and an intent that names
+ * a flow but no instance id is refused by shape rather than appended as a raw
+ * operation (#187).
  */
 export function resolveIntent(
   log: Log,
@@ -177,7 +181,9 @@ function asStartIntent(value: unknown): StartIntent | undefined {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   const change = payload as Record<string, unknown>
   if (typeof change.flow !== 'string') return undefined
-  if (typeof change.instanceId !== 'string') return undefined
+  if (typeof change.instanceId !== 'string') {
+    throw new Error('intent: the instanceId must be a string (DX-1)')
+  }
   if (typeof candidate.id !== 'string') throw new Error('intent: the id must be a string (I1)')
   if (typeof candidate.at !== 'number') throw new Error('intent: the at must be a number (I6)')
   if (typeof candidate.actor !== 'string') {

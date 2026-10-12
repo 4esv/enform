@@ -134,10 +134,10 @@ components:
       type: object
       description: >-
         A start intent (ADR 0010): the parts a client can honestly send on
-        the write path. It carries the operation ID it chose (I1), the event
-        type, the actor, and the flow and values it collected (FM-7). The
-        server resolves the route, the assignees and the version stamp
-        through the engine before it appends.
+        the write path. It carries the operation ID and the instance ID it
+        chose (I1, DX-1), the event type, the actor, and the flow and values
+        it collected (FM-7). The server resolves the route, the assignees and
+        the version stamp through the engine before it appends.
       required: [id, type, at, actor, payload]
       properties:
         id:
@@ -155,12 +155,20 @@ components:
           $ref: '#/components/schemas/ActorId'
         payload:
           type: object
-          description: The flow and the values the client collected (FM-7).
-          required: [flow, values]
+          description: >-
+            The flow, the instance ID and the values the client collected
+            (DX-1, FM-7).
+          required: [flow, instanceId, values]
           properties:
             flow:
               type: string
               description: The flow slug (ID-1).
+            instanceId:
+              type: string
+              description: >-
+                The ID that identifies the instance, minted by the client
+                (DX-1). It is not the operation ID: the operation ID names one
+                change, the instance ID names the instance the change acts on.
             values:
               type: object
               description: >-

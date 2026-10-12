@@ -8,14 +8,14 @@ import { flowState, golden, resolve, samGrants } from './scenario.js'
 // scenario's steps in a browser, and each covered GUI step maps to the engine
 // step at the same index. The interface path of S06 covers the start step
 // only: Sam opens the form link, fills the request form and submits it, which
-// appends instance.started@1. The submit step is uncovered today, because a
-// submit intent needs an instance identity that instance.started@1 does not
-// carry, so the scenario's gui path declares the start prefix and this check
-// compares that prefix to api mode's.
+// appends instance.started@1. The submit step is uncovered today, because no
+// submit intent exists yet: the log carries the instance id since #187, but
+// nothing resolves a submit, so the scenario's gui path declares the start
+// prefix and this check compares that prefix to api mode's.
 //
-// The runner injects the same step clock and ID source that stepOperation
-// uses, so the browser's intent carries `op-1` and `at = 1` exactly, and the
-// resolved event equals the engine's start (I6).
+// The runner injects the same step clock and ID sources that stepOperation
+// uses, so the browser's intent carries `op-1`, the step's instance id and
+// `at = 1` exactly, and the resolved event equals the engine's start (I6).
 
 test('#27 the S06 gui path maps its declared prefix to the engine steps', async () => {
   const declared = golden.gui?.length ?? 0

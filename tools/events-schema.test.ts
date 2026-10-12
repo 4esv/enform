@@ -87,7 +87,7 @@ test('#177 FM-7 the published event schemas match the payloads the engine writes
 // instance id, so a client builds the operation payload from the schema (MVP.md
 // 9.1) and a reader of an event knows the instance the event started.
 
-test.fails('#187 the published start schema requires the instance id (DX-1)', () => {
+test('#187 the published start schema requires the instance id (DX-1)', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
   const payload = started.operation.payload
   const { instanceId, ...withoutInstanceId } = payload

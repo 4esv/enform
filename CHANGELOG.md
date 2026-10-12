@@ -66,6 +66,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The web interface ships the first browser form: a pure form model narrows a v2 definition into the fields a step shows, and the app shell loads the published flow, renders the form and submits it as an instance.started@1 operation (FM-1, FM-3, FM-7, DX-4, I12) (#181).
 - The HTTP API resolves a start intent through the engine before it appends, so a browser posts only the flow and its values and the client's ID and time survive (ADR 0010) (#184).
 - The story harness runs a scenario in gui mode: Playwright drives the interface, the browser's intent carries the injected step clock and ID source, and each covered GUI step maps to the engine step at the same index (I6, ADR 0009, ADR 0010) (#27).
+- The log carries the identity of the instance a change acts on: the client mints the instance id beside the operation id, a start intent carries it and the server refuses one that lacks it, and the instance and the `instance.started@1` payload carry it (DX-1, I1, I13, S06) (#187). The event type stays `instance.started@1`: no release tag exists, so no event of the old shape was written, and the shape extends in place (`MVP.md` 9.3, #188).
 
 ## [0.0.0] - 2026-10-08
 

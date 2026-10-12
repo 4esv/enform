@@ -102,7 +102,7 @@ This table records where each story was done. Update it in the same pull request
 | S03 | #40 | stories/S03-edit-text/scenario.test.ts | e436106 | | | Engine in progress |
 | S04 | #41 | stories/S04-add-field-live/scenario.test.ts | c38bb5e | | | Engine in progress |
 | S05 | #42 | stories/S05-skip-step/scenario.test.ts | 501e5e3 | | | Engine in progress |
-| S06 | #43 | stories/S06-start-submission/scenario.test.ts | 7d0b973 | | | Engine in progress |
+| S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/golden-path.test.ts | 7d0b973 f0acdb8 | #181 | 640d062 f9e809d f9e5224 | Interface in progress |
 | S07 | #44 | | | | | Not started |
 | S08 | #45 | stories/S08-route/scenario.test.ts | c3d8025 | | | Engine in progress |
 | S09 | #46 | stories/S09-claim-approve/scenario.test.ts | 8888d67 | | | Engine in progress |

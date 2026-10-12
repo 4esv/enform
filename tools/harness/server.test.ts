@@ -219,9 +219,7 @@ async function withApi(
   }
 }
 
-// Expected to fail until the engine records the instance id that the intent
-// carries (#187); the intent already sends it and the payload must keep it.
-test.fails('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
+test('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
   await withApi(intentState(), { resolve }, async (base, api) => {
     const intent = {
       id: 'intent-1',
@@ -285,7 +283,7 @@ test('#184 an unresolvable intent is refused with a named error and appends noth
 // client minted, and the server refuses an intent that lacks one by shape, as
 // it already does for the id, the time, the actor and the values.
 
-test.fails('#187 an intent without an instance id is refused with a named error and appends nothing', async () => {
+test('#187 an intent without an instance id is refused with a named error and appends nothing', async () => {
   await withApi(intentState(), { resolve }, async (base, api) => {
     const intent = {
       id: 'intent-3',
