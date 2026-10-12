@@ -100,6 +100,7 @@ test('#47 a peer takes over a claimed task after the idle period, with a reason 
   expect(taken.operation?.type).toBe(STEP_TAKEN_OVER)
   expect(taken.operation?.actor).toBe(ANA)
   expect(taken.operation?.payload).toEqual({
+    instanceId: INSTANCE_ID,
     step: REGISTRAR_STEP,
     from: LEE,
     to: ANA,

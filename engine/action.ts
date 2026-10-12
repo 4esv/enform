@@ -1,4 +1,6 @@
 // Issue #46, S09, AS-2, AC-4, I5, I6, I8, I14, A1, A9: claim and complete a task.
+// Issue #76, DX-1, #187: a claim and a completion name the instance they act
+// on, so the log says which instance each step operation belongs to.
 //
 // S09: the registrar task shows in the Available tab of Lee and of Ana. To
 // open it claims nothing (AS-2): the first person to claim the task owns it,
@@ -80,7 +82,12 @@ export function claim(
     return { accepted: false, instance, reason: `step ${step}: ${actor} is not an assignee` }
   }
   const claimed: Instance = { ...instance, holder: actor, version: version + 1 }
-  const operation = createOperation(STEP_CLAIMED, { step, holder: actor }, deps, actor)
+  const operation = createOperation(
+    STEP_CLAIMED,
+    { instanceId: instance.instanceId, step, holder: actor },
+    deps,
+    actor
+  )
   return { accepted: true, instance: claimed, operation }
 }
 
@@ -136,7 +143,12 @@ export function complete(
     done: next === undefined,
     version: version + 1,
   }
-  const operation = createOperation(STEP_COMPLETED, { step, outcome }, deps, actor)
+  const operation = createOperation(
+    STEP_COMPLETED,
+    { instanceId: instance.instanceId, step, outcome },
+    deps,
+    actor
+  )
   return { accepted: true, instance: completed, operation }
 }
 
@@ -160,7 +172,11 @@ function claimRefusal(step: string, holder: ActorId | undefined): string {
     : `step ${step}: claimed by ${holder} just now`
 }
 
-/** The step that follows one key in definition order (WF-1); absent at the last step. */
+/**
+ * The step that follows one key in definition order (WF-1); absent at the last
+ * step. The completion advances to it, and the instance projection (#76) reads
+ * the same transition, so the write path and the read cannot disagree.
+ */
 function nextStep(definition: FlowDefinition, key: string): FlowStep | undefined {
   const index = definition.steps.findIndex((step) => step.key === key)
   return index === -1 ? undefined : definition.steps[index + 1]

@@ -195,6 +195,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
     },
   })
   expect(sent.operation?.payload).toEqual({
+    instanceId: INSTANCE_ID,
     from: REGISTRAR_STEP,
     to: REQUEST_STEP,
     comment: COMMENT,

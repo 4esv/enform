@@ -1,4 +1,5 @@
 // Issue #47, S10, AS-3, WF-5, A1, A2, I2, I5, I6, I14: take over a claimed task.
+// Issue #76, DX-1, #187: a takeover names the instance it acts on.
 //
 // S10: Lee claimed the registrar task and went on vacation. Any eligible
 // assignee of the step can take over a claimed task (AS-3), but only when the
@@ -99,7 +100,14 @@ export function takeover(
     return { accepted: false, instance, reason: idleRefusal(step, holder, idle, idleTimeout) }
   }
   const taken: Instance = { ...instance, holder: actor, version: version + 1 }
-  const change = { step, from: holder, to: actor, when: now, why: reason }
+  const change = {
+    instanceId: instance.instanceId,
+    step,
+    from: holder,
+    to: actor,
+    when: now,
+    why: reason,
+  }
   const outbox = notification(holder, actor, step, reason)
   const operation = createOutboxOperation(STEP_TAKEN_OVER, change, [outbox], deps, actor)
   return { accepted: true, instance: taken, operation, outbox }

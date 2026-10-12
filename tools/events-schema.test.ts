@@ -105,7 +105,7 @@ test('#187 the published start schema requires the instance id (DX-1)', () => {
 // stays instance.submitted@1: no release tag exists, so the shape extends in
 // place (MVP.md 9.3, #188).
 
-test.fails('#76 the published submit schema requires the instance id (DX-1)', () => {
+test('#76 the published submit schema requires the instance id (DX-1)', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
   const payload = submitInstance(started.instance, SAM, deps(), captured).operation.payload
   const { instanceId, ...withoutInstanceId } = payload

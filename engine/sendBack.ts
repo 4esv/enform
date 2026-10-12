@@ -1,5 +1,6 @@
 // Issue #48, S11, WF-2, WF-3, AC-4, SE-2, I2, I5, I6, I8, I14: send an
 // instance back for revision.
+// Issue #76, DX-1, #187: a send back names the instance it acts on.
 //
 // S11: Jordan, a registrar reviewer, holds only `step.outcome:send_back` on
 // the registrar step, so he may send a task back and may not approve it
@@ -125,7 +126,7 @@ export function sendBack(
     revisions,
     version: version + 1,
   }
-  const change = { from: step, to: toStep, comment, revision }
+  const change = { instanceId: instance.instanceId, from: step, to: toStep, comment, revision }
   const outbox = note(instance, actor, step, toStep, comment)
   const operation = createOutboxOperation(STEP_SENT_BACK, change, [outbox], deps, actor)
   return { accepted: true, instance: sentBack, operation, outbox }
