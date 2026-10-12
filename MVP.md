@@ -355,7 +355,7 @@ Release tags are signed. They come only from `main`. Their format is `v<MAJOR>.<
 ### 9.3 Schema and event evolution
 
 - **Definition schema.** The engine reads all earlier values of `schemaVersion`. It writes only the latest value. Each increment includes a forward migrator, with fixture tests for each earlier version.
-- **Events.** The engine never rewrites an event. A changed event shape gets a new type version. An upcaster converts old events when the engine reads them.
+- **Events.** The engine never rewrites an event. A changed event shape gets a new type version. An upcaster converts old events when the engine reads them. Before the first tagged release there are no old events to convert, so a shape change extends the current type version in place, and the bump rule applies from the first release.
 - **Realtime protocol.** The server supports the current version and the previous version. It tells older clients to reload.
 
 ### 9.4 Deprecation (from 1.0.0)
@@ -478,3 +478,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | D7 names the pilot flow: `information-request`. | D7 | The real flow sets the limits of the MVP (#104). |
 | 2026-10-08 | Reviewer-only work is a named variant of S09 and S11. No S17. | AC-4, WF-2 | S02 and S11 already test the reviewer's limits (#105). |
 | 2026-10-11 | 5.3 gains FM-7: the engine records the values that a form holds, a start and a step completion carry them, and the public API reads them back. Section 8 places FM-7 at `0.4.0`. S06 cites it. | FM-7 | FM-1 validates a value and FM-4 re-validates a submission, but no value reached the server: `Instance` had no field for values, the `instance.started@1` and `instance.submitted@1` payloads recorded only the route, and no event type carried one, so the form, its PDF (OU-1) and its re-validation had no data (#175). |
+| 2026-10-12 | 9.3: before the first tagged release, a shape change extends the current event type version in place. The bump rule applies from the first release. | I4 | No release tag exists, so no event with the old shape was ever written: an upcaster would have to mint an instance id for events that do not exist, and the only deterministic input an old event carries is its operation id (#188). |
