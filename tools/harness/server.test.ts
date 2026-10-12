@@ -312,7 +312,7 @@ test('#187 an intent without an instance id is refused with a named error and ap
 // an actor that may not read the instance answers 403 and an instance the log
 // does not hold answers 404.
 
-test.fails('#76 the api-mode server reads one instance and refuses the rest (I8)', async () => {
+test('#76 the api-mode server reads one instance and refuses the rest (I8)', async () => {
   await withApi(intentState(), { resolve }, async (base) => {
     // Start the S06 instance through a posted intent (ADR 0010).
     const start = await fetch(`${base}/api/v1/operations`, {

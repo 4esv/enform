@@ -73,6 +73,40 @@ export interface PublishedFlow {
   readonly definition: Record<string, unknown>
 }
 
+/**
+ * The status line of an instance (VT-1, VT-2, S14): the position of the active step and the
+ * total, the current step and its holder, the state in plain language, and the steps a
+ * condition skipped.
+ */
+export interface Status {
+  readonly step: number
+  readonly totalSteps: number
+  readonly currentStep?: string
+  readonly holder?: ActorId
+  readonly state: string
+  readonly skipped: readonly Record<string, unknown>[]
+}
+
+/**
+ * The instance as one actor and the current step see it (#76, FM-3, FM-7, VT-4). The values
+ * hold only the field keys the current step makes visible, so a field the step hides is absent
+ * (FM-3 criterion 1).
+ */
+export interface InstanceView {
+  readonly instanceId: string
+  readonly status: Status
+  readonly visible: readonly string[]
+  readonly editable: readonly string[]
+  readonly values: Record<string, unknown>
+}
+
+/**
+ * An error response, with a short machine-readable message.
+ */
+export interface ApiError {
+  readonly error: string
+}
+
 export interface ClientConfig {
   readonly baseUrl: string
   readonly token: string
@@ -94,7 +128,8 @@ function headers(): Record<string, string> {
 }
 
 export async function appendOperation(operation: Operation): Promise<Event> {
-  const response = await fetch(`${configured().baseUrl}/api/v1/operations`, {
+  const url = `${configured().baseUrl}/api/v1/operations`
+  const response = await fetch(url, {
     method: 'POST',
     headers: { ...headers(), 'content-type': 'application/json' },
     body: JSON.stringify(operation),
@@ -104,7 +139,8 @@ export async function appendOperation(operation: Operation): Promise<Event> {
 }
 
 export async function readFlow(slug: string): Promise<PublishedFlow> {
-  const response = await fetch(`${configured().baseUrl}/api/v1/flows/${slug}`, {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}`
+  const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
   })
@@ -112,8 +148,19 @@ export async function readFlow(slug: string): Promise<PublishedFlow> {
   return (await response.json()) as PublishedFlow
 }
 
+export async function readInstance(instanceId: string, actor: string): Promise<InstanceView> {
+  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}?actor=${encodeURIComponent(String(actor))}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  return (await response.json()) as InstanceView
+}
+
 export async function readLog(): Promise<Log> {
-  const response = await fetch(`${configured().baseUrl}/api/v1/log`, {
+  const url = `${configured().baseUrl}/api/v1/log`
+  const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
   })
@@ -122,7 +169,8 @@ export async function readLog(): Promise<Log> {
 }
 
 export async function readState(): Promise<State> {
-  const response = await fetch(`${configured().baseUrl}/api/v1/state`, {
+  const url = `${configured().baseUrl}/api/v1/state`
+  const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
   })

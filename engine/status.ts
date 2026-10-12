@@ -185,8 +185,13 @@ export function visibleTo(
   }
 }
 
-/** Whether an actor may read an instance (AC-5, AS-2, I8): its starter, its assignee, or `instance.read`. */
-function mayRead(actor: ActorId, instance: Instance, context: StatusContext): boolean {
+/**
+ * Whether an actor may read an instance (AC-5, AS-2, I8): its starter, its
+ * assignee, or a principal that holds `instance.read` on the flow. The
+ * step-scoped read (instances.ts, #76) reuses this exact rule, so a read and a
+ * write authorize the same way (AC-1).
+ */
+export function mayRead(actor: ActorId, instance: Instance, context: StatusContext): boolean {
   if (actor === instance.starter) return true
   if (instance.assignees.some((assignee) => assignee.members.includes(actor))) return true
   return authorize(context.grants, 'instance.read', `flow:${context.flow}`)

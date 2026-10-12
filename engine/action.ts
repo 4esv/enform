@@ -177,7 +177,7 @@ function claimRefusal(step: string, holder: ActorId | undefined): string {
  * step. The completion advances to it, and the instance projection (#76) reads
  * the same transition, so the write path and the read cannot disagree.
  */
-function nextStep(definition: FlowDefinition, key: string): FlowStep | undefined {
+export function nextStep(definition: FlowDefinition, key: string): FlowStep | undefined {
   const index = definition.steps.findIndex((step) => step.key === key)
   return index === -1 ? undefined : definition.steps[index + 1]
 }

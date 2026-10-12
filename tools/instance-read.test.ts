@@ -115,7 +115,7 @@ function context(state: State, grants: readonly Grant[]) {
   return { flow: SLUG, definition, log: state.log, grants }
 }
 
-test.fails('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', () => {
+test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', () => {
   const sources = deps()
   let state = seeded(sources)
   const started = startInstance(
@@ -153,7 +153,7 @@ test.fails('#76 FM-3 a step read hides a field it does not make visible (FM-3, I
   expect(readInstance(OUTSIDER, instance, context(state, []))).toBeUndefined()
 })
 
-test.fails('#76 FM-3 the read reflects the instance log, and another instance never leaks (I4, I6)', () => {
+test('#76 FM-3 the read reflects the instance log, and another instance never leaks (I4, I6)', () => {
   const sources = deps()
   let state = seeded(sources)
   const first = startInstance(
@@ -231,7 +231,7 @@ test.fails('#76 FM-3 the read reflects the instance log, and another instance ne
 // version it is pinned to, so the projection answers undefined rather than
 // guessing a transition (DF-2). The condition is data, not a fixture: a start
 // always publishes its version (DF-2), so this is the malformed-log case.
-test.fails('#76 an instance whose pinned definition is absent is not projected (DF-2)', () => {
+test('#76 an instance whose pinned definition is absent is not projected (DF-2)', () => {
   const sources = deps()
   const started = startInstance(
     flow,

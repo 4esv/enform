@@ -40,6 +40,14 @@ export type FlowVersion = {
   readonly definition: FlowDefinition
 }
 
+/**
+ * A published version read back from the log with its flow slug (#76, DF-2).
+ * An instance records only the content hash of the definition it started on
+ * (DF-2), so a read that finds the version by hash also needs the slug that
+ * names the flow. It is a `FlowVersion` plus the slug.
+ */
+export type PublishedVersion = FlowVersion & { readonly slug: string }
+
 /** The state of one flow: its slug, its draft and its published versions (DF-1, DF-2). */
 export type Flow = {
   /** The flow slug (ID-1). */
@@ -177,6 +185,31 @@ export function publishedFlow(log: Log, slug: string): FlowVersion | undefined {
     if (event.type !== DEFINITION_PUBLISHED) continue
     if (event.payload.slug !== slug) continue
     return {
+      version: event.payload.version as number,
+      contentHash: event.payload.contentHash as string,
+      definition: event.payload.definition as FlowDefinition,
+    }
+  }
+  return undefined
+}
+
+/**
+ * Derive the published version of a flow by its content hash (#76, I4, I6,
+ * DF-2). An instance records the content hash of the definition that it
+ * started on (DF-2), and this reads that exact version back: the
+ * `config.definition.published@1` event whose payload content hash matches.
+ * An immutable version (DF-2) makes the hash name at most one version, so the
+ * log order does not choose between candidates. It is a pure function of the
+ * log: no clock, no random source, no I/O (I6). A hash that the log does not
+ * hold gives undefined.
+ */
+export function publishedByHash(log: Log, contentHash: string): PublishedVersion | undefined {
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const event = log[i]
+    if (event.type !== DEFINITION_PUBLISHED) continue
+    if (event.payload.contentHash !== contentHash) continue
+    return {
+      slug: event.payload.slug as string,
       version: event.payload.version as number,
       contentHash: event.payload.contentHash as string,
       definition: event.payload.definition as FlowDefinition,
