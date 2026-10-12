@@ -1,5 +1,7 @@
 // Issue #50, S13, WF-4, WF-5, AC-1, AC-5, SE-2, SE-5, I2, I4, I6, I14:
 // withdraw or cancel a submission, and undo it.
+// Issue #76, DX-1, #187: a withdraw, a cancel and an undo name the instance
+// they act on.
 //
 // S13: Sam withdraws his own request (WF-4, AC-5). Priya cancels an invalid
 // request, and she holds `instance.cancel` (AC-5, AC-1). Both close the open
@@ -213,7 +215,12 @@ export function undoWithdrawOrCancel(
     closedBy: undefined,
     version: version + 1,
   }
-  const change = { undoOf: kind, step, holder: instance.previousHolder }
+  const change = {
+    instanceId: instance.instanceId,
+    undoOf: kind,
+    step,
+    holder: instance.previousHolder,
+  }
   const operation = createOperation(INSTANCE_UNDONE, change, deps, actor)
   return { accepted: true, instance: restored, operation }
 }
@@ -234,7 +241,7 @@ function close(
   reason: string,
   deps: OperationDeps
 ): CloseResult {
-  const change = { step, holder: instance.holder, reason }
+  const change = { instanceId: instance.instanceId, step, holder: instance.holder, reason }
   const outbox = notification(instance, actor, step, reason)
   const entries = outbox === undefined ? [] : [outbox]
   const operation = createOutboxOperation(type, change, entries, deps, actor)

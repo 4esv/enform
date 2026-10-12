@@ -1,5 +1,6 @@
 // Issue #43, #177, S06, ID-2, AC-1, I2, I6, I10, I13, I14, SE-1, FM-7:
 // start and submit a submission.
+// Issue #76, DX-1, #187: a start and a submit name the instance they act on.
 //
 // S06: Sam opens a form link, fills it in and submits it. The engine never
 // creates an anonymous draft (ID-2): a start needs a signed-in principal, and
@@ -203,12 +204,15 @@ function asStartIntent(value: unknown): StartIntent | undefined {
 }
 
 /**
- * Submit a submission (S06, I2, SE-1, FM-7). The instance becomes submitted,
- * and one operation records the mark, the values that the step captured merged
- * over what the instance already held (FM-7), and the assignment email that the
- * first assignee receives, so one apply commits the state change and its side
- * effect together (I2). The engine records the email; a worker delivers it
- * later (SE-1). The function is pure and deterministic (I6).
+ * Submit a submission (S06, I2, SE-1, FM-7, DX-1). The instance becomes
+ * submitted, and one operation records the instance it acts on (#76, #187),
+ * the mark, the values that the step captured merged over what the instance
+ * already held (FM-7), and the assignment email that the first assignee
+ * receives, so one apply commits the state change and its side effect together
+ * (I2). The event type stays `instance.submitted@1`: no release tag exists, so
+ * the shape extends in place (MVP.md 9.3, #188). The engine records the email;
+ * a worker delivers it later (SE-1). The function is pure and deterministic
+ * (I6).
  */
 export function submitInstance(
   instance: Instance,
@@ -218,7 +222,12 @@ export function submitInstance(
 ): SubmittedInstance {
   const merged = mergeValues(instance.values, values)
   const submitted: Instance = { ...instance, submitted: true, values: merged }
-  const change = { currentStep: instance.currentStep, submitted: true, values: merged }
+  const change = {
+    instanceId: instance.instanceId,
+    currentStep: instance.currentStep,
+    submitted: true,
+    values: merged,
+  }
   const operation = createOutboxOperation(
     INSTANCE_SUBMITTED,
     change,

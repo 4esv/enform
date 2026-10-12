@@ -98,3 +98,23 @@ test('#187 the published start schema requires the instance id (DX-1)', () => {
     false
   )
 })
+
+// Issue #76, DX-1, #187, I4, FM-7: the published submit schema carries the
+// instance id, exactly as the start schema does, so a reader of an
+// instance.submitted@1 event knows which instance it acts on. The event type
+// stays instance.submitted@1: no release tag exists, so the shape extends in
+// place (MVP.md 9.3, #188).
+
+test('#76 the published submit schema requires the instance id (DX-1)', () => {
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
+  const payload = submitInstance(started.instance, SAM, deps(), captured).operation.payload
+  const { instanceId, ...withoutInstanceId } = payload
+
+  expect(instanceId, 'the submit payload names the instance').toBe(INSTANCE_ID)
+  expect(Object.keys(payload)[0], 'the instance id comes first').toBe('instanceId')
+  expect(validateSubmitted(payload), 'the real submit payload validates').toBe(true)
+  expect(
+    validateSubmitted(withoutInstanceId),
+    'a payload without the instance id is rejected'
+  ).toBe(false)
+})

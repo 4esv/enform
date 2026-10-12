@@ -89,6 +89,60 @@ paths:
                 $ref: '#/components/schemas/PublishedFlow'
         '404':
           description: No flow has this slug
+  /api/v1/instances/{instanceId}:
+    get:
+      operationId: readInstance
+      summary: Read an instance as a step sees it
+      description: >-
+        The instance as one actor and the current step see it (FM-3, FM-7,
+        VT-4, I8). The engine projects the instance from the append-only log
+        (I4) and authorizes the read with the same rule as a write (AC-1): the
+        starter, an assignee, or a principal that holds `instance.read` on the
+        flow. The response holds the status line (VT-1, VT-2), the field keys
+        the current step makes visible and editable (FM-3), and the values the
+        instance holds restricted to the visible keys, so a field the step
+        does not make visible is absent from the response (FM-3 criterion 1).
+        The actor is a required query parameter, because the harness has no
+        real authentication and the interface already carries the principal
+        that way.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          description: The id of the instance (DX-1, #187).
+          schema:
+            type: string
+        - name: actor
+          in: query
+          required: true
+          description: The principal that reads the instance (ID-4).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The instance as the actor and the current step see it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceView'
+        '400':
+          description: The actor query parameter is missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The actor may not read the instance (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: The log holds no such instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 components:
   securitySchemes:
     keycloak:
@@ -238,3 +292,88 @@ components:
         definition:
           type: object
           description: The frozen flow definition (DF-1, DF-2).
+    Status:
+      type: object
+      description: >-
+        The status line of an instance (VT-1, VT-2, S14): the position of the
+        active step and the total, the current step and its holder, the state
+        in plain language, and the steps a condition skipped.
+      required: [step, totalSteps, state, skipped]
+      properties:
+        step:
+          type: integer
+          description: >-
+            The 1-based position of the active step in the
+            definition (VT-1).
+        totalSteps:
+          type: integer
+          description: >-
+            The number of steps in the definition (VT-1).
+        currentStep:
+          type: string
+          description: >-
+            The key of the active step (WF-1); absent when no step is open,
+            because the instance is done or closed.
+        holder:
+          $ref: '#/components/schemas/ActorId'
+        state:
+          type: string
+          description: The state in plain language (VT-2, S14).
+          enum: [waiting, in-progress, done, withdrawn, cancelled]
+        skipped:
+          type: array
+          description: >-
+            The steps that a condition skipped, with the condition that
+            skipped them (S05).
+          items:
+            type: object
+            description: >-
+              One skipped step and the JSON Logic condition that
+              skipped it (S05, FM-5).
+            required: [step, condition]
+            properties:
+              step:
+                type: string
+              condition:
+                description: >-
+                  The JSON Logic condition that skipped the step (FM-5).
+    InstanceView:
+      type: object
+      description: >-
+        The instance as one actor and the current step see it (#76, FM-3,
+        FM-7, VT-4). The values hold only the field keys the current step makes
+        visible, so a field the step hides is absent (FM-3 criterion 1).
+      required: [instanceId, status, visible, editable, values]
+      properties:
+        instanceId:
+          type: string
+          description: The id of the instance the view describes (DX-1, #187).
+        status:
+          $ref: '#/components/schemas/Status'
+        visible:
+          type: array
+          description: >-
+            The field keys the current step makes visible, in
+            definition order (FM-3).
+          items:
+            type: string
+        editable:
+          type: array
+          description: >-
+            The field keys the actor may edit on the current step (FM-3);
+            empty when the actor is not an assignee of the step.
+          items:
+            type: string
+        values:
+          type: object
+          description: >-
+            The values the instance holds, restricted to the visible field
+            keys (FM-3, FM-7).
+          additionalProperties: true
+    ApiError:
+      type: object
+      description: An error response, with a short machine-readable message.
+      required: [error]
+      properties:
+        error:
+          type: string

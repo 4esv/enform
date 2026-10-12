@@ -305,3 +305,50 @@ test('#187 an intent without an instance id is refused with a named error and ap
     expect(api.state().log).toHaveLength(before)
   })
 })
+
+// Issue #76, FM-3, FM-7, VT-4, DX-1, I8: the HTTP API reads one instance as a
+// step sees it. The actor arrives as the `actor` query parameter, because the
+// harness has no real authentication. The engine authorizes the read (I8), so
+// an actor that may not read the instance answers 403 and an instance the log
+// does not hold answers 404.
+
+test('#76 the api-mode server reads one instance and refuses the rest (I8)', async () => {
+  await withApi(intentState(), { resolve }, async (base) => {
+    // Start the S06 instance through a posted intent (ADR 0010).
+    const start = await fetch(`${base}/api/v1/operations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'read-start',
+        type: 'instance.started@1',
+        at: 10,
+        actor: 'user:sam',
+        payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
+      }),
+    })
+    expect(start.status).toBe(201)
+
+    // Sam started the instance, so he reads it (AC-5). The S06 start routes to
+    // `advisor`, which declares no fields, so nothing is visible and the values
+    // are absent from the response (FM-3).
+    const read = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:sam`)
+    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual({
+      instanceId: INSTANCE_ID,
+      status: { step: 2, totalSteps: 3, currentStep: 'advisor', state: 'waiting', skipped: [] },
+      visible: [],
+      editable: [],
+      values: {},
+    })
+
+    // An actor that may not read the instance is refused (I8).
+    const forbidden = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:outsider`)
+    expect(forbidden.status).toBe(403)
+    expect(await forbidden.json()).toEqual({ error: 'not readable' })
+
+    // An instance the log does not hold is not found.
+    const missing = await fetch(`${base}/api/v1/instances/missing?actor=user:sam`)
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
+  })
+})

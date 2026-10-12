@@ -176,6 +176,7 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
     payload: { to: ANA, step: REGISTRAR_STEP, actor: STARTER, reason: WITHDRAW_REASON },
   })
   expect(withdrawn.operation?.payload).toEqual({
+    instanceId: INSTANCE_ID,
     step: REGISTRAR_STEP,
     holder: ANA,
     reason: WITHDRAW_REASON,
@@ -205,6 +206,7 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
   expect(restored.operation?.type).toBe(INSTANCE_UNDONE)
   expect(restored.operation?.actor).toBe(STARTER)
   expect(restored.operation?.payload).toEqual({
+    instanceId: INSTANCE_ID,
     undoOf: 'withdrawn',
     step: REGISTRAR_STEP,
     holder: ANA,
@@ -284,6 +286,7 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
   expect(restoredCancel.instance.currentStep).toBe(REGISTRAR_STEP)
   expect(restoredCancel.instance.holder).toBe(ANA)
   expect(restoredCancel.operation?.payload).toEqual({
+    instanceId: INSTANCE_ID,
     undoOf: 'cancelled',
     step: REGISTRAR_STEP,
     holder: ANA,

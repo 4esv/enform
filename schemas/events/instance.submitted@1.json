@@ -2,11 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/events/instance.submitted@1.json",
   "title": "enform instance.submitted@1 event payload",
-  "description": "The payload of an instance.submitted@1 event (#43, #177, S06, FM-7, I2, SE-1). A submit marks the instance submitted, records the values that the step captured merged over what the instance already held (FM-7), and carries the assignment email outbox entry in the same operation (I2, SE-1).",
+  "description": "The payload of an instance.submitted@1 event (#43, #177, #76, S06, FM-7, I2, SE-1). A submit names the instance it acts on (DX-1, #187), exactly as the start does, marks the instance submitted, records the values that the step captured merged over what the instance already held (FM-7), and carries the assignment email outbox entry in the same operation (I2, SE-1).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["currentStep", "submitted", "values", "outbox"],
+  "required": ["instanceId", "currentStep", "submitted", "values", "outbox"],
   "properties": {
+    "instanceId": {
+      "description": "The id of the instance that the submit acts on (DX-1, #187, #76).",
+      "type": "string"
+    },
     "currentStep": {
       "description": "The key of the step that the submit closed (S06, WF-1).",
       "type": "string"

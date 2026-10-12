@@ -5,8 +5,9 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
-import { publishedFlow } from '../../engine/flow.js'
+import { publishedByHash, publishedFlow } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
+import { instanceOf, readInstance } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import { resolveIntent } from '../../engine/submission.js'
@@ -149,6 +150,50 @@ function interfacePath(url: string): string | undefined {
   return undefined
 }
 
+/**
+ * Serve one instance read (#76, FM-3, FM-7, DX-1, I8). The actor arrives as the
+ * `actor` query parameter, because the harness has no real authentication and
+ * the app already carries the principal that way. The engine projects the
+ * instance from the log (instanceOf) and authorizes the read (readInstance). An
+ * instance the log does not hold answers 404, and an actor that may not read it
+ * answers 403 (I8); the route decides neither.
+ */
+function serveInstanceRead(
+  res: ServerResponse,
+  url: string,
+  state: State,
+  options: ApiOptions
+): void {
+  const parsed = new URL(url, 'http://127.0.0.1')
+  const instanceId = decodeURIComponent(parsed.pathname.slice('/api/v1/instances/'.length))
+  const actor = parsed.searchParams.get('actor')
+  if (actor === null || actor === '') {
+    json(res, 400, { error: 'the actor query parameter is required' })
+    return
+  }
+  const instance = instanceOf(state.log, instanceId)
+  if (instance === undefined) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  const published = publishedByHash(state.log, instance.definitionVersion)
+  if (published === undefined) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  const view = readInstance(actor, instance, {
+    flow: published.slug,
+    definition: published.definition,
+    log: state.log,
+    grants: options.grants ?? grantsOf(state.log),
+  })
+  if (view === undefined) {
+    json(res, 403, { error: 'not readable' })
+    return
+  }
+  json(res, 200, view)
+}
+
 /** Serve one interface file, or 404. */
 function serveInterface(res: ServerResponse, urlPath: string): void {
   const asset = interfaceAsset(urlPath)
@@ -217,6 +262,9 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
           contentHash: published.contentHash,
           definition: published.definition,
         })
+      }
+      if (method === 'GET' && url.startsWith('/api/v1/instances/')) {
+        return serveInstanceRead(res, url, current, options)
       }
       const uiPath = method === 'GET' ? interfacePath(url) : undefined
       if (uiPath !== undefined) return serveInterface(res, uiPath)

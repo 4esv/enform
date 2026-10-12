@@ -113,7 +113,8 @@ function renderPath(path, pathParams) {
 // One function per operation: the method and the path come from the document,
 // the request parameter and the return type come from the schemas. A path
 // parameter (for example `{slug}`) becomes a function argument and is
-// substituted into the URL.
+// substituted into the URL. A query parameter (for example `actor`) becomes a
+// function argument too and is appended to the URL, percent-encoded.
 function renderOperation({ path, method, operation }) {
   const request = operation.requestBody?.content?.['application/json']?.schema
   const parameter = request === undefined ? undefined : lowerFirst(refName(request.$ref))
@@ -121,10 +122,14 @@ function renderOperation({ path, method, operation }) {
   const success = Object.entries(operation.responses).find(([status]) => /^2\d\d$/.test(status))
   const returnType = refName(success[1].content['application/json'].schema.$ref)
   const pathParams = (operation.parameters ?? []).filter((param) => param.in === 'path')
+  const queryParams = (operation.parameters ?? []).filter((param) => param.in === 'query')
 
   const args = [
     ...(parameter === undefined ? [] : [`${parameter}: ${parameterType}`]),
     ...pathParams.map((param) => `${param.name}: ${typeOf(param.schema)}`),
+    ...queryParams.map(
+      (param) => `${param.name}${param.required ? '' : '?'}: ${typeOf(param.schema)}`
+    ),
   ].join(', ')
   const init = [`    method: '${method}',`]
   if (parameter === undefined) init.push('    headers: headers(),')
@@ -133,9 +138,11 @@ function renderOperation({ path, method, operation }) {
     init.push(`    body: JSON.stringify(${parameter}),`)
   }
 
+  const url = `\`\${configured().baseUrl}${renderPath(path, pathParams)}${renderQuery(queryParams)}\``
   return [
     `export async function ${operation.operationId}(${args}): Promise<${returnType}> {`,
-    `  const response = await fetch(\`\${configured().baseUrl}${renderPath(path, pathParams)}\`, {`,
+    `  const url = ${url}`,
+    '  const response = await fetch(url, {',
     ...init,
     '  })',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
@@ -143,6 +150,17 @@ function renderOperation({ path, method, operation }) {
     `  return (await response.json()) as ${returnType}`,
     '}',
   ].join('\n')
+}
+
+// The query string of an operation. Every query parameter is a function
+// argument, and its value is percent-encoded, so a principal ID with a colon
+// survives the trip. No query parameter gives an empty string.
+function renderQuery(queryParams) {
+  if (queryParams.length === 0) return ''
+  const pairs = queryParams.map(
+    (param) => `${param.name}=\${encodeURIComponent(String(${param.name}))}`
+  )
+  return `?${pairs.join('&')}`
 }
 
 // Every operation of the document, ordered by operationId so the output does
