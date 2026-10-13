@@ -190,6 +190,7 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
     claimed.instance,
     SAM,
     'submit',
+    {},
     claimed.instance.version ?? 0,
     { flow: SLUG, definition, grants: samGrants },
     sources

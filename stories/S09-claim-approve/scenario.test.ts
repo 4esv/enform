@@ -100,7 +100,7 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
   // authorizes the outcome from Lee's grants, so the task advances to the
   // archive step and the holder is cleared.
   const context: CompletionContext = { flow: SLUG, definition, grants: leeGrants }
-  const approved = complete(lee.instance, LEE, 'approve', held, context, sources)
+  const approved = complete(lee.instance, LEE, 'approve', {}, held, context, sources)
   expect(approved.accepted).toBe(true)
   expect(approved.operation?.type).toBe(STEP_COMPLETED)
   expect(approved.instance.holder).toBeUndefined()
@@ -110,13 +110,13 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
   // A different outcome is refused: Lee holds `step.outcome:approve` on the
   // step and no other scope, so the engine authorizes approve and no other
   // outcome (AC-4).
-  const refused = complete(lee.instance, LEE, 'reject', held, context, sources)
+  const refused = complete(lee.instance, LEE, 'reject', {}, held, context, sources)
   expect(refused.accepted).toBe(false)
   expect(refused.operation).toBeUndefined()
   expect(refused.reason).toContain('step.outcome:reject')
 
   // A principal that is not the holder may not complete the step (AS-2).
-  const notHolder = complete(lee.instance, ANA, 'approve', held, context, sources)
+  const notHolder = complete(lee.instance, ANA, 'approve', {}, held, context, sources)
   expect(notHolder.accepted).toBe(false)
   expect(notHolder.reason).toContain('does not hold')
 
@@ -126,6 +126,7 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
     lee.instance,
     LEE,
     'approve',
+    {},
     held,
     { flow: SLUG, definition: terminalDefinition, grants: leeGrants },
     sources
@@ -141,7 +142,7 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
   const approvals = (log: State['log']): number =>
     log.filter((event) => event.type === STEP_COMPLETED).length
   expect(approvals(afterApprove.log)).toBe(1)
-  const stale = complete(approved.instance, LEE, 'approve', opened, context, sources)
+  const stale = complete(approved.instance, LEE, 'approve', {}, opened, context, sources)
   expect(stale.accepted).toBe(false)
   expect(stale.operation).toBeUndefined()
   expect(stale.instance).toBe(approved.instance)

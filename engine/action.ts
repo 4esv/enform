@@ -15,7 +15,7 @@
 
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
-import type { FlowDefinition, FlowStep } from './definition.js'
+import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
@@ -117,6 +117,7 @@ export function complete(
   instance: Instance,
   actor: ActorId,
   outcome: string,
+  _values: Readonly<Record<string, JsonValue>>,
   expectedVersion: Version,
   context: CompletionContext,
   deps: OperationDeps

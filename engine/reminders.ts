@@ -137,7 +137,7 @@ export function completeBeforeDeadline(
   deps: OperationDeps
 ): CompletedTask {
   const cancelled = scheduledTimers(instance, timers)
-  const result = complete(instance, actor, outcome, expectedVersion, context, deps)
+  const result = complete(instance, actor, outcome, {}, expectedVersion, context, deps)
   if (!result.accepted || result.operation === undefined) {
     return { ...result, cancelled: [] }
   }
