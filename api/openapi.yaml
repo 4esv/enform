@@ -19,11 +19,17 @@ paths:
       summary: Append one operation to the log
       description: >-
         The engine applies the operation idempotently by its client-created
-        ID (I1) and appends the event it records (I4). A client may post a
-        start intent instead of a resolved operation: it names the flow and
-        the values it collected, and the server resolves the route, the
-        assignees and the version stamp through the engine before it appends
-        (ADR 0010). The appended event keeps the client's ID and time.
+        ID (I1) and appends the event it records (I4). A client may post an
+        intent instead of a resolved operation (ADR 0010). A start intent
+        (`StartIntent`) names the flow and the values it collected, and a
+        completion intent (`CompletionIntent`) names the instance, the
+        outcome it chose and the values it captured. The server resolves the
+        route, the transition, the assignees, the version stamp and the
+        authorization through the engine before it appends. The two intents
+        are told apart by `type` (`instance.started@1` or
+        `step.completed@1`) and by their payload shape, and an already
+        resolved operation is appended as it stands. The appended event keeps
+        the client's ID and time.
       requestBody:
         required: true
         content:
@@ -39,7 +45,16 @@ paths:
                 $ref: '#/components/schemas/Event'
         '400':
           description: >-
-            The operation is invalid, or the intent cannot be resolved
+            The operation is invalid, or an intent cannot be resolved: an
+            intent that lacks the instance id, or that names an unknown
+            instance, appends nothing.
+        '409':
+          description: >-
+            The engine refused the completion and appended nothing, because
+            the actor does not hold the step (AS-2), does not hold the
+            outcome's scope (AC-4), or captured a field the current step does
+            not make editable (FM-3, FM-4). The reason names the field or the
+            step.
   /api/v1/log:
     get:
       operationId: readLog
@@ -184,14 +199,15 @@ components:
         payload:
           type: object
           description: The change payload.
-    Intent:
+    StartIntent:
       type: object
       description: >-
         A start intent (ADR 0010): the parts a client can honestly send on
         the write path. It carries the operation ID and the instance ID it
-        chose (I1, DX-1), the event type, the actor, and the flow and values
-        it collected (FM-7). The server resolves the route, the assignees and
-        the version stamp through the engine before it appends.
+        chose (I1, DX-1), the event type `instance.started@1`, the actor, and
+        the flow and values it collected (FM-7). The server resolves the
+        route, the assignees and the version stamp through the engine before
+        it appends, so the client names no step and no assignee.
       required: [id, type, at, actor, payload]
       properties:
         id:
@@ -228,6 +244,58 @@ components:
               description: >-
                 The values that the form holds: one field key to one JSON
                 value (FM-7).
+              additionalProperties: true
+    CompletionIntent:
+      type: object
+      description: >-
+        A completion intent (ADR 0010, FM-3, FM-4): the parts a client can
+        honestly send when the holder completes the current step. It carries
+        the operation ID it chose (I1), the event type `step.completed@1`,
+        the actor, the instance it acts on (DX-1), the outcome the actor
+        chose (AC-4) and the values the step captured (FM-7). The server
+        resolves the current step, the transition, the outcome's
+        authorization and the editability of every captured field through the
+        engine before it appends, so the client names no step. It is told
+        apart from an already resolved `step.completed@1` operation by the
+        payload: an intent names no `step`, a resolved operation carries it.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `step.completed@1`.
+          examples:
+            - step.completed@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: >-
+            The instance, the outcome the actor chose and the values the step
+            captured (DX-1, FM-7).
+          required: [instanceId, outcome, values]
+          properties:
+            instanceId:
+              type: string
+              description: >-
+                The ID of the instance whose current step is completed
+                (DX-1, #187).
+            outcome:
+              type: string
+              description: >-
+                The outcome the actor chose for the current step (AC-4). The
+                engine authorizes it from the actor's grants.
+            values:
+              type: object
+              description: >-
+                The values the step captured: one field key to one JSON value
+                (FM-7). The engine refuses a key the current step does not
+                make editable (FM-3, FM-4).
               additionalProperties: true
     Event:
       type: object

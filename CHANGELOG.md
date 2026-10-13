@@ -70,6 +70,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine reads an instance back through the public API: every instance and step operation names the instance it acts on, a pure projection folds those events into the instance, and `GET /api/v1/instances/{instanceId}` returns the instance as one actor and the current step see it, with the fields the step does not make visible absent from the response (FM-3, FM-7, VT-4, I4, I8) (#76).
 - The engine records the resolved assignees of every step it enters, not only the first: a completion and a send back stamp the step they move to, the projection accumulates them with the latest resolution of a re-entered step, and the step read refreshes live groups and teams while a dynamic target keeps its one-time members (AS-4, I13, FM-3) (#194).
 - The engine records the values a step completion captures and refuses a captured key the step does not make editable, naming the field, so the read and the write share one rule (FM-3, FM-7, FM-4) (#191).
+- The HTTP API resolves a completion intent through the engine before it appends: a client posts the instance, the outcome and the values it captured, the server decides the current step, the transition and the outcome's authorization, refuses a non-editable field with 409 and the field named, and the client's ID and time survive (FM-3, FM-4, FM-7, AC-4, AS-2, ADR 0010) (#191).
 
 ## [0.0.0] - 2026-10-08
 

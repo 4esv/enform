@@ -25,11 +25,30 @@ export interface Operation {
 
 /**
  * A start intent (ADR 0010): the parts a client can honestly send on the write path. It carries
- * the operation ID and the instance ID it chose (I1, DX-1), the event type, the actor, and the
- * flow and values it collected (FM-7). The server resolves the route, the assignees and the
- * version stamp through the engine before it appends.
+ * the operation ID and the instance ID it chose (I1, DX-1), the event type
+ * `instance.started@1`, the actor, and the flow and values it collected (FM-7). The server
+ * resolves the route, the assignees and the version stamp through the engine before it appends,
+ * so the client names no step and no assignee.
  */
-export interface Intent {
+export interface StartIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A completion intent (ADR 0010, FM-3, FM-4): the parts a client can honestly send when the
+ * holder completes the current step. It carries the operation ID it chose (I1), the event type
+ * `step.completed@1`, the actor, the instance it acts on (DX-1), the outcome the actor chose
+ * (AC-4) and the values the step captured (FM-7). The server resolves the current step, the
+ * transition, the outcome's authorization and the editability of every captured field through
+ * the engine before it appends, so the client names no step. It is told apart from an already
+ * resolved `step.completed@1` operation by the payload: an intent names no `step`, a resolved
+ * operation carries it.
+ */
+export interface CompletionIntent {
   readonly id: OperationId
   readonly type: string
   readonly at: number

@@ -258,7 +258,7 @@ test('#76 an instance whose pinned definition is absent is not projected (DF-2)'
 // that resolves through the projection passes what complete() expects rather
 // than an accidental 0.
 
-test.fails('#191 the projected version counts the accepted actions the write path kept', () => {
+test('#191 the projected version counts the accepted actions the write path kept', () => {
   const sources = deps()
   let state = seeded(sources)
   const started = startInstance(

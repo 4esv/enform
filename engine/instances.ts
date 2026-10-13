@@ -7,6 +7,11 @@
 // The projection folds the events whose payload names one instance, in log
 // order, into that instance (I4). Events of another instance never affect the
 // result: the fold filters by the instance id before it reads anything else.
+// The fold also carries the version counter that the write path keeps (I5,
+// #191): the start is version 0, each accepted action advances the counter by
+// one, and a submit keeps it, so a completion intent that resolves through the
+// projection passes the version that `complete()` expects rather than an
+// accidental 0.
 // The step-scoped read then narrows the instance to the actor and to the
 // current step: the fields the step does not make visible are absent (FM-3),
 // the fields it makes editable are editable only for an assignee, and the
@@ -143,6 +148,7 @@ function started(event: Event, instanceId: string): ProjectedInstance {
     starter: optionalString(payload.starter),
     currentStep: optionalString(payload.currentStep),
     submitted: false,
+    version: 0,
   }
 }
 
@@ -160,34 +166,46 @@ function fold(
   switch (event.type) {
     case INSTANCE_SUBMITTED: {
       const values = readValues(event.payload.values)
+      // A submit records a state change but keeps the version counter, because
+      // `submitInstance` does not advance it (FM-7, I5).
       return { ...instance, submitted: true, ...(values === undefined ? {} : { values }) }
     }
     case STEP_CLAIMED:
-      return { ...instance, holder: optionalString(event.payload.holder) }
+      return advanced({ ...instance, holder: optionalString(event.payload.holder) })
     case STEP_COMPLETED: {
       const next = nextStep(definition, stringField(event.payload, 'step'))
       const entered = optionalAssignees(event.payload.assignees)
-      const advanced: ProjectedInstance = {
+      const moved: ProjectedInstance = advanced({
         ...instance,
         holder: undefined,
         currentStep: next?.key,
         done: next === undefined,
-      }
-      return entered === undefined ? advanced : recordAssignees(advanced, entered)
+      })
+      return entered === undefined ? moved : recordAssignees(moved, entered)
     }
     case STEP_TAKEN_OVER:
-      return { ...instance, holder: optionalString(event.payload.to) }
+      return advanced({ ...instance, holder: optionalString(event.payload.to) })
     case STEP_SENT_BACK:
-      return sentBack(instance, event)
+      return advanced(sentBack(instance, event))
     case INSTANCE_WITHDRAWN:
-      return closed(instance, event, 'withdrawn')
+      return advanced(closed(instance, event, 'withdrawn'))
     case INSTANCE_CANCELLED:
-      return closed(instance, event, 'cancelled')
+      return advanced(closed(instance, event, 'cancelled'))
     case INSTANCE_UNDONE:
-      return reopened(instance, event)
+      return advanced(reopened(instance, event))
     default:
       return instance
   }
+}
+
+/**
+ * The instance after one accepted action (I5, #191): the version counter
+ * advances by one, exactly as every write-path action advances it (`version +
+ * 1`). A submit is the one state change that does not advance it, so the
+ * fold leaves it out.
+ */
+function advanced(instance: ProjectedInstance): ProjectedInstance {
+  return { ...instance, version: (instance.version ?? 0) + 1 }
 }
 
 /** Fold a send back: the instance revisits the target step, and it records the next revision (WF-3). */

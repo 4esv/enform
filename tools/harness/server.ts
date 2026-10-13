@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
+import { CompletionRefused, resolveCompletion } from '../../engine/completions.js'
 import { publishedByHash, publishedFlow } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { instanceOf, readInstance } from '../../engine/instances.js'
@@ -232,13 +233,23 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         }
         let resolved: Operation | undefined
         try {
-          resolved = resolveIntent(
-            current.log,
-            parsed,
-            options.resolve ?? noMembers,
-            options.grants ?? grantsOf(current.log)
-          )
+          const grants = options.grants ?? grantsOf(current.log)
+          // A start intent and a completion intent resolve through the engine
+          // before the append (ADR 0010). The two detectors are disjoint by the
+          // event type, and each answers undefined for an already resolved
+          // operation, which keeps the low-level append path.
+          resolved = resolveIntent(current.log, parsed, options.resolve ?? noMembers, grants)
+          if (resolved === undefined) {
+            resolved = resolveCompletion(current.log, parsed, options.resolve, grants)
+          }
         } catch (error) {
+          // An engine refusal is not a malformed request: a completion that the
+          // engine refuses (a non-editable field, an actor that does not hold
+          // the step, an unauthorized outcome) answers 409 with the reason,
+          // which names the field for FM-3.
+          if (error instanceof CompletionRefused) {
+            return json(res, 409, { error: error.message })
+          }
           return json(res, 400, {
             error: error instanceof Error ? error.message : 'invalid intent',
           })

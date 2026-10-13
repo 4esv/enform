@@ -153,7 +153,7 @@ function completionIntent(values: Readonly<Record<string, unknown>>): Record<str
   }
 }
 
-test.fails('#191 a completion intent resolves to the engine operation and keeps the client id and time', async () => {
+test('#191 a completion intent resolves to the engine operation and keeps the client id and time', async () => {
   await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
     const before = api.state().log.length
     const response = await post(base, completionIntent({ summary: 'hello' }))
@@ -184,7 +184,7 @@ test.fails('#191 a completion intent resolves to the engine operation and keeps 
   })
 })
 
-test.fails('#191 FM-3 the server refuses a completion that changes a field the step does not make editable, naming the field', async () => {
+test('#191 FM-3 the server refuses a completion that changes a field the step does not make editable, naming the field', async () => {
   await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
     const before = api.state().log.length
     // `detail` is a field of the request step that the step does not make
@@ -199,7 +199,7 @@ test.fails('#191 FM-3 the server refuses a completion that changes a field the s
   })
 })
 
-test.fails('#191 a completion intent without an instance id is refused with a named error and appends nothing', async () => {
+test('#191 a completion intent without an instance id is refused with a named error and appends nothing', async () => {
   await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
     const before = api.state().log.length
     const intent = completionIntent({ summary: 'hello' })
@@ -214,7 +214,7 @@ test.fails('#191 a completion intent without an instance id is refused with a na
   })
 })
 
-test.fails('#191 a completion intent that names an unknown instance is refused with a named error and appends nothing', async () => {
+test('#191 a completion intent that names an unknown instance is refused with a named error and appends nothing', async () => {
   await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
     const before = api.state().log.length
     const intent = completionIntent({ summary: 'hello' })
