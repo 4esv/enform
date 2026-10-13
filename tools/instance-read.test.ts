@@ -250,3 +250,49 @@ test('#76 an instance whose pinned definition is absent is not projected (DF-2)'
   const orphan = apply(started.operation, emptyState)
   expect(instanceOf(orphan.log, INSTANCE_ID)).toBeUndefined()
 })
+
+// Issue #191, I5, FM-3: the projection reports the version counter that a
+// completion needs. The write path advances the counter by one for each
+// accepted action (a claim, a completion, a takeover, a send back, a withdraw
+// or cancel and its undo) and keeps it for a submit, so a completion intent
+// that resolves through the projection passes what complete() expects rather
+// than an accidental 0.
+
+test.fails('#191 the projected version counts the accepted actions the write path kept', () => {
+  const sources = deps()
+  let state = seeded(sources)
+  const started = startInstance(
+    flow,
+    INSTANCE_ID,
+    { summary: 'hello' },
+    SAM,
+    sources,
+    resolve,
+    samGrants
+  )
+  state = apply(started.operation, state)
+  // The write path: the start is version 0, so the claim is based on 0 and the
+  // completion on the version the claim returned.
+  const claimed = claim(started.instance, SAM, started.instance.version ?? 0, sources)
+  expect(claimed.accepted).toBe(true)
+  if (claimed.operation === undefined) throw new Error(claimed.reason)
+  state = apply(claimed.operation, state)
+  const completed = complete(
+    claimed.instance,
+    SAM,
+    'submit',
+    {},
+    claimed.instance.version ?? 0,
+    { flow: SLUG, definition, grants: samGrants },
+    sources
+  )
+  expect(completed.accepted).toBe(true)
+  if (completed.operation === undefined) throw new Error(completed.reason)
+  state = apply(completed.operation, state)
+
+  // The projection folds the same three events and reports the same counter,
+  // so a completion intent resolves with a meaningful version (I5).
+  const projectedInstance = projected(state)
+  expect(projectedInstance.version).toBe(completed.instance.version)
+  expect(projectedInstance.version).toBe(2)
+})
