@@ -15,6 +15,7 @@
 
 import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
+import { editableKeys } from './editable.js'
 import { publishedByHash } from './flow.js'
 import { type Assignee, type Instance, recordAssignees } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
@@ -247,29 +248,6 @@ function visibleKeys(step: FlowStep): readonly string[] {
 function fieldKeys(step: FlowStep): readonly string[] {
   if (step.fields !== undefined) return step.fields.map((field) => field.key)
   return (step.sections ?? []).flatMap((section) => section.fields.map((field) => field.key))
-}
-
-/**
- * The field keys the actor may edit on the step (FM-3). A step that declares no
- * `editable` makes no field editable, and only an assignee of the current step
- * gets the editable keys; an actor that may read but is not an assignee gets an
- * empty list.
- */
-function editableKeys(
-  actor: ActorId,
-  instance: ProjectedInstance,
-  step: FlowStep
-): readonly string[] {
-  if (step.editable === undefined) return []
-  if (!isStepAssignee(actor, instance, step.key)) return []
-  return step.editable
-}
-
-/** Whether the actor is an assignee of one step (AS-2, AS-4). */
-function isStepAssignee(actor: ActorId, instance: ProjectedInstance, step: string): boolean {
-  return instance.assignees.some(
-    (assignee) => assignee.step === step && assignee.members.includes(actor)
-  )
 }
 
 /**

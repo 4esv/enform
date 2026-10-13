@@ -69,6 +69,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The log carries the identity of the instance a change acts on: the client mints the instance id beside the operation id, a start intent carries it and the server refuses one that lacks it, and the instance and the `instance.started@1` payload carry it (DX-1, I1, I13, S06) (#187). The event type stays `instance.started@1`: no release tag exists, so no event of the old shape was written, and the shape extends in place (`MVP.md` 9.3, #188).
 - The engine reads an instance back through the public API: every instance and step operation names the instance it acts on, a pure projection folds those events into the instance, and `GET /api/v1/instances/{instanceId}` returns the instance as one actor and the current step see it, with the fields the step does not make visible absent from the response (FM-3, FM-7, VT-4, I4, I8) (#76).
 - The engine records the resolved assignees of every step it enters, not only the first: a completion and a send back stamp the step they move to, the projection accumulates them with the latest resolution of a re-entered step, and the step read refreshes live groups and teams while a dynamic target keeps its one-time members (AS-4, I13, FM-3) (#194).
+- The engine records the values a step completion captures and refuses a captured key the step does not make editable, naming the field, so the read and the write share one rule (FM-3, FM-7, FM-4) (#191).
 
 ## [0.0.0] - 2026-10-08
 

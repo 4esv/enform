@@ -16,6 +16,7 @@
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
+import { editableKeys } from './editable.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
@@ -102,14 +103,18 @@ export function claim(
 }
 
 /**
- * Complete the current step of an instance with an outcome (S09, AC-4, I5).
- * Only the holder may complete the step, and the engine refuses a completion
- * that is based on a stale version of the log at once, so a holder with a
- * stale view re-reads and there is no second completion (I5). The engine
- * authorizes the outcome from the grants that apply to the holder (AC-4, I8):
- * the holder must hold `step.outcome:<outcome>` on the step. On acceptance the
- * instance advances to the next step, or is marked done when the step was the
- * last, and the operation records the outcome (I14). When the caller gives a
+ * Complete the current step of an instance with an outcome and the values that
+ * the step captured (S09, AC-4, I5, FM-7). Only the holder may complete the
+ * step, and the engine refuses a completion that is based on a stale version
+ * of the log at once, so a holder with a stale view re-reads and there is no
+ * second completion (I5). The engine authorizes the outcome from the grants
+ * that apply to the holder (AC-4, I8): the holder must hold
+ * `step.outcome:<outcome>` on the step. The engine then checks every captured
+ * key against the step's editable keys (FM-3, FM-4, A9) and refuses a key the
+ * step does not make editable, naming the field, so a client cannot write a
+ * field the step locks. On acceptance the instance advances to the next step,
+ * or is marked done when the step was the last, and the operation records the
+ * outcome and the captured values (FM-7, I14). When the caller gives a
  * resolver, the engine also records the next step's resolved assignees (AS-4,
  * I13), exactly as a start records the first step's.
  */
@@ -117,7 +122,7 @@ export function complete(
   instance: Instance,
   actor: ActorId,
   outcome: string,
-  _values: Readonly<Record<string, JsonValue>>,
+  values: Readonly<Record<string, JsonValue>>,
   expectedVersion: Version,
   context: CompletionContext,
   deps: OperationDeps
@@ -148,6 +153,21 @@ export function complete(
       reason: `step ${step}: ${actor} lacks step.outcome:${outcome} (AC-4)`,
     }
   }
+  // The step's editable keys govern the captured values (FM-3, FM-4, A9). The
+  // read (readInstance) and this write share editableKeys, so a field the read
+  // does not list in `editable` is exactly a field this refuses: a key the step
+  // does not make editable, a key of another step, and a key that names no
+  // field are all refused.
+  const definitionStep = context.definition.steps.find((candidate) => candidate.key === step)
+  const editable = definitionStep === undefined ? [] : editableKeys(actor, instance, definitionStep)
+  const notEditable = Object.keys(values).find((key) => !editable.includes(key))
+  if (notEditable !== undefined) {
+    return {
+      accepted: false,
+      instance,
+      reason: `step ${step}: ${notEditable} is not editable on this step (FM-3)`,
+    }
+  }
   const next = nextStep(context.definition, step)
   // The engine records the next step's resolved assignees exactly as a start
   // records the first step's (AS-4, I13). A caller that gives no resolver
@@ -168,6 +188,7 @@ export function complete(
     instanceId: instance.instanceId,
     step,
     outcome,
+    values,
     ...(entered === undefined ? {} : { assignees: entered }),
   }
   const operation = createOperation(STEP_COMPLETED, change, deps, actor)

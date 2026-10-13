@@ -146,7 +146,7 @@ function completion(definition: FlowDefinition): {
   return { flow: SLUG, definition, grants }
 }
 
-test.fails('#191 FM-7 a completion records the values the step captured in step.completed@1', () => {
+test('#191 FM-7 a completion records the values the step captured in step.completed@1', () => {
   const sources = deps()
   const { instance } = claimed(definition, sources)
   const result = complete(
@@ -170,7 +170,7 @@ test.fails('#191 FM-7 a completion records the values the step captured in step.
   expect(result.operation.payload.outcome).toBe('submit')
 })
 
-test.fails('#191 FM-3 a completion refuses a value the step does not make editable, naming the field', () => {
+test('#191 FM-3 a completion refuses a value the step does not make editable, naming the field', () => {
   const sources = deps()
   const { instance } = claimed(definition, sources)
   // `detail` is a field of the request step that it does not make editable,
@@ -208,7 +208,7 @@ test.fails('#191 FM-3 a completion refuses a value the step does not make editab
   expect(refused.reason).toContain('summary')
 })
 
-test.fails('#191 a completion with an empty values record is accepted and advances as before', () => {
+test('#191 a completion with an empty values record is accepted and advances as before', () => {
   const sources = deps()
   const { instance } = claimed(definition, sources)
   const result = complete(
@@ -229,7 +229,7 @@ test.fails('#191 a completion with an empty values record is accepted and advanc
   expect(result.instance.done).toBe(false)
 })
 
-test.fails('#191 FM-3 the read and the write agree on the editable field keys', () => {
+test('#191 FM-3 the read and the write agree on the editable field keys', () => {
   const sources = deps()
   const { instance, state } = claimed(definition, sources)
   const projected = instanceOf(state.log, INSTANCE_ID)
