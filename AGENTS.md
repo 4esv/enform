@@ -20,6 +20,7 @@ If these documents do not answer a question, stop and ask. Do not guess the scop
 - Change contracts (schemas, OpenAPI, protocol) before the code that serves them, or with that code.
 - Make one logical change per commit. Each commit builds and passes all tests.
 - Do not skip, disable or relax a test. Do not rewrite `main`. Do not push until the local check is green.
+- A delegated lane opens a pull request and stops. It never pushes to `main`. The session that delegated the work reviews the diff and merges the branch as a fast-forward of the signed head.
 - If a story needs something that `MVP.md` does not contain, propose a scope change. Do not add the scope in code.
 - Write in plain, direct English. Do not use em dashes.
 
