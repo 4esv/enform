@@ -181,12 +181,17 @@ function serveInstanceRead(
     json(res, 404, { error: 'not found' })
     return
   }
-  const view = readInstance(actor, instance, {
-    flow: published.slug,
-    definition: published.definition,
-    log: state.log,
-    grants: options.grants ?? grantsOf(state.log),
-  })
+  const view = readInstance(
+    actor,
+    instance,
+    {
+      flow: published.slug,
+      definition: published.definition,
+      log: state.log,
+      grants: options.grants ?? grantsOf(state.log),
+    },
+    options.resolve
+  )
   if (view === undefined) {
     json(res, 403, { error: 'not readable' })
     return

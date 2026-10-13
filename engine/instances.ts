@@ -16,8 +16,9 @@
 import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import { publishedByHash } from './flow.js'
-import type { Assignee, Instance } from './instance.js'
+import { type Assignee, type Instance, recordAssignees } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
+import { isLiveTarget } from './resolve.js'
 import type { TargetResolver } from './routing.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { mayRead, type Status, type StatusContext, status } from './status.js'
@@ -80,30 +81,52 @@ export function instanceOf(log: Log, instanceId: string): ProjectedInstance | un
 
 /**
  * Read the instance as one actor and the current step see it (#76, FM-3, FM-7,
- * VT-4, I8). The engine authorizes the read with the same rule as a status read
- * (mayRead): the starter, an assignee, or a principal that holds
+ * VT-4, I8, #194, AS-4). The engine authorizes the read with the same rule as a
+ * status read (mayRead): the starter, an assignee, or a principal that holds
  * `instance.read` on the flow. An actor that may not read the instance answers
  * undefined, which the API serves as 403. The view then holds the visible and
  * editable field keys of the current step and the values restricted to the
- * visible keys. It is pure and deterministic (I6); it reads no clock, no random
- * source and no I/O.
+ * visible keys. When the caller gives the resolver it reads the directory
+ * through, the engine refreshes the live targets (a group or a team) before it
+ * authorizes and before it computes the editable keys, so a member who joined
+ * after the task was created is an assignee, while a dynamic target keeps the
+ * members the instance recorded (AS-4, I13); an absent resolver uses the
+ * recorded members as they are. It is pure and deterministic (I6); it reads no
+ * clock, no random source and no I/O.
  */
 export function readInstance(
   actor: ActorId,
   instance: ProjectedInstance,
   context: StatusContext,
-  _refresh?: TargetResolver
+  resolve?: TargetResolver
 ): InstanceView | undefined {
-  if (!mayRead(actor, instance, context)) return undefined
-  const step = stepOf(context.definition, instance.currentStep)
+  const current = resolve === undefined ? instance : refreshLive(instance, resolve)
+  if (!mayRead(actor, current, context)) return undefined
+  const step = stepOf(context.definition, current.currentStep)
   const visible = step === undefined ? [] : visibleKeys(step)
-  const editable = step === undefined ? [] : editableKeys(actor, instance, step)
+  const editable = step === undefined ? [] : editableKeys(actor, current, step)
   return {
-    instanceId: instance.instanceId,
-    status: status(instance, context.definition, context.log),
+    instanceId: current.instanceId,
+    status: status(current, context.definition, context.log),
     visible,
     editable,
-    values: restrict(instance.values, visible),
+    values: restrict(current.values, visible),
+  }
+}
+
+/**
+ * Re-resolve the live targets of an instance through the caller's resolver
+ * (AS-4): a group or a team is read again, while a dynamic target keeps the
+ * members the instance recorded (I13). The read's resolver is the engine's
+ * injected directory seam (I6); `refreshAssignees` (resolve.ts) is the same
+ * refresh over a raw membership.
+ */
+function refreshLive(instance: ProjectedInstance, resolve: TargetResolver): ProjectedInstance {
+  return {
+    ...instance,
+    assignees: instance.assignees.map((assignee) =>
+      isLiveTarget(assignee.target) ? { ...assignee, members: resolve(assignee.target) } : assignee
+    ),
   }
 }
 
@@ -142,7 +165,14 @@ function fold(
       return { ...instance, holder: optionalString(event.payload.holder) }
     case STEP_COMPLETED: {
       const next = nextStep(definition, stringField(event.payload, 'step'))
-      return { ...instance, holder: undefined, currentStep: next?.key, done: next === undefined }
+      const entered = optionalAssignees(event.payload.assignees)
+      const advanced: ProjectedInstance = {
+        ...instance,
+        holder: undefined,
+        currentStep: next?.key,
+        done: next === undefined,
+      }
+      return entered === undefined ? advanced : recordAssignees(advanced, entered)
     }
     case STEP_TAKEN_OVER:
       return { ...instance, holder: optionalString(event.payload.to) }
@@ -165,7 +195,9 @@ function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance 
   const revisions = { ...(instance.revisions ?? {}) }
   const revision = event.payload.revision
   if (typeof revision === 'number') revisions[to] = revision
-  return { ...instance, currentStep: to, holder: undefined, revisions }
+  const entered = optionalAssignees(event.payload.assignees)
+  const moved: ProjectedInstance = { ...instance, currentStep: to, holder: undefined, revisions }
+  return entered === undefined ? moved : recordAssignees(moved, entered)
 }
 
 /** Fold a withdraw or a cancel: it closes the task and records what the undo restores (WF-4, WF-5). */
@@ -260,6 +292,15 @@ function restrict(
 /** Read the assignees that a start recorded (I13); an absent or malformed list is empty. */
 function readAssignees(value: unknown): readonly Assignee[] {
   return Array.isArray(value) ? (value as readonly Assignee[]) : []
+}
+
+/**
+ * Read the assignees that a transition recorded (I13); undefined when the event
+ * carries none, so the fold keeps the step's earlier resolution rather than
+ * inventing one.
+ */
+function optionalAssignees(value: unknown): readonly Assignee[] | undefined {
+  return value === undefined ? undefined : readAssignees(value)
 }
 
 /** Read a values record (FM-7); an absent or malformed value is undefined. */

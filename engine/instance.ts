@@ -171,6 +171,25 @@ export function createInstance(
 }
 
 /**
+ * Fold a step's resolved assignees into an instance (AS-4, I13). An instance
+ * records one resolution per step: the entries of every step that `entered`
+ * names are replaced by the new ones, and the entries of other steps stay. A
+ * step the instance enters again (a send back, WF-3) therefore keeps only its
+ * most recent resolution, and a stale entry never keeps an actor authorized.
+ * The function is pure and deterministic (I6).
+ */
+export function recordAssignees<T extends Instance>(instance: T, entered: readonly Assignee[]): T {
+  const replaced = new Set(entered.map((assignee) => assignee.step))
+  return {
+    ...instance,
+    assignees: [
+      ...instance.assignees.filter((assignee) => !replaced.has(assignee.step)),
+      ...entered,
+    ],
+  }
+}
+
+/**
  * Append one connector call to an instance (I13, I4). The log grows by one
  * entry; the past entries stay as they were.
  */

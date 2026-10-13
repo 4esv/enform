@@ -244,7 +244,7 @@ function advance(
   return apply(completed.operation, next)
 }
 
-test.fails('#194 AS-4 a later step group target resolves live at read time for a member who joined after the start', () => {
+test('#194 AS-4 a later step group target resolves live at read time for a member who joined after the start', () => {
   const sources = deps()
   const dir = directory({ [SAM]: [SAM], [STUDENTS]: ['user:lee'], [MANAGER]: [MANAGER] })
   const grants: readonly Grant[] = [
@@ -285,7 +285,7 @@ test.fails('#194 AS-4 a later step group target resolves live at read time for a
   expect(view?.editable).toEqual(['decision'])
 })
 
-test.fails('#194 FM-3 a later step user target is an assignee of the step and reads its editable field', () => {
+test('#194 FM-3 a later step user target is an assignee of the step and reads its editable field', () => {
   const sources = deps()
   const dir = directory({ [SAM]: [SAM], [OKAFOR]: [OKAFOR], [MANAGER]: [MANAGER] })
   const grants: readonly Grant[] = [
@@ -315,7 +315,7 @@ test.fails('#194 FM-3 a later step user target is an assignee of the step and re
   expect(view?.editable).toEqual(['decision'])
 })
 
-test.fails('#194 I13 a dynamic field target keeps its one-time members when the field value changes', () => {
+test('#194 I13 a dynamic field target keeps its one-time members when the field value changes', () => {
   const sources = deps()
   const dir = directory({ [SAM]: [SAM], [OKAFOR]: [OKAFOR], [LIN]: [LIN], [MANAGER]: [MANAGER] })
   const grants: readonly Grant[] = [
@@ -374,7 +374,7 @@ test.fails('#194 I13 a dynamic field target keeps its one-time members when the 
   ).toBeUndefined()
 })
 
-test.fails('#194 I13 the projection covers a step entered by a completion, and a send back replaces that step', () => {
+test('#194 I13 the projection covers a step entered by a completion, and a send back replaces that step', () => {
   const sources = deps()
   const dir = directory({
     [SAM]: [SAM],

@@ -16,9 +16,9 @@
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
 import type { FlowDefinition, FlowStep } from './definition.js'
-import type { Instance } from './instance.js'
+import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
-import type { TargetResolver } from './routing.js'
+import { resolveAssignees, type TargetResolver } from './routing.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -109,7 +109,9 @@ export function claim(
  * authorizes the outcome from the grants that apply to the holder (AC-4, I8):
  * the holder must hold `step.outcome:<outcome>` on the step. On acceptance the
  * instance advances to the next step, or is marked done when the step was the
- * last, and the operation records the outcome (I14).
+ * last, and the operation records the outcome (I14). When the caller gives a
+ * resolver, the engine also records the next step's resolved assignees (AS-4,
+ * I13), exactly as a start records the first step's.
  */
 export function complete(
   instance: Instance,
@@ -146,19 +148,28 @@ export function complete(
     }
   }
   const next = nextStep(context.definition, step)
-  const completed: Instance = {
+  // The engine records the next step's resolved assignees exactly as a start
+  // records the first step's (AS-4, I13). A caller that gives no resolver
+  // records none, so the engine never invents a resolution.
+  const entered =
+    next === undefined || context.resolve === undefined
+      ? undefined
+      : resolveAssignees(next, context.resolve)
+  const advanced: Instance = {
     ...instance,
     holder: undefined,
     currentStep: next?.key,
     done: next === undefined,
     version: version + 1,
   }
-  const operation = createOperation(
-    STEP_COMPLETED,
-    { instanceId: instance.instanceId, step, outcome },
-    deps,
-    actor
-  )
+  const completed = entered === undefined ? advanced : recordAssignees(advanced, entered)
+  const change = {
+    instanceId: instance.instanceId,
+    step,
+    outcome,
+    ...(entered === undefined ? {} : { assignees: entered }),
+  }
+  const operation = createOperation(STEP_COMPLETED, change, deps, actor)
   return { accepted: true, instance: completed, operation }
 }
 

@@ -19,10 +19,10 @@
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
 import type { FlowDefinition } from './definition.js'
-import type { Instance } from './instance.js'
+import { type Instance, recordAssignees } from './instance.js'
 import type { ActorId, Operation, OperationDeps } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
-import type { TargetResolver } from './routing.js'
+import { resolveAssignees, type TargetResolver } from './routing.js'
 import { EMAIL_CONNECTOR } from './submission.js'
 
 /** The versioned event type of a send back (S11, WF-3). */
@@ -88,7 +88,9 @@ export type SendBackResult = {
  * (WF-3). On acceptance the engine moves `currentStep` back to `toStep`,
  * records the next revision of that step, clears the holder, and returns the
  * note to the target step, which the operation carries in the same commit
- * (I2, SE-2). The function is pure and deterministic (I6).
+ * (I2, SE-2). When the caller gives a resolver, the engine also records the
+ * target step's resolved assignees (AS-4, I13), exactly as a start records the
+ * first step's. The function is pure and deterministic (I6).
  */
 export function sendBack(
   instance: Instance,
@@ -134,14 +136,30 @@ export function sendBack(
   }
   const revision = revisionOf(instance, toStep) + 1
   const revisions = { ...(instance.revisions ?? {}), [toStep]: revision }
-  const sentBack: Instance = {
+  // The engine records the target step's resolved assignees exactly as a start
+  // records the first step's (AS-4, I13). A caller that gives no resolver
+  // records none, so the engine never invents a resolution.
+  const target = context.definition.steps.find((candidate) => candidate.key === toStep)
+  const entered =
+    target === undefined || context.resolve === undefined
+      ? undefined
+      : resolveAssignees(target, context.resolve)
+  const moved: Instance = {
     ...instance,
     currentStep: toStep,
     holder: undefined,
     revisions,
     version: version + 1,
   }
-  const change = { instanceId: instance.instanceId, from: step, to: toStep, comment, revision }
+  const sentBack = entered === undefined ? moved : recordAssignees(moved, entered)
+  const change = {
+    instanceId: instance.instanceId,
+    from: step,
+    to: toStep,
+    comment,
+    revision,
+    ...(entered === undefined ? {} : { assignees: entered }),
+  }
   const outbox = note(instance, actor, step, toStep, comment)
   const operation = createOutboxOperation(STEP_SENT_BACK, change, [outbox], deps, actor)
   return { accepted: true, instance: sentBack, operation, outbox }
