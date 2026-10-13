@@ -18,6 +18,7 @@ import type { Version } from './concurrency.js'
 import type { FlowDefinition, FlowStep } from './definition.js'
 import type { Instance } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
+import type { TargetResolver } from './routing.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -52,6 +53,15 @@ export type CompletionContext = {
   readonly flow: string
   readonly definition: FlowDefinition
   readonly grants?: readonly Grant[]
+  /**
+   * The resolver that the next step resolves through (AS-1, AS-4, I13). The
+   * caller builds it from the instance, so the engine records the next step's
+   * assignees in the same way a start records the first step's: a group or a
+   * team resolves live, and a dynamic target resolves once with a snapshot. An
+   * absent resolver resolves nothing, so the operation records no assignees
+   * rather than inventing a resolution.
+   */
+  readonly resolve?: TargetResolver
 }
 
 /**

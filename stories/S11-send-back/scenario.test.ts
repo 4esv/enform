@@ -132,7 +132,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
   const held = claimedRegistrar.instance
   state = applyAction(claimedRegistrar, state)
 
-  const context: SendBackContext = { flow: SLUG, grants: jordanGrants }
+  const context: SendBackContext = { flow: SLUG, definition, grants: jordanGrants }
 
   // (a) WF-3: a send back without a comment is refused, and the instance is
   // unchanged.
@@ -166,7 +166,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
     REQUEST_STEP,
     COMMENT,
     held.version ?? 0,
-    { flow: SLUG, grants: [] },
+    { flow: SLUG, definition, grants: [] },
     sources
   )
   expect(noScope.accepted).toBe(false)
@@ -228,7 +228,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
     REQUEST_STEP,
     COMMENT,
     held.version ?? 0,
-    { flow: SLUG, grants: samGrants },
+    { flow: SLUG, definition, grants: samGrants },
     sources
   )
   expect(outsider.accepted).toBe(false)

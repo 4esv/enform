@@ -18,9 +18,11 @@
 
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
+import type { FlowDefinition } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Operation, OperationDeps } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
+import type { TargetResolver } from './routing.js'
 import { EMAIL_CONNECTOR } from './submission.js'
 
 /** The versioned event type of a send back (S11, WF-3). */
@@ -41,7 +43,20 @@ export const SENT_BACK_NOTIFICATION = 'send-sent-back'
  */
 export type SendBackContext = {
   readonly flow: string
+  /**
+   * The definition that the instance runs on (DF-2), so the engine can find
+   * the step it moves the instance back to and record that step's assignees
+   * (AS-4, I13).
+   */
+  readonly definition: FlowDefinition
   readonly grants?: readonly Grant[]
+  /**
+   * The resolver that the step it moves back to resolves through (AS-1, AS-4,
+   * I13). It mirrors `CompletionContext.resolve` (action.ts). An absent
+   * resolver resolves nothing, so the operation records no assignees rather
+   * than inventing a resolution.
+   */
+  readonly resolve?: TargetResolver
 }
 
 /**

@@ -18,6 +18,7 @@ import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import { publishedByHash } from './flow.js'
 import type { Assignee, Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
+import type { TargetResolver } from './routing.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { mayRead, type Status, type StatusContext, status } from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
@@ -90,7 +91,8 @@ export function instanceOf(log: Log, instanceId: string): ProjectedInstance | un
 export function readInstance(
   actor: ActorId,
   instance: ProjectedInstance,
-  context: StatusContext
+  context: StatusContext,
+  _refresh?: TargetResolver
 ): InstanceView | undefined {
   if (!mayRead(actor, instance, context)) return undefined
   const step = stepOf(context.definition, instance.currentStep)

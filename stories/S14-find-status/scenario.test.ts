@@ -191,7 +191,7 @@ test('#51 the status line shows the step, the holder and the wait state, and I8 
     ADVISOR_STEP,
     SEND_BACK_COMMENT,
     held.version ?? 0,
-    { flow: SLUG, grants: anaGrants },
+    { flow: SLUG, definition, grants: anaGrants },
     sources
   )
   expect(sent.accepted).toBe(true)
