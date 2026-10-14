@@ -1,6 +1,8 @@
 // Issue #46, S09, AS-2, AC-4, I5, I6, I8, I14, A1, A9: claim and complete a task.
 // Issue #76, DX-1, #187: a claim and a completion name the instance they act
 // on, so the log says which instance each step operation belongs to.
+// Issue #77, FM-4, FM-2, FM-1, I1, A9: a completion re-runs the step's rules
+// and validates every captured value, refusing with every error named by path.
 //
 // S09: the registrar task shows in the Available tab of Lee and of Ana. To
 // open it claims nothing (AS-2): the first person to claim the task owns it,
@@ -15,12 +17,13 @@
 
 import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
-import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
+import { type FlowDefinition, type FlowStep, fieldsOf, type JsonValue } from './definition.js'
 import { editableKeys } from './editable.js'
-import type { FieldError } from './fields.js'
+import { type FieldError, validateField } from './fields.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
+import { evaluateRules, type StepRuleState } from './rules.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -117,10 +120,15 @@ export function claim(
  * of the log at once, so a holder with a stale view re-reads and there is no
  * second completion (I5). The engine authorizes the outcome from the grants
  * that apply to the holder (AC-4, I8): the holder must hold
- * `step.outcome:<outcome>` on the step. The engine then checks every captured
- * key against the step's editable keys (FM-3, FM-4, A9) and refuses a key the
- * step does not make editable, naming the field, so a client cannot write a
- * field the step locks. On acceptance the instance advances to the next step,
+ * `step.outcome:<outcome>` on the step. The engine then runs the step's rules
+ * again over the state the submission creates (FM-2, FM-4) and checks every
+ * captured key against the step's editable keys (FM-3, FM-4, A9), refusing a
+ * key the step does not make editable, naming the field, so a client cannot
+ * write a field the step locks. A key whose field is skipped drops out of the
+ * capture; every other captured value is validated against its control, and a
+ * required field the step will hold empty is refused. The refusal names every
+ * error by field path in `errors` (FM-4). On acceptance the instance advances
+ * to the next step,
  * or is marked done when the step was the last, and the operation records the
  * outcome and the captured values (FM-7, I14). When the caller gives a
  * resolver, the engine also records the next step's resolved assignees (AS-4,
@@ -161,20 +169,42 @@ export function complete(
       reason: `step ${step}: ${actor} lacks step.outcome:${outcome} (AC-4)`,
     }
   }
-  // The step's editable keys govern the captured values (FM-3, FM-4, A9). The
-  // read (readInstance) and this write share editableKeys, so a field the read
-  // does not list in `editable` is exactly a field this refuses: a key the step
-  // does not make editable, a key of another step, and a key that names no
-  // field are all refused.
   const definitionStep = context.definition.steps.find((candidate) => candidate.key === step)
+  // FM-4, A9: the engine does not trust the client. It runs the step's rules
+  // again over the state the submission creates, so a rule keyed on a value the
+  // user just typed reads it exactly as the next read will: the values the step
+  // will hold are the instance's values with the capture merged over them.
+  const merged = { ...instance.values, ...values }
+  const state =
+    definitionStep === undefined ? undefined : evaluateRules(definitionStep, merged, actor)
+  // FM-2: a skipped field drops out of the capture (Axel, 2026-10-13). Its
+  // value is neither recorded nor validated, and it never refuses the
+  // submission. Skip wins over the FM-3 refusal below, so a skipped key is
+  // dropped before the editability check.
+  const captured = Object.keys(values).filter((key) => state?.fields[key]?.skipped !== true)
+  // The step's editable keys govern the remaining captured values (FM-3, FM-4,
+  // A9). The read (readInstance) and this write share editableKeys, so a field
+  // the read does not list in `editable` is exactly a field this refuses: a key
+  // the step does not make editable, a key of another step, and a key that
+  // names no field are all refused.
   const editable = definitionStep === undefined ? [] : editableKeys(actor, instance, definitionStep)
-  const notEditable = Object.keys(values).find((key) => !editable.includes(key))
+  const notEditable = captured.find((key) => !editable.includes(key))
   if (notEditable !== undefined) {
     return {
       accepted: false,
       instance,
       reason: `step ${step}: ${notEditable} is not editable on this step (FM-3)`,
     }
+  }
+  // FM-4: every remaining captured value is validated against its control, and
+  // a required field the step will hold empty is an error. The engine reports
+  // every error, each one named by field path.
+  const errors =
+    definitionStep === undefined || state === undefined
+      ? []
+      : checkStep(definitionStep, captured, values, merged, state)
+  if (errors.length > 0) {
+    return { accepted: false, instance, errors, reason: refusalReason(step, errors) }
   }
   const next = nextStep(context.definition, step)
   // The engine records the next step's resolved assignees exactly as a start
@@ -196,7 +226,8 @@ export function complete(
     instanceId: instance.instanceId,
     step,
     outcome,
-    values,
+    // A skipped key is absent from the recorded capture (FM-2, FM-7).
+    values: capture(values, captured),
     ...(entered === undefined ? {} : { assignees: entered }),
   }
   const operation = createOperation(STEP_COMPLETED, change, deps, actor)
@@ -236,4 +267,62 @@ export function nextStep(definition: FlowDefinition, key: string): FlowStep | un
 /** The resource of one step (MVP.md 5.6): `flow:<slug>/step:<key>`. */
 function stepResource(flow: string, key: string): string {
   return `flow:${flow}/step:${key}`
+}
+
+/**
+ * Validate the captured values and the required fields of a step (FM-1, FM-2,
+ * FM-4). A skipped field already dropped out of `captured`, so it is neither
+ * validated nor required; a hidden field is neither validated nor required
+ * either, because nobody can fill a field they cannot see. Every other
+ * captured value is checked against its control through `validateField`, and a
+ * required field whose value the step will hold is absent, null or an empty
+ * string is an error. The fields are read in definition order, so the errors
+ * come out in one deterministic order (I6).
+ */
+function checkStep(
+  step: FlowStep,
+  captured: readonly string[],
+  values: Readonly<Record<string, JsonValue>>,
+  merged: Readonly<Record<string, JsonValue>>,
+  state: StepRuleState
+): readonly FieldError[] {
+  const errors: FieldError[] = []
+  const isCaptured = new Set(captured)
+  for (const field of fieldsOf(step)) {
+    const fieldState = state.fields[field.key]
+    if (fieldState === undefined || fieldState.skipped) continue
+    if (fieldState.visible && isCaptured.has(field.key)) {
+      const error = validateField(field, values[field.key])
+      if (error !== undefined) errors.push(error)
+    }
+    if (fieldState.required && isEmpty(merged[field.key])) {
+      errors.push({ path: field.key, message: 'is required' })
+    }
+  }
+  return errors
+}
+
+/**
+ * Whether a required field's value counts as empty (FM-4): absent, null or an
+ * empty string. Every other value, including `false` and `0`, satisfies a
+ * required field; no second emptiness rule exists for the other controls.
+ */
+function isEmpty(value: unknown): boolean {
+  return value === undefined || value === null || value === ''
+}
+
+/** The refusal reason of a submission that fails validation, naming every error by path (FM-4). */
+function refusalReason(step: string, errors: readonly FieldError[]): string {
+  const named = errors.map((error) => `${error.path} ${error.message}`).join('; ')
+  return `step ${step}: ${named} (FM-4)`
+}
+
+/** The capture after the skipped fields dropped out (FM-2, FM-4). */
+function capture(
+  values: Readonly<Record<string, JsonValue>>,
+  keys: readonly string[]
+): Record<string, JsonValue> {
+  const kept: Record<string, JsonValue> = {}
+  for (const key of keys) kept[key] = values[key]
+  return kept
 }

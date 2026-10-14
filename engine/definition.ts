@@ -159,6 +159,16 @@ export type FlowDefinition = {
 }
 
 /**
+ * Every field of a step in definition order (FM-1): its flat fields or its
+ * sections' fields. A step declares one or the other, never both, and the
+ * rules and the completion both walk the fields in this one order.
+ */
+export function fieldsOf(step: FlowStep): readonly Field[] {
+  if (step.fields !== undefined) return step.fields
+  return (step.sections ?? []).flatMap((section) => section.fields)
+}
+
+/**
  * Parse a flow definition file to a definition (I9, DF-1). The text is JSON
  * and the format is versioned by its integer `schemaVersion` (9.1). The engine
  * reads a v1 file and migrates it to v2, and reads a v2 file as written (9.3).

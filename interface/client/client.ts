@@ -129,6 +129,25 @@ export interface ApiError {
   readonly error: string
 }
 
+/**
+ * One validation error: the path of the field that failed and a short reason, so a submission
+ * can name every error by path (FM-1, FM-4).
+ */
+export interface FieldError {
+  readonly path: string
+  readonly message: string
+}
+
+/**
+ * The engine refused the submission and appended nothing (FM-3, FM-4, I1). The `error` names
+ * the reason, and `errors` lists every validation error by field path; it is empty when the
+ * reason alone names the refusal (a non-editable key, or an actor or outcome refusal).
+ */
+export interface CompletionRefusal {
+  readonly error: string
+  readonly errors: readonly FieldError[]
+}
+
 export interface ClientConfig {
   readonly baseUrl: string
   readonly token: string

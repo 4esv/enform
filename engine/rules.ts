@@ -38,8 +38,8 @@
 import { type ConditionData, evaluate } from './condition.js'
 import {
   CONTEXT_KEY,
-  type Field,
   type FlowStep,
+  fieldsOf,
   type JsonValue,
   type Rule,
   type RuleEffect,
@@ -215,10 +215,4 @@ function finalize(state: MutableStepState): void {
     // they cannot see.
     field.required = field.required && field.visible && !field.skipped
   }
-}
-
-/** Every field of a step in definition order (FM-1): its flat fields or its sections' fields. */
-function fieldsOf(step: FlowStep): readonly Field[] {
-  if (step.fields !== undefined) return step.fields
-  return (step.sections ?? []).flatMap((section) => section.fields)
 }

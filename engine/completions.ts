@@ -18,6 +18,7 @@
 import { complete, STEP_COMPLETED } from './action.js'
 import type { Grant } from './authorize.js'
 import type { JsonValue } from './definition.js'
+import type { FieldError } from './fields.js'
 import { publishedByHash } from './flow.js'
 import { instanceOf } from './instances.js'
 import type { ActorId, Log, Operation, OperationId } from './operation.js'
@@ -44,12 +45,22 @@ export type CompletionIntent = {
 }
 
 /**
- * The engine refused the completion (FM-3, AS-2, AC-4): the actor does not
- * hold the step, the outcome is not authorized, or a captured key is not
- * editable on the current step. It is not a malformed request, so the server
- * serves it as 409 with the reason, which names the field for FM-3.
+ * The engine refused the completion (FM-3, FM-4, AS-2, AC-4): the actor does
+ * not hold the step, the outcome is not authorized, a captured key is not
+ * editable on the current step, or a captured value fails its control or a
+ * required field. It is not a malformed request, so the server serves it as
+ * 409 with the reason, which names the field for FM-3, and with every
+ * validation error by field path for FM-4.
  */
-export class CompletionRefused extends Error {}
+export class CompletionRefused extends Error {
+  /** Every validation error of the refusal, by field path (FM-4); empty when `message` names the one reason (FM-3, AC-4). */
+  readonly errors: readonly FieldError[]
+
+  constructor(reason: string, errors: readonly FieldError[] = []) {
+    super(reason)
+    this.errors = errors
+  }
+}
 
 /**
  * Resolve a completion intent into the operation the engine records (ADR 0010,
@@ -57,8 +68,9 @@ export class CompletionRefused extends Error {}
  * outcome the actor chose and the values the step captured; the engine
  * projects the instance from the log (I4), reads the published definition that
  * the instance is pinned to (DF-2), and calls `complete()`, so the current
- * step, the transition, the outcome's authorization and the editability of
- * every captured key are all engine decisions. The client's ID and time
+ * step, the transition, the outcome's authorization, the editability of every
+ * captured key and the validation of every captured value (FM-4) are all
+ * engine decisions. The client's ID and time
  * survive because they are the injected sources (I1, I6): the function reads
  * no clock and no random source of its own.
  *
@@ -98,7 +110,7 @@ export function resolveCompletion(
     { clock: () => intent.at, ids: () => intent.id }
   )
   if (!result.accepted || result.operation === undefined) {
-    throw new CompletionRefused(result.reason ?? 'the completion was refused')
+    throw new CompletionRefused(result.reason ?? 'the completion was refused', result.errors ?? [])
   }
   return result.operation
 }

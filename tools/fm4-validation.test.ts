@@ -132,7 +132,7 @@ function completion(definition: FlowDefinition): {
   return { flow: SLUG, definition, grants }
 }
 
-test.fails('#77 FM-4 a completion refuses a captured value that fails its control, naming the field path', () => {
+test('#77 FM-4 a completion refuses a captured value that fails its control, naming the field path', () => {
   const sources = deps()
   const definition = definitionWith('[]')
   const { instance } = claimed(definition, sources)
@@ -152,7 +152,7 @@ test.fails('#77 FM-4 a completion refuses a captured value that fails its contro
   expect(result.instance).toBe(instance)
 })
 
-test.fails('#77 FM-4 a completion refuses a required field the step will hold empty, naming the field', () => {
+test('#77 FM-4 a completion refuses a required field the step will hold empty, naming the field', () => {
   const sources = deps()
   const definition = definitionWith(
     `[{ "when": true, "effect": "require", "targets": ["summary"] }]`
@@ -171,7 +171,7 @@ test.fails('#77 FM-4 a completion refuses a required field the step will hold em
   expect(result.errors).toEqual([{ path: 'summary', message: 'is required' }])
 })
 
-test.fails('#77 FM-4 a completion reports every error by path, not one', () => {
+test('#77 FM-4 a completion reports every error by path, not one', () => {
   const sources = deps()
   const definition = definitionWith('[]')
   const { instance } = claimed(definition, sources)
@@ -189,7 +189,7 @@ test.fails('#77 FM-4 a completion reports every error by path, not one', () => {
   expect(result.errors?.map((error) => error.path)).toEqual(['amount', 'summary'])
 })
 
-test.fails('#77 FM-4 a skipped field is dropped from the capture: not recorded, not validated, no error', () => {
+test('#77 FM-4 a skipped field is dropped from the capture: not recorded, not validated, no error', () => {
   const sources = deps()
   const definition = definitionWith(`[
     { "when": true, "effect": "require", "targets": ["note"] },
@@ -249,7 +249,7 @@ test('#77 FM-4 a valid submission succeeds and records exactly the values FM-7 e
   expect(result.operation?.payload.values).toEqual({ amount: 3, summary: 'hello' })
 })
 
-test.fails('#77 FM-4 the engine path and the completion intent refuse the same submission with the same errors', async () => {
+test('#77 FM-4 the engine path and the completion intent refuse the same submission with the same errors', async () => {
   const sources = deps()
   const definition = definitionWith('[]')
   const { state } = claimed(definition, sources)

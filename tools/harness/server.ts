@@ -245,10 +245,11 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         } catch (error) {
           // An engine refusal is not a malformed request: a completion that the
           // engine refuses (a non-editable field, an actor that does not hold
-          // the step, an unauthorized outcome) answers 409 with the reason,
-          // which names the field for FM-3.
+          // the step, an unauthorized outcome, or a value that fails its
+          // control) answers 409 with the reason, which names the field for
+          // FM-3, and with every validation error by field path for FM-4.
           if (error instanceof CompletionRefused) {
-            return json(res, 409, { error: error.message })
+            return json(res, 409, { error: error.message, errors: error.errors })
           }
           return json(res, 400, {
             error: error instanceof Error ? error.message : 'invalid intent',

@@ -50,11 +50,17 @@ paths:
             instance, appends nothing.
         '409':
           description: >-
-            The engine refused the completion and appended nothing, because
-            the actor does not hold the step (AS-2), does not hold the
-            outcome's scope (AC-4), or captured a field the current step does
-            not make editable (FM-3, FM-4). The reason names the field or the
-            step.
+            The engine refused the completion and appended nothing (I1),
+            because the actor does not hold the step (AS-2), does not hold the
+            outcome's scope (AC-4), captured a field the current step does not
+            make editable (FM-3), or captured a value that fails its control
+            or leaves a required field empty (FM-4). The `error` names the
+            reason, and `errors` lists every validation error by field path;
+            it is empty when the reason alone names the refusal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompletionRefusal'
   /api/v1/log:
     get:
       operationId: readLog
@@ -469,3 +475,35 @@ components:
       properties:
         error:
           type: string
+    FieldError:
+      type: object
+      description: >-
+        One validation error: the path of the field that failed and a short
+        reason, so a submission can name every error by path (FM-1, FM-4).
+      required: [path, message]
+      properties:
+        path:
+          type: string
+          description: The key of the field that failed (FM-1).
+        message:
+          type: string
+          description: A short reason for the failure (FM-1).
+    CompletionRefusal:
+      type: object
+      description: >-
+        The engine refused the submission and appended nothing (FM-3, FM-4,
+        I1). The `error` names the reason, and `errors` lists every validation
+        error by field path; it is empty when the reason alone names the
+        refusal (a non-editable key, or an actor or outcome refusal).
+      required: [error, errors]
+      properties:
+        error:
+          type: string
+          description: The reason the engine refused the submission.
+        errors:
+          type: array
+          description: >-
+            Every validation error of the refusal, by field path (FM-4);
+            empty when `error` alone names the refusal.
+          items:
+            $ref: '#/components/schemas/FieldError'
