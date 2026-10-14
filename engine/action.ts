@@ -128,9 +128,9 @@ export function claim(
  * capture; every other captured value is validated against its control, and a
  * required field the step will hold empty is refused. The refusal names every
  * error by field path in `errors` (FM-4). On acceptance the instance advances
- * to the next step,
- * or is marked done when the step was the last, and the operation records the
- * outcome and the captured values (FM-7, I14). When the caller gives a
+ * to the next step, or is marked done when the step was the last, and the
+ * operation records the outcome and the captured values (FM-7, I14). When the
+ * caller gives a
  * resolver, the engine also records the next step's resolved assignees (AS-4,
  * I13), exactly as a start records the first step's.
  */
