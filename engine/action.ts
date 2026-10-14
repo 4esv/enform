@@ -17,6 +17,7 @@ import { authorize, type Grant } from './authorize.js'
 import type { Version } from './concurrency.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import { editableKeys } from './editable.js'
+import type { FieldError } from './fields.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
@@ -41,6 +42,13 @@ export type ActionResult = {
   readonly operation?: Operation
   /** Why the engine refused the action (I5, AS-2, AC-4); absent when it accepted. */
   readonly reason?: string
+  /**
+   * Every validation error of a refused submission, by field path (FM-4). It
+   * is present only when the engine refused a completion for a validation
+   * error; a refusal that `reason` names alone, such as a non-editable key
+   * (FM-3), carries none.
+   */
+  readonly errors?: readonly FieldError[]
 }
 
 /**
