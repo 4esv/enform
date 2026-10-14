@@ -338,6 +338,8 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
       status: { step: 2, totalSteps: 3, currentStep: 'advisor', state: 'waiting', skipped: [] },
       visible: [],
       editable: [],
+      required: [],
+      collapsed: [],
       values: {},
     })
 

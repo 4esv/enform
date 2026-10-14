@@ -45,17 +45,23 @@ export type ProjectedInstance = Instance & { readonly instanceId: string }
  * `editable` is the field keys the actor may change (empty for one that may
  * read but is not an assignee of the step), and `values` holds only the field
  * keys the step makes visible, so a field the step hides is absent from the
- * response (FM-3 criterion 1).
+ * response (FM-3 criterion 1). The rules of the step (FM-2) decide all of it,
+ * and the view carries the two states it did not before: `required` and
+ * `collapsed`.
  */
 export type InstanceView = {
   /** The id of the instance the view describes (DX-1, #187). */
   readonly instanceId: string
   /** The status line of the instance (VT-1, VT-2, S14), reused from status.ts. */
   readonly status: Status
-  /** The field keys the current step makes visible, in definition order (FM-3). */
+  /** The field keys the current step makes visible, in definition order (FM-3, FM-2). */
   readonly visible: readonly string[]
-  /** The field keys the actor may edit on the current step (FM-3); empty when the actor is not an assignee. */
+  /** The field keys the actor may edit on the current step (FM-3, FM-2); empty when the actor is not an assignee. */
   readonly editable: readonly string[]
+  /** The field keys the current step requires, after its rules (FM-2). */
+  readonly required: readonly string[]
+  /** The section keys the current step shows collapsed, after its rules (FM-1, FM-2). */
+  readonly collapsed: readonly string[]
   /** The values the instance holds, restricted to the visible field keys (FM-3, FM-7). */
   readonly values: Readonly<Record<string, JsonValue>>
 }
@@ -116,6 +122,8 @@ export function readInstance(
     status: status(current, context.definition, context.log),
     visible,
     editable,
+    required: [],
+    collapsed: [],
     values: restrict(current.values, visible),
   }
 }
