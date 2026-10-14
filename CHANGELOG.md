@@ -71,6 +71,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The engine records the resolved assignees of every step it enters, not only the first: a completion and a send back stamp the step they move to, the projection accumulates them with the latest resolution of a re-entered step, and the step read refreshes live groups and teams while a dynamic target keeps its one-time members (AS-4, I13, FM-3) (#194).
 - The engine records the values a step completion captures and refuses a captured key the step does not make editable, naming the field, so the read and the write share one rule (FM-3, FM-7, FM-4) (#191).
 - The HTTP API resolves a completion intent through the engine before it appends: a client posts the instance, the outcome and the values it captured, the server decides the current step, the transition and the outcome's authorization, refuses a non-editable field with 409 and the field named, and the client's ID and time survive (FM-3, FM-4, FM-7, AC-4, AS-2, ADR 0010) (#191).
+- The engine evaluates a step's rules: a condition on the data, the step and the user (through the reserved `context` root) shows, hides, collapses, requires, locks or skips a field or section, later rules win per target, and the step read returns the required field keys and the collapsed section keys, so the server's view of the form reflects FM-2 (#75).
 
 ## [0.0.0] - 2026-10-08
 

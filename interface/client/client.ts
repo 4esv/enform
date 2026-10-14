@@ -107,15 +107,18 @@ export interface Status {
 }
 
 /**
- * The instance as one actor and the current step see it (#76, FM-3, FM-7, VT-4). The values
- * hold only the field keys the current step makes visible, so a field the step hides is absent
- * (FM-3 criterion 1).
+ * The instance as one actor and the current step see it (#76, FM-2, FM-3, FM-7, VT-4). The
+ * rules of the step decide `visible`, `editable`, `required` and `collapsed`; the values hold
+ * only the field keys the current step makes visible, so a field the step hides is absent (FM-3
+ * criterion 1).
  */
 export interface InstanceView {
   readonly instanceId: string
   readonly status: Status
   readonly visible: readonly string[]
   readonly editable: readonly string[]
+  readonly required: readonly string[]
+  readonly collapsed: readonly string[]
   readonly values: Record<string, unknown>
 }
 

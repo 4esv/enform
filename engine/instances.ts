@@ -13,7 +13,8 @@
 // projection passes the version that `complete()` expects rather than an
 // accidental 0.
 // The step-scoped read then narrows the instance to the actor and to the
-// current step: the fields the step does not make visible are absent (FM-3),
+// current step: the rules of the step (FM-2) decide what it shows, requires
+// and collapses, the fields it does not make visible are absent (FM-3),
 // the fields it makes editable are editable only for an assignee, and the
 // actor must be allowed to read the instance at all (I8). Every function is
 // pure and deterministic (I6): it reads no clock, no random source and no I/O.
@@ -26,6 +27,7 @@ import { type Assignee, type Instance, recordAssignees } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { isLiveTarget } from './resolve.js'
 import type { TargetResolver } from './routing.js'
+import { evaluateRules } from './rules.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { mayRead, type Status, type StatusContext, status } from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
@@ -92,19 +94,20 @@ export function instanceOf(log: Log, instanceId: string): ProjectedInstance | un
 }
 
 /**
- * Read the instance as one actor and the current step see it (#76, FM-3, FM-7,
- * VT-4, I8, #194, AS-4). The engine authorizes the read with the same rule as a
- * status read (mayRead): the starter, an assignee, or a principal that holds
- * `instance.read` on the flow. An actor that may not read the instance answers
- * undefined, which the API serves as 403. The view then holds the visible and
- * editable field keys of the current step and the values restricted to the
- * visible keys. When the caller gives the resolver it reads the directory
- * through, the engine refreshes the live targets (a group or a team) before it
- * authorizes and before it computes the editable keys, so a member who joined
- * after the task was created is an assignee, while a dynamic target keeps the
- * members the instance recorded (AS-4, I13); an absent resolver uses the
- * recorded members as they are. It is pure and deterministic (I6); it reads no
- * clock, no random source and no I/O.
+ * Read the instance as one actor and the current step see it (#76, FM-2, FM-3,
+ * FM-7, VT-4, I8, #194, AS-4). The engine authorizes the read with the same
+ * rule as a status read (mayRead): the starter, an assignee, or a principal
+ * that holds `instance.read` on the flow. An actor that may not read the
+ * instance answers undefined, which the API serves as 403. The view then holds
+ * the field keys the rules of the current step make visible and required, the
+ * section keys they collapse, the field keys the actor may edit, and the values
+ * restricted to the visible keys. When the caller gives the resolver it reads
+ * the directory through, the engine refreshes the live targets (a group or a
+ * team) before it authorizes and before it computes the editable keys, so a
+ * member who joined after the task was created is an assignee, while a dynamic
+ * target keeps the members the instance recorded (AS-4, I13); an absent
+ * resolver uses the recorded members as they are. It is pure and deterministic
+ * (I6); it reads no clock, no random source and no I/O.
  */
 export function readInstance(
   actor: ActorId,
@@ -115,15 +118,28 @@ export function readInstance(
   const current = resolve === undefined ? instance : refreshLive(instance, resolve)
   if (!mayRead(actor, current, context)) return undefined
   const step = stepOf(context.definition, current.currentStep)
-  const visible = step === undefined ? [] : visibleKeys(step)
-  const editable = step === undefined ? [] : editableKeys(actor, current, step)
+  let visible: readonly string[] = []
+  let editable: readonly string[] = []
+  let required: readonly string[] = []
+  let collapsed: readonly string[] = []
+  if (step !== undefined) {
+    const state = evaluateRules(step, current.values ?? {}, actor)
+    visible = fieldKeys(step).filter(
+      (key) => state.fields[key].visible && !state.fields[key].skipped
+    )
+    editable = editableKeys(actor, current, step).filter((key) => !state.fields[key].locked)
+    required = fieldKeys(step).filter((key) => state.fields[key].required)
+    collapsed = (step.sections ?? [])
+      .filter((section) => state.sections[section.key].collapsed)
+      .map((section) => section.key)
+  }
   return {
     instanceId: current.instanceId,
     status: status(current, context.definition, context.log),
     visible,
     editable,
-    required: [],
-    collapsed: [],
+    required,
+    collapsed,
     values: restrict(current.values, visible),
   }
 }
@@ -263,11 +279,6 @@ function reopened(instance: ProjectedInstance, event: Event): ProjectedInstance 
 function stepOf(definition: FlowDefinition, key: string | undefined): FlowStep | undefined {
   if (key === undefined) return undefined
   return definition.steps.find((step) => step.key === key)
-}
-
-/** The field keys a step makes visible (FM-3): its `visible`, or every field when it declares none. */
-function visibleKeys(step: FlowStep): readonly string[] {
-  return step.visible ?? fieldKeys(step)
 }
 
 /** Every field key of a step in definition order (FM-1): its flat fields or its sections' fields. */

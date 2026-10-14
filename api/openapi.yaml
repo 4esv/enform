@@ -408,10 +408,19 @@ components:
     InstanceView:
       type: object
       description: >-
-        The instance as one actor and the current step see it (#76, FM-3,
-        FM-7, VT-4). The values hold only the field keys the current step makes
-        visible, so a field the step hides is absent (FM-3 criterion 1).
-      required: [instanceId, status, visible, editable, values]
+        The instance as one actor and the current step see it (#76, FM-2, FM-3,
+        FM-7, VT-4). The rules of the step decide `visible`, `editable`,
+        `required` and `collapsed`; the values hold only the field keys the
+        current step makes visible, so a field the step hides is absent (FM-3
+        criterion 1).
+      required:
+        - instanceId
+        - status
+        - visible
+        - editable
+        - required
+        - collapsed
+        - values
       properties:
         instanceId:
           type: string
@@ -422,14 +431,29 @@ components:
           type: array
           description: >-
             The field keys the current step makes visible, in
-            definition order (FM-3).
+            definition order, after its rules (FM-2, FM-3).
           items:
             type: string
         editable:
           type: array
           description: >-
-            The field keys the actor may edit on the current step (FM-3);
-            empty when the actor is not an assignee of the step.
+            The field keys the actor may edit on the current step, after its
+            lock rules (FM-2, FM-3); empty when the actor is not an assignee
+            of the step.
+          items:
+            type: string
+        required:
+          type: array
+          description: >-
+            The field keys the current step requires, after its rules (FM-2);
+            a hidden or skipped field is not required.
+          items:
+            type: string
+        collapsed:
+          type: array
+          description: >-
+            The section keys the current step shows collapsed, after its rules
+            and the section presentation default (FM-1, FM-2).
           items:
             type: string
         values:

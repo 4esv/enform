@@ -172,6 +172,7 @@ test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-
   expect(schema.$defs.section.required).toEqual(['key', 'fields'])
   expect(schema.$defs.field.additionalProperties).toBe(false)
   expect(schema.$defs.field.properties.required).toEqual({ type: 'boolean' })
+  expect(schema.$defs.field.properties.key.not).toEqual({ const: 'context' })
   expect(schema.$defs.field.properties.default).toEqual({ $ref: '#/$defs/jsonLogic' })
   expect(schema.$defs.field.properties.optionsFrom).toEqual({
     description: 'The connector read operation that supplies the option list (FM-6).',

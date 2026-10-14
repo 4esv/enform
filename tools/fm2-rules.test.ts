@@ -103,7 +103,7 @@ function viewFor(
   return view
 }
 
-test.fails('#75 FM-2 a show rule shows a field the step does not make visible', () => {
+test('#75 FM-2 a show rule shows a field the step does not make visible', () => {
   const step = stepWith(`[{ "when": true, "effect": "show", "targets": ["urgent"] }]`)
   const state = evaluateRules(step, {}, SAM)
   // The step does not list `urgent`, so its default is hidden (FM-3); the rule
@@ -112,7 +112,7 @@ test.fails('#75 FM-2 a show rule shows a field the step does not make visible', 
   expect(state.fields.summary.visible).toBe(true)
 })
 
-test.fails('#75 FM-2 a hide rule hides a field and a hidden section hides its fields', () => {
+test('#75 FM-2 a hide rule hides a field and a hidden section hides its fields', () => {
   const step = stepWith(`[
     { "when": true, "effect": "hide", "targets": ["summary"] },
     { "when": true, "effect": "hide", "targets": ["section:extra"] }
@@ -124,7 +124,7 @@ test.fails('#75 FM-2 a hide rule hides a field and a hidden section hides its fi
   expect(state.fields.note.visible).toBe(false)
 })
 
-test.fails('#75 FM-2 a collapse rule collapses a section and a section keeps its default', () => {
+test('#75 FM-2 a collapse rule collapses a section and a section keeps its default', () => {
   const step = stepWith(`[{ "when": true, "effect": "collapse", "targets": ["section:details"] }]`)
   const state = evaluateRules(step, {}, SAM)
   expect(state.sections.details.collapsed).toBe(true)
@@ -134,7 +134,7 @@ test.fails('#75 FM-2 a collapse rule collapses a section and a section keeps its
   expect(evaluateRules(stepWith('[]'), {}, SAM).sections.details.collapsed).toBe(false)
 })
 
-test.fails('#75 FM-2 a require rule requires a field, and a hidden field is not required', () => {
+test('#75 FM-2 a require rule requires a field, and a hidden field is not required', () => {
   // `note` is shown by the step, so the rule adds it to the required set.
   const shown = stepWith(`[{ "when": true, "effect": "require", "targets": ["note"] }]`)
   expect(evaluateRules(shown, {}, SAM).fields.note.required).toBe(true)
@@ -145,7 +145,7 @@ test.fails('#75 FM-2 a require rule requires a field, and a hidden field is not 
   expect(evaluateRules(stepWith('[]'), {}, SAM).fields.summary.required).toBe(true)
 })
 
-test.fails('#75 FM-2 a lock rule removes editability and never grants it', () => {
+test('#75 FM-2 a lock rule removes editability and never grants it', () => {
   const step = stepWith(`[
     { "when": true, "effect": "lock", "targets": ["summary"] },
     { "when": true, "effect": "lock", "targets": ["urgent"] }
@@ -156,7 +156,7 @@ test.fails('#75 FM-2 a lock rule removes editability and never grants it', () =>
   expect(read.editable).toEqual([])
 })
 
-test.fails('#75 FM-2 a skip rule drops the field from the view and keeps the value', () => {
+test('#75 FM-2 a skip rule drops the field from the view and keeps the value', () => {
   const step = stepWith(`[{ "when": true, "effect": "skip", "targets": ["note"] }]`)
   const instance = instanceFor(step, { summary: 'hello', note: 'kept' })
   const read = readInstance(SAM, instance, {
@@ -174,7 +174,7 @@ test.fails('#75 FM-2 a skip rule drops the field from the view and keeps the val
   expect(instance.values?.note).toBe('kept')
 })
 
-test.fails('#75 FM-2 a false condition keeps the default state', () => {
+test('#75 FM-2 a false condition keeps the default state', () => {
   const step = stepWith(`[
     { "when": { "==": [1, 2] }, "effect": "hide", "targets": ["summary"] },
     { "when": { "==": [1, 2] }, "effect": "collapse", "targets": ["section:details"] },
@@ -190,7 +190,7 @@ test.fails('#75 FM-2 a false condition keeps the default state', () => {
   expect(state.sections.details.collapsed).toBe(false)
 })
 
-test.fails('#75 FM-2 a condition reads the data, the step and the user through context', () => {
+test('#75 FM-2 a condition reads the data, the step and the user through context', () => {
   const step = stepWith(`[
     { "when": { "==": [{ "var": "urgent" }, true] }, "effect": "require", "targets": ["note"] },
     { "when": { "==": [{ "var": "context.step" }, "request"] }, "effect": "show", "targets": ["urgent"] },
@@ -206,7 +206,7 @@ test.fails('#75 FM-2 a condition reads the data, the step and the user through c
   expect(evaluateRules(step, { urgent: false }, SAM).fields.note.visible).toBe(true)
 })
 
-test.fails('#75 FM-2 a skipped field is not required', () => {
+test('#75 FM-2 a skipped field is not required', () => {
   const step = stepWith(`[{ "when": true, "effect": "skip", "targets": ["summary"] }]`)
   const read = viewFor(step, {}, SAM, samGrants)
   // `summary` is required by the definition, but a skipped field is impossible
@@ -215,7 +215,7 @@ test.fails('#75 FM-2 a skipped field is not required', () => {
   expect(read.required).toEqual([])
 })
 
-test.fails('#75 FM-2 the parser refuses a field key named context', () => {
+test('#75 FM-2 the parser refuses a field key named context', () => {
   const flat = `{ "schemaVersion": 2, "steps": [ { "key": "s", "targets": [{ "user": "user:sam" }], "fields": [{ "key": "context", "control": "text" }] } ] }`
   const section = `{ "schemaVersion": 2, "steps": [ { "key": "s", "targets": [{ "user": "user:sam" }], "sections": [{ "key": "g", "fields": [{ "key": "context", "control": "text" }] }] } ] }`
   // `context` is the reserved root of a condition (FM-2), so no field may shadow it.
@@ -223,7 +223,7 @@ test.fails('#75 FM-2 the parser refuses a field key named context', () => {
   expect(() => parse(section)).toThrow(/context is a reserved field key/)
 })
 
-test.fails('#75 FM-2 the step read reflects every effect and is deterministic', () => {
+test('#75 FM-2 the step read reflects every effect and is deterministic', () => {
   const step = stepWith(`[
     { "when": true, "effect": "show", "targets": ["urgent"] },
     { "when": true, "effect": "hide", "targets": ["note"] },

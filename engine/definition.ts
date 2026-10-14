@@ -72,6 +72,14 @@ export type ControlType = (typeof CONTROL_TYPES)[number]
 /** The six effects of a rule (FM-2, FM-5). */
 export const RULE_EFFECTS = ['show', 'hide', 'collapse', 'require', 'lock', 'skip'] as const
 
+/**
+ * The reserved root that a rule condition reads the current step and the
+ * acting principal from (FM-2): the condition data is the instance's values
+ * plus `context: { step, user }`. No field may use the key, so nothing can
+ * shadow the root; the parser refuses one.
+ */
+export const CONTEXT_KEY = 'context'
+
 /** One effect of a rule (FM-2, FM-5). */
 export type RuleEffect = (typeof RULE_EFFECTS)[number]
 
@@ -343,6 +351,7 @@ function readV1Fields(body: unknown): readonly Field[] | undefined {
 function readV1Field(body: unknown): Field {
   if (!isRecord(body)) throw new Error('flow definition: a field is not an object')
   if (typeof body.key !== 'string') throw new Error('flow definition: a field has no key')
+  refuseReservedKey(body.key)
   if (!CONTROL_TYPES.includes(body.control as ControlType)) {
     throw new Error(`flow definition: ${String(body.control)} is not a control type (FM-1)`)
   }
@@ -438,6 +447,7 @@ function readV2Fields(body: unknown): readonly Field[] | undefined {
 function readV2Field(body: unknown): Field {
   if (!isRecord(body)) throw new Error('flow definition: a field is not an object')
   if (typeof body.key !== 'string') throw new Error('flow definition: a field has no key')
+  refuseReservedKey(body.key)
   if (!CONTROL_TYPES.includes(body.control as ControlType)) {
     throw new Error(`flow definition: ${String(body.control)} is not a control type (FM-1)`)
   }
@@ -577,6 +587,17 @@ function readOptions(body: unknown): readonly string[] | undefined {
     throw new Error('flow definition: options must be an array of strings')
   }
   return body as string[]
+}
+
+/**
+ * Refuse a field key that shadows the reserved `context` root (FM-2). A rule
+ * reads the step and the user from `context`, so a field of that key would
+ * make the root ambiguous; the parser refuses it in v1 and v2 alike.
+ */
+function refuseReservedKey(key: string): void {
+  if (key === CONTEXT_KEY) {
+    throw new Error(`flow definition: ${CONTEXT_KEY} is a reserved field key (FM-2)`)
+  }
 }
 
 /** Read the optional outcomes of a step (WF-2). */
