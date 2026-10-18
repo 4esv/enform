@@ -1,4 +1,4 @@
-// Issue #181, FM-1, FM-3, FM-7, A9: the form model. It narrows a v2 flow
+// Issue #106, #181, FM-1, FM-3, FM-7, A9: the form model. It narrows a v2 flow
 // definition as it arrives from readFlow and answers what a step's form looks
 // like. It is a pure presentation view: it reads no clock, no random source
 // and no I/O, and it decides no validation, authorization or routing. The
@@ -29,6 +29,9 @@ export type InputKind =
   | 'single-line'
   | 'textarea'
   | 'number'
+  | 'date'
+  | 'email'
+  | 'tel'
   | 'select'
   | 'checkboxes'
   | 'radios'
@@ -96,26 +99,27 @@ const CONTROLS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * The DOM kind of each of the sixteen controls (FM-1). A single-line input is
- * an `<input>` for text, a date, an email or a phone number; a number input is
- * an `<input type="number">` for a number or an amount of money; a select is a
- * single `<select>`; multi-select and radio render one element per option;
- * checkbox and yes-no render one boolean switch; file, user, static and
- * repeating render their own element or group.
+ * The DOM kind of each of the sixteen controls (FM-1). Text is a single-line
+ * input. A date, an email and a phone number are their own input types. A
+ * number or an amount of money is an `<input type="number">`. A select is a
+ * single `<select>`; multi-select, radio and yes-no render one element per
+ * option, and yes-no's options are the strings 'yes' and 'no'. Checkbox
+ * renders one boolean switch. File, user, static and repeating render their
+ * own element or group.
  */
 const CONTROL_KINDS: Record<Control, InputKind> = {
   text: 'single-line',
   'long-text': 'textarea',
   number: 'number',
   money: 'number',
-  date: 'single-line',
+  date: 'date',
   select: 'select',
   'multi-select': 'checkboxes',
   checkbox: 'switch',
   radio: 'radios',
-  'yes-no': 'switch',
-  email: 'single-line',
-  phone: 'single-line',
+  'yes-no': 'radios',
+  email: 'email',
+  phone: 'tel',
   file: 'file',
   user: 'person',
   static: 'static',

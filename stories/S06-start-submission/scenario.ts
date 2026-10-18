@@ -40,7 +40,7 @@ export const definitionV1: FlowDefinition = parse(`{
       "fields": [
         { "key": "summary", "control": "text", "required": true },
         { "key": "overload_credits", "control": "number" },
-        { "key": "urgent", "control": "yes-no" },
+        { "key": "urgent", "control": "checkbox" },
         { "key": "details", "control": "long-text" }
       ],
       "editable": ["summary", "overload_credits", "urgent", "details"],

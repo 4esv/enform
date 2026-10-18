@@ -17,7 +17,7 @@ import { definitionV2, flowState, golden, resolve, samGrants, values } from './s
 // the contract the values must meet: the server accepts what the browser
 // collects (FM-3, FM-4, A9).
 
-test.fails('#106 FM-1 the browser renders the sixteen controls and submits values the server accepts', async () => {
+test('#106 FM-1 the browser renders the sixteen controls and submits values the server accepts', async () => {
   const gui = await runSteps(golden, {
     mode: 'gui',
     resolve,
