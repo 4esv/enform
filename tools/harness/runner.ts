@@ -13,6 +13,7 @@ import { oracles } from './oracles.js'
 import {
   fromView,
   type GuiAction,
+  type GuiDomExpectation,
   type GuiFillValue,
   type GuiStep,
   goldenClock,
@@ -256,6 +257,8 @@ async function performGuiActions(page: Page, actions: readonly GuiAction[]): Pro
       await fillField(page, action.fill.field, action.fill.value)
     } else if ('click' in action) {
       await page.locator(action.click).click()
+    } else if ('expectDom' in action) {
+      await expectFieldDom(page, action.expectDom)
     } else {
       await page.waitForFunction(
         (expected) => {
@@ -269,15 +272,93 @@ async function performGuiActions(page: Page, actions: readonly GuiAction[]): Pro
   }
 }
 
+/**
+ * Assert the DOM that one field renders (FM-1): its tag, its input type and,
+ * when the expectation gives one, its count. A field is found by its name,
+ * and a field with no named control (static text, repeating section) by its
+ * data-field marker.
+ */
+async function expectFieldDom(page: Page, expected: GuiDomExpectation): Promise<void> {
+  const byName = page.locator(`[name="${expected.field}"]`)
+  const elements =
+    (await byName.count()) > 0 ? byName : page.locator(`[data-field="${expected.field}"]`)
+  const count = await elements.count()
+  if (count === 0) throw new Error(`gui mode: the field ${expected.field} rendered no control`)
+  if (expected.count !== undefined && count !== expected.count) {
+    throw new Error(
+      `gui mode: the field ${expected.field} rendered ${count} controls, not ${expected.count}`
+    )
+  }
+  const nodes = await elements.evaluateAll((list) =>
+    list.map((node) => ({
+      tag: node.tagName.toLowerCase(),
+      type: node instanceof HTMLInputElement ? node.type : undefined,
+    }))
+  )
+  for (const node of nodes) {
+    if (node.tag !== expected.tag) {
+      throw new Error(
+        `gui mode: the field ${expected.field} renders ${node.tag}, not ${expected.tag}`
+      )
+    }
+    if (expected.type !== undefined && node.type !== expected.type) {
+      throw new Error(
+        `gui mode: the field ${expected.field} renders type ${String(node.type)}, not ${expected.type}`
+      )
+    }
+  }
+}
+
 /** Fill one form control by its field key (FM-1, FM-7). */
 async function fillField(page: Page, field: string, value: GuiFillValue): Promise<void> {
-  const element = page.locator(`[name="${field}"]`)
-  const count = await element.count()
+  const elements = page.locator(`[name="${field}"]`)
+  const count = await elements.count()
+  if (count === 0) {
+    throw new Error(`gui mode: the field ${field} matched ${count} controls, not one`)
+  }
+  const control = elements.first()
+  const tag = await control.evaluate((node) => node.tagName.toLowerCase())
+  if (tag === 'input') {
+    const type = await control.getAttribute('type')
+    if (type === 'radio') {
+      const wanted = String(value)
+      const index = await elements.evaluateAll(
+        (nodes, target) => nodes.findIndex((node) => (node as HTMLInputElement).value === target),
+        wanted
+      )
+      if (index < 0) {
+        throw new Error(`gui mode: the field ${field} has no radio with value ${wanted}`)
+      }
+      await elements.nth(index).check()
+      return
+    }
+    if (type === 'checkbox' && Array.isArray(value)) {
+      const wanted = value.map((entry) => String(entry))
+      const indexes = await elements.evaluateAll(
+        (nodes, options) =>
+          nodes.flatMap((node, index) =>
+            options.includes((node as HTMLInputElement).value) ? [index] : []
+          ),
+        wanted
+      )
+      for (const index of indexes) await elements.nth(index).check()
+      return
+    }
+    if (type === 'file') {
+      if (count !== 1) {
+        throw new Error(`gui mode: the field ${field} matched ${count} file inputs, not one`)
+      }
+      await control.setInputFiles({
+        name: String(value),
+        mimeType: 'text/plain',
+        buffer: Buffer.from(''),
+      })
+      return
+    }
+  }
   if (count !== 1) {
     throw new Error(`gui mode: the field ${field} matched ${count} controls, not one`)
   }
-  const control = element.first()
-  const tag = await control.evaluate((node) => node.tagName.toLowerCase())
   if (tag === 'textarea') {
     await control.fill(String(value))
     return
@@ -291,9 +372,6 @@ async function fillField(page: Page, field: string, value: GuiFillValue): Promis
     if (type === 'checkbox') {
       await control.setChecked(Boolean(value))
       return
-    }
-    if (type === 'file' || type === 'radio') {
-      throw new Error(`gui mode: cannot fill a ${type} control (${field})`)
     }
     await control.fill(String(value))
     return

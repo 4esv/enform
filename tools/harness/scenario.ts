@@ -24,14 +24,30 @@ export type Step = {
   readonly outbox?: readonly OutboxEntry[]
 }
 
-/** One value that a gui action fills into a control (FM-1, FM-7). */
-export type GuiFillValue = string | number | boolean
+/**
+ * One value that a gui action fills into a control (FM-1, FM-7). A string,
+ * number or boolean fills one control; a string list checks the boxes of a
+ * checkbox group whose value is in the list (multi-select).
+ */
+export type GuiFillValue = string | number | boolean | readonly string[]
 
-/** One gui action: fill a field, click a control, or expect a status text. */
+/** The DOM that one field must render (FM-1): its tag, its input type and its count. */
+export type GuiDomExpectation = {
+  readonly field: string
+  readonly tag: string
+  readonly type?: string
+  readonly count?: number
+}
+
+/**
+ * One gui action: fill a field, click a control, expect a status text, or
+ * expect the DOM of a field.
+ */
 export type GuiAction =
   | { readonly fill: { readonly field: string; readonly value: GuiFillValue } }
   | { readonly click: string }
   | { readonly expect: string }
+  | { readonly expectDom: GuiDomExpectation }
 
 /** One gui step, index-aligned with the scenario step at the same index (STORIES.md). */
 export type GuiStep = {
