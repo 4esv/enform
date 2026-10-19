@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
+import * as client from '../interface/client/client.js'
 
 // Issue #93, DX-4, I12, MVP.md 9.1: the interface uses only the generated API
 // client, and the client is generated from api/openapi.yaml. The generator is
@@ -59,6 +60,90 @@ test('#93 DX-4 the generated client exposes the four typed operations (I12)', ()
   expect(source, 'readFlow takes a slug and returns a PublishedFlow').toContain(
     'export async function readFlow(slug: string): Promise<PublishedFlow> {'
   )
+})
+
+// Issue #106, FM-4, DX-4, I12, ADR 0010: a validation refusal is HTTP 409
+// with a `CompletionRefusal` body (api/openapi.yaml). The generated client
+// must surface that body, so the form can name every field error by path
+// (FM-1, FM-4) instead of losing it behind a status line.
+type Refusal = Error & {
+  readonly status: number
+  readonly error: string
+  readonly errors: readonly client.FieldError[]
+}
+
+type RefusalConstructor = new (
+  status: number,
+  error: string,
+  errors: readonly client.FieldError[]
+) => Refusal
+
+// The generator does not emit the class yet (#106), so the checks look it up
+// at runtime and compile before it lands.
+const RequestRefused = (client as unknown as { readonly RequestRefused?: RefusalConstructor })
+  .RequestRefused
+
+const operation: client.Operation = {
+  id: '0190f2c8-9a1e-7c3b-8f2a-6d4e1b0c9a87',
+  type: 'step.completed@1',
+  at: 1,
+  actor: 'user-1',
+  payload: {},
+}
+
+beforeEach(() => {
+  client.setClient({ baseUrl: 'http://api.test', token: 'token' })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function respond(status: number, body: string, statusText = ''): void {
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response(body, { status, statusText })))
+}
+
+// The error that appendOperation rejects with. A resolved promise is a failure
+// of the check, because every status below is non-2xx.
+async function refusal(): Promise<Refusal> {
+  try {
+    await client.appendOperation(operation)
+  } catch (error) {
+    return error as Refusal
+  }
+  throw new Error('the client resolved a non-2xx response')
+}
+
+test.fails('#106 a 409 refusal surfaces its reason and every field error (FM-4, DX-4, I12)', async () => {
+  const body = {
+    error: 'step request: summary is required (FM-4)',
+    errors: [{ path: 'summary', message: 'is required' }],
+  }
+  respond(409, JSON.stringify(body))
+  const error = await refusal()
+  expect(error).toBeInstanceOf(RequestRefused)
+  expect(error.status, 'the status is the refusal status').toBe(409)
+  expect(error.error, 'the reason the engine gave').toBe(body.error)
+  expect(error.errors, 'every field error by path').toEqual(body.errors)
+  expect(error.message, 'the message names the status and the reason').toContain('409')
+  expect(error.message).toContain(body.error)
+})
+
+test.fails('#106 a 400 refusal without field errors reports an empty list (FM-4, DX-4)', async () => {
+  respond(400, JSON.stringify({ error: 'intent: the instance id is missing' }))
+  const error = await refusal()
+  expect(error).toBeInstanceOf(RequestRefused)
+  expect(error.status).toBe(400)
+  expect(error.error).toBe('intent: the instance id is missing')
+  expect(error.errors, 'no field errors means an empty list').toEqual([])
+})
+
+test('#106 a 500 with a non-JSON body keeps the plain Error that names the status', async () => {
+  respond(500, 'not json', 'Internal Server Error')
+  const error = await refusal()
+  expect(error.name, 'a body that is not a refusal stays a plain Error').toBe('Error')
+  expect(error.message).toContain('500')
+  expect(error.message).toContain('Internal Server Error')
 })
 
 test('#93 DX-4 a hand-written /api/v1 call in the interface fails the rule (I12)', () => {
