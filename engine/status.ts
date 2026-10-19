@@ -1,24 +1,26 @@
 // Issue #51, S14, VT-1, VT-2, VT-3, VT-4, AC-1, AC-4, AC-5, WF-1, WF-3, S05,
 // S11, I4, I6, I8, I14: the status of a submission, and the notes and the
 // fields that one actor may read.
+// Issue #192, S05, I4: the skipped steps are the instance's own.
 //
 // S14: Sam reads where his request is. The status is a projection of the
 // instance and the log (I4): the position and the total of the steps, the
 // current step, its holder and its state in plain language (VT-1, VT-2). The
 // state tells "waiting to be opened" from "opened, in progress" (S14), and a
-// skipped step carries the condition that skipped it, read from the log's
-// `step.skipped@1` events (S05, WF-1). Every read is authorized (I8): a
-// starter always reads their own instance (AC-5), and the notes and the
-// guarded values that an actor may not see are absent from the view (VT-3,
-// VT-4). The functions are pure and deterministic (I6): they read no clock,
-// no random source and no I/O.
+// skipped step carries the condition that skipped it, read from the `skipped`
+// arrays of the instance's own events (S05, WF-1, #192), so another
+// instance's skip and a draft run's `step.skipped@1` are absent. Every read is
+// authorized (I8): a starter always reads their own instance (AC-5), and the
+// notes and the guarded values that an actor may not see are absent from the
+// view (VT-3, VT-4). The functions are pure and deterministic (I6): they read
+// no clock, no random source and no I/O.
 
 import { authorize, type Grant } from './authorize.js'
 import type { FlowDefinition, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { STEP_SENT_BACK } from './sendBack.js'
-import { type SkippedStep, STEP_SKIPPED } from './workflow.js'
+import type { SkippedStep } from './workflow.js'
 
 /** The plain-language state of an instance (VT-2, S14). */
 export type StatusState = 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
@@ -38,7 +40,7 @@ export type Status = {
   readonly holder?: ActorId
   /** The state in plain language (VT-2, S14). */
   readonly state: StatusState
-  /** The steps that a condition skipped, with the condition that skipped them (S05). */
+  /** The steps that a condition skipped, with the condition that skipped them (S05, #192). */
   readonly skipped: readonly SkippedStep[]
 }
 
@@ -101,8 +103,8 @@ export type StatusContext = {
  * The status of an instance (VT-1, VT-2, S14). It is a pure function of the
  * instance, the definition and the log (I6): the position and the total come
  * from the definition, the state from the instance's markers, and the skipped
- * steps from the log's `step.skipped@1` events (S05). It reads no clock, no
- * random source and no I/O.
+ * steps from the instance's own events, so no other instance's skip appears
+ * (S05, #192). It reads no clock, no random source and no I/O.
  */
 export function status(instance: Instance, definition: FlowDefinition, log: Log): Status {
   const totalSteps = definition.steps.length
@@ -112,7 +114,7 @@ export function status(instance: Instance, definition: FlowDefinition, log: Log)
     currentStep: instance.currentStep,
     holder: instance.holder,
     state: statusState(instance),
-    skipped: skippedSteps(log),
+    skipped: skippedSteps(instance, log),
   }
 }
 
@@ -219,16 +221,35 @@ function activePosition(instance: Instance, definition: FlowDefinition): number 
   return index === -1 ? undefined : index + 1
 }
 
-/** The skipped steps that the log records, in log order (S05, WF-1). */
-function skippedSteps(log: Log): readonly SkippedStep[] {
+/**
+ * The skipped steps that the instance's own events record, in log order (S05,
+ * WF-1, #192). An event belongs to the instance when its payload names the
+ * same instance id, so another instance's skip and a draft run's
+ * `step.skipped@1` event, which carries no instance id, are absent (I4). An
+ * instance without an id has no events of its own and reports no skip.
+ */
+function skippedSteps(instance: Instance, log: Log): readonly SkippedStep[] {
+  if (instance.instanceId === undefined) return []
   const skipped: SkippedStep[] = []
   for (const event of log) {
-    if (event.type !== STEP_SKIPPED) continue
-    const step = event.payload.step
-    const condition = event.payload.condition
-    if (typeof step === 'string' && condition !== undefined) {
-      skipped.push({ step, condition: condition as JsonValue })
-    }
+    if (event.payload.instanceId !== instance.instanceId) continue
+    skipped.push(...readSkipped(event.payload.skipped))
+  }
+  return skipped
+}
+
+/**
+ * The skipped steps that one `skipped` array records (S05, #192). A malformed
+ * or absent value records none, so a read never trusts the shape of the log.
+ */
+function readSkipped(value: unknown): readonly SkippedStep[] {
+  if (!Array.isArray(value)) return []
+  const skipped: SkippedStep[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { step, condition } = entry as Record<string, unknown>
+    if (typeof step !== 'string' || condition === undefined) continue
+    skipped.push({ step, condition: condition as JsonValue })
   }
   return skipped
 }

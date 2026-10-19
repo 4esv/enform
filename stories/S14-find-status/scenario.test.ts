@@ -2,12 +2,12 @@ import { expect, test } from 'vitest'
 import { type ActionResult, claim, complete } from '../../engine/action.js'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Instance } from '../../engine/instance.js'
-import { createOperation, type OperationDeps } from '../../engine/operation.js'
+import type { OperationDeps } from '../../engine/operation.js'
 import { resolveAssignees } from '../../engine/routing.js'
 import { type SendBackResult, STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
 import { type StatusContext, status, visibleTo } from '../../engine/status.js'
 import { startInstance } from '../../engine/submission.js'
-import { isStepSkipped, STEP_SKIPPED } from '../../engine/workflow.js'
+import { isStepSkipped } from '../../engine/workflow.js'
 import {
   ADVISOR_STEP,
   ANA,
@@ -86,15 +86,9 @@ test('#51 the status line shows the step, the holder and the wait state, and I8 
   let state = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
 
-  // S05, I14: the run records the skip on the log, attributed to the person
-  // who advanced the flow. The status reads it from there (I4).
-  const skip = createOperation(
-    STEP_SKIPPED,
-    { step: CHAIR_STEP, condition: chairSkipWhen },
-    sources,
-    STARTER
-  )
-  state = apply(skip, state)
+  // S05, I14, #192: the start records the routing skip on its own operation,
+  // attributed to the starter. The status reads it from the instance's events
+  // (I4).
 
   // (b) VT-1, VT-2, I6: the status line is step 2 of 4, on the request step,
   // with no holder, and it says "waiting to be opened". The skipped chair step

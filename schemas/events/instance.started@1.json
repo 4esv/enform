@@ -2,10 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/events/instance.started@1.json",
   "title": "enform instance.started@1 event payload",
-  "description": "The payload of an instance.started@1 event (#43, #177, #187, S06, FM-7, DF-2, DX-1, I13). It names the instance that the event started, by the id that the client minted (DX-1, #187). A start routes a draft to the first step whose skip condition is false (WF-1), stamps the instance with its definition version and resolved assignees (DF-2, I13), names the starter (AC-5), and records the values that the form holds (FM-7).",
+  "description": "The payload of an instance.started@1 event (#43, #177, #187, #192, S06, FM-7, DF-2, DX-1, I13). It names the instance that the event started, by the id that the client minted (DX-1, #187). A start routes a draft to the first step whose skip condition is false (WF-1), records the steps that its route skipped, in definition order, with the condition that skipped each (#192, WF-1, S05), stamps the instance with its definition version and resolved assignees (DF-2, I13), names the starter (AC-5), and records the values that the form holds (FM-7).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["instanceId", "definitionVersion", "currentStep", "assignees", "starter", "values"],
+  "required": [
+    "instanceId",
+    "definitionVersion",
+    "currentStep",
+    "assignees",
+    "starter",
+    "values",
+    "skipped"
+  ],
   "properties": {
     "instanceId": {
       "description": "The id that identifies the instance, minted by the client that started it (DX-1, #187). It is not the operation id: the operation id names one change, the instance id names the instance that the change acts on.",
@@ -28,9 +36,24 @@
       "description": "The principal that started the instance (S06, AC-5).",
       "type": "string"
     },
-    "values": { "$ref": "#/$defs/values" }
+    "values": { "$ref": "#/$defs/values" },
+    "skipped": {
+      "description": "The steps that the start's route skipped, in definition order, with the condition that skipped each (#192, WF-1, S05).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/skippedStep" }
+    }
   },
   "$defs": {
+    "skippedStep": {
+      "description": "One step that the route skipped, and the condition that skipped it (S05, #192).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "condition"],
+      "properties": {
+        "step": { "type": "string" },
+        "condition": { "$ref": "#/$defs/jsonValue" }
+      }
+    },
     "values": {
       "description": "The values that the form holds: one field key to one JSON value (FM-7).",
       "type": "object",

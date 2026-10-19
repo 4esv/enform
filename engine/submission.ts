@@ -1,21 +1,23 @@
 // Issue #43, #177, S06, ID-2, AC-1, I2, I6, I10, I13, I14, SE-1, FM-7:
 // start and submit a submission.
 // Issue #76, DX-1, #187: a start and a submit name the instance they act on.
+// Issue #192, WF-1, S05, I4: a start records the steps its route skipped.
 //
 // S06: Sam opens a form link, fills it in and submits it. The engine never
 // creates an anonymous draft (ID-2): a start needs a signed-in principal, and
 // only the engine decides whether that principal may start (AC-1, I8), through
 // the grants that apply to it. A start routes the draft to the assignees of the
-// first step whose skip condition is false (WF-1, I10) and stamps the instance
-// with its definition version and those assignees (DF-2, I13). Both a start
-// and a submit record the values that the form holds (FM-7): the start records
-// the values that it routed with, and the submit records the values that the
-// step captured, merged over what the instance already held. A submit marks
-// the instance submitted and, in the same operation, records the assignment
-// email that the first assignee receives (I2, SE-1): one apply commits the
-// state change and its side effect together, and a worker delivers it later.
-// Both functions are pure and deterministic (I6): they read no clock, no
-// random source and no I/O, and the injected sources come in as arguments.
+// first step whose skip condition is false (WF-1, I10), records the steps that
+// its route skipped with the conditions on the instance.started@1 event, and
+// stamps the instance with its definition version and those assignees (DF-2,
+// I13). Both a start and a submit record the values that the form holds (FM-7):
+// the start records the values that it routed with, and the submit records the
+// values that the step captured, merged over what the instance already held. A
+// submit marks the instance submitted and, in the same operation, records the
+// assignment email that the first assignee receives (I2, SE-1): one apply
+// commits the state change and its side effect together, and a worker delivers
+// it later. Both functions are pure and deterministic (I6): they read no clock,
+// no random source and no I/O, and the injected sources come in as arguments.
 
 import { authorize, type Grant } from './authorize.js'
 import type { ConditionData } from './condition.js'
@@ -32,9 +34,13 @@ import {
 } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
 import { resolveAssignees, type TargetResolver } from './routing.js'
-import { isStepSkipped } from './workflow.js'
+import { isStepSkipped, type SkippedStep } from './workflow.js'
 
-/** The versioned event type of a start (S06, MVP.md 9.1). */
+/**
+ * The versioned event type of a start (S06, MVP.md 9.1, #192). The start
+ * records the steps that its route skipped, with the conditions that skipped
+ * them, so a read attributes every skip to this instance (WF-1, S05).
+ */
 export const INSTANCE_STARTED = 'instance.started@1'
 
 /** The versioned event type of a submit (S06, MVP.md 9.1). */
@@ -68,9 +74,11 @@ export type SubmittedInstance = {
  * start records it on the instance and in the `instance.started@1` payload, so
  * the log names the instance that the event started (#187). The function routes
  * the draft to the assignees of the first step whose skip condition is false
- * (WF-1, I10), stamps the instance with the content hash of the flow's latest
- * published version (DF-2, I13), and records the values that it routed with
- * (FM-7). It is pure and deterministic (I6).
+ * (WF-1, I10), records the steps that its route skipped with the conditions on
+ * the start event, attributed to the starter (#192, S05), stamps the instance
+ * with the content hash of the flow's latest published version (DF-2, I13), and
+ * records the values that it routed with (FM-7). It is pure and deterministic
+ * (I6).
  */
 export function startInstance(
   flow: Flow,
@@ -84,12 +92,12 @@ export function startInstance(
   const resource = `flow:${flow.slug}`
   assertStartable(actor, grants, resource)
   const definition = startableDefinition(flow)
-  const step = firstActiveStep(definition, data)
-  const assignees = resolveAssignees(step, resolve)
+  const route = routeAtStart(definition, data)
+  const assignees = resolveAssignees(route.step, resolve)
   const instance: Instance = {
     ...createInstance(definition, assignees),
     instanceId,
-    currentStep: step.key,
+    currentStep: route.step.key,
     submitted: false,
     starter: actor,
     values: data,
@@ -97,10 +105,11 @@ export function startInstance(
   const change = {
     instanceId,
     definitionVersion: instance.definitionVersion,
-    currentStep: step.key,
+    currentStep: route.step.key,
     assignees,
     starter: actor,
     values: data,
+    skipped: route.skipped,
   }
   const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
   return { instance, operation }
@@ -283,17 +292,25 @@ function startableDefinition(flow: Flow): FlowDefinition {
 }
 
 /**
- * The step that the draft routes to (WF-1, S06): the first step whose skip
- * condition is false. A step with no condition is never skipped. Every step
- * being skipped is a flow error, and the start refuses rather than routing
- * nowhere.
+ * The route that the draft takes at a start (WF-1, S05, #192): the first step
+ * whose skip condition is false, and the steps before it that the route
+ * skipped, in definition order, with the condition that skipped each. A step
+ * with no condition is never skipped. Every step being skipped is a flow
+ * error, and the start refuses rather than routing nowhere.
  */
-function firstActiveStep(definition: FlowDefinition, data: ConditionData): FlowStep {
-  const step = definition.steps.find((candidate) => !isStepSkipped(candidate, data))
-  if (step === undefined) {
-    throw new Error('instance: every step is skipped, so the start has no step to route (WF-1)')
+function routeAtStart(
+  definition: FlowDefinition,
+  data: ConditionData
+): { readonly step: FlowStep; readonly skipped: readonly SkippedStep[] } {
+  const skipped: SkippedStep[] = []
+  for (const step of definition.steps) {
+    if (step.skipWhen !== undefined && isStepSkipped(step, data)) {
+      skipped.push({ step: step.key, condition: step.skipWhen })
+      continue
+    }
+    return { step, skipped }
   }
-  return step
+  throw new Error('instance: every step is skipped, so the start has no step to route (WF-1)')
 }
 
 /**

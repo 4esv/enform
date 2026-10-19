@@ -253,6 +253,7 @@ test('#184 a posted intent resolves to the engine operation and keeps the client
       assignees: [{ step: 'advisor', target: { user: 'user:okafor' }, members: ['user:okafor'] }],
       starter: 'user:sam',
       values: { urgent: false },
+      skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
     })
     expect(api.state().log).toHaveLength(before + 1)
     expect(api.state().log.at(-1)?.operationId).toBe('intent-1')
@@ -335,7 +336,13 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
     expect(read.status).toBe(200)
     expect(await read.json()).toEqual({
       instanceId: INSTANCE_ID,
-      status: { step: 2, totalSteps: 3, currentStep: 'advisor', state: 'waiting', skipped: [] },
+      status: {
+        step: 2,
+        totalSteps: 3,
+        currentStep: 'advisor',
+        state: 'waiting',
+        skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
+      },
       visible: [],
       editable: [],
       required: [],

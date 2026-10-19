@@ -76,6 +76,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The browser renders all sixteen controls of FM-1 and submits the values that the engine's validator accepts: yes and no are radios, date, email and phone are typed inputs, money steps by 0.01, an empty number, date or file is omitted, a file submits its name, static text submits nothing and a repeating section submits its JSON rows (FM-1, FM-7, A9) (#106).
 - The browser shows a holder's task: it renders the current step's form from the engine's read, marks the fields the step requires, offers one control per outcome, posts a completion, and shows a server refusal at the control it names, with the reason in the status line (FM-3, FM-4, FM-7, A9, I12, ADR 0010) (#106).
 
+### Fixed
+
+- A start records the steps its route skipped, with the conditions, on the instance's `instance.started@1` event, and `status.skipped` reads only that instance's skips, so another instance's skip or a draft run's `step.skipped@1` no longer appears (WF-1, VT-2, S05, S14, I4) (#192).
+
 ## [0.0.0] - 2026-10-08
 
 ### Added

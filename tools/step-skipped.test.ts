@@ -86,7 +86,7 @@ function seeded(sources: OperationDeps): State {
   return apply(published.operation, apply(pushed.operation, emptyState))
 }
 
-test.fails('#192 a start records the step its route skipped, and the read reports it (WF-1, S05, I4)', () => {
+test('#192 a start records the step its route skipped, and the read reports it (WF-1, S05, I4)', () => {
   const sources = deps()
   let state = seeded(sources)
 
@@ -118,7 +118,7 @@ test.fails('#192 a start records the step its route skipped, and the read report
   expect(view?.status.skipped).toEqual([{ step: 'chair', condition: chairSkipWhen }])
 })
 
-test.fails('#192 a status read holds only its own instance skips (I4, S05)', () => {
+test('#192 a status read holds only its own instance skips (I4, S05)', () => {
   const sources = deps()
   let state = seeded(sources)
 
