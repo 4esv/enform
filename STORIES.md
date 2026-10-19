@@ -110,7 +110,7 @@ This table records where each story was done. Update it in the same pull request
 | S11 | #48 | stories/S11-send-back/scenario.test.ts | 981b365 | | | Engine in progress |
 | S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts | e85a55b | | | Engine in progress |
 | S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts | 0194b88 | | | Engine in progress |
-| S14 | #51 | stories/S14-find-status/scenario.test.ts | 4cb4d49 | | | Engine in progress |
+| S14 | #51 | stories/S14-find-status/scenario.test.ts, tools/step-skipped.test.ts | 4cb4d49 f7ca96e faaadba | | | Engine in progress |
 | S15 | #52 | stories/S15-investigate/scenario.test.ts | 2768a41 | | | Engine in progress |
 | S16 | #53 | stories/S16-undo/scenario.test.ts | 5bf4a30 | | | Engine in progress |
 
