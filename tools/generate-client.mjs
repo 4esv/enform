@@ -97,6 +97,39 @@ function clientSection() {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
     '  return { authorization: `Bearer ${configured().token}` }',
     '}',
+    '',
+    '// The engine refused the request and appended nothing (FM-3, FM-4, I1).',
+    '// `error` names the reason and `errors` lists every validation error by',
+    '// field path; it is empty when the reason alone names the refusal.',
+    'export class RequestRefused extends Error {',
+    '  readonly status: number',
+    '  readonly error: string',
+    '  readonly errors: readonly FieldError[]',
+    "  readonly name = 'RequestRefused'",
+    '',
+    '  constructor(status: number, error: string, errors: readonly FieldError[]) {',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
+    '    super(`request refused: ${status} ${error}`)',
+    '    this.status = status',
+    '    this.error = error',
+    '    this.errors = errors',
+    '  }',
+    '}',
+    '',
+    'type RefusalBody = { readonly error?: unknown; readonly errors?: unknown }',
+    '',
+    '// A non-2xx response may carry a CompletionRefusal (FM-4, DX-4). The body',
+    '// is read once: an object with a string `error` becomes a RequestRefused,',
+    '// and any other body keeps the plain Error that names the status.',
+    'async function refusal(response: Response): Promise<Error> {',
+    '  const body = (await response.json().catch(() => undefined)) as RefusalBody | undefined',
+    "  if (typeof body === 'object' && body !== null && typeof body.error === 'string') {",
+    '    const errors = Array.isArray(body.errors) ? (body.errors as readonly FieldError[]) : []',
+    '    return new RequestRefused(response.status, body.error, errors)',
+    '  }',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
+    '  return new Error(`request failed: ${response.status} ${response.statusText}`)',
+    '}',
   ].join('\n')
 }
 
@@ -145,8 +178,7 @@ function renderOperation({ path, method, operation }) {
     '  const response = await fetch(url, {',
     ...init,
     '  })',
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
-    '  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)',
+    '  if (!response.ok) throw await refusal(response)',
     `  return (await response.json()) as ${returnType}`,
     '}',
   ].join('\n')

@@ -168,6 +168,37 @@ function headers(): Record<string, string> {
   return { authorization: `Bearer ${configured().token}` }
 }
 
+// The engine refused the request and appended nothing (FM-3, FM-4, I1).
+// `error` names the reason and `errors` lists every validation error by
+// field path; it is empty when the reason alone names the refusal.
+export class RequestRefused extends Error {
+  readonly status: number
+  readonly error: string
+  readonly errors: readonly FieldError[]
+  readonly name = 'RequestRefused'
+
+  constructor(status: number, error: string, errors: readonly FieldError[]) {
+    super(`request refused: ${status} ${error}`)
+    this.status = status
+    this.error = error
+    this.errors = errors
+  }
+}
+
+type RefusalBody = { readonly error?: unknown; readonly errors?: unknown }
+
+// A non-2xx response may carry a CompletionRefusal (FM-4, DX-4). The body
+// is read once: an object with a string `error` becomes a RequestRefused,
+// and any other body keeps the plain Error that names the status.
+async function refusal(response: Response): Promise<Error> {
+  const body = (await response.json().catch(() => undefined)) as RefusalBody | undefined
+  if (typeof body === 'object' && body !== null && typeof body.error === 'string') {
+    const errors = Array.isArray(body.errors) ? (body.errors as readonly FieldError[]) : []
+    return new RequestRefused(response.status, body.error, errors)
+  }
+  return new Error(`request failed: ${response.status} ${response.statusText}`)
+}
+
 export async function appendOperation(operation: Operation): Promise<Event> {
   const url = `${configured().baseUrl}/api/v1/operations`
   const response = await fetch(url, {
@@ -175,7 +206,7 @@ export async function appendOperation(operation: Operation): Promise<Event> {
     headers: { ...headers(), 'content-type': 'application/json' },
     body: JSON.stringify(operation),
   })
-  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  if (!response.ok) throw await refusal(response)
   return (await response.json()) as Event
 }
 
@@ -185,7 +216,7 @@ export async function readFlow(slug: string): Promise<PublishedFlow> {
     method: 'GET',
     headers: headers(),
   })
-  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  if (!response.ok) throw await refusal(response)
   return (await response.json()) as PublishedFlow
 }
 
@@ -195,7 +226,7 @@ export async function readInstance(instanceId: string, actor: string): Promise<I
     method: 'GET',
     headers: headers(),
   })
-  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  if (!response.ok) throw await refusal(response)
   return (await response.json()) as InstanceView
 }
 
@@ -205,7 +236,7 @@ export async function readLog(): Promise<Log> {
     method: 'GET',
     headers: headers(),
   })
-  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  if (!response.ok) throw await refusal(response)
   return (await response.json()) as Log
 }
 
@@ -215,6 +246,6 @@ export async function readState(): Promise<State> {
     method: 'GET',
     headers: headers(),
   })
-  if (!response.ok) throw new Error(`request failed: ${response.status} ${response.statusText}`)
+  if (!response.ok) throw await refusal(response)
   return (await response.json()) as State
 }

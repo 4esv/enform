@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
-import * as client from '../interface/client/client.js'
+import {
+  appendOperation,
+  type FieldError,
+  type Operation,
+  RequestRefused,
+  setClient,
+} from '../interface/client/client.js'
 
 // Issue #93, DX-4, I12, MVP.md 9.1: the interface uses only the generated API
 // client, and the client is generated from api/openapi.yaml. The generator is
@@ -69,21 +75,10 @@ test('#93 DX-4 the generated client exposes the four typed operations (I12)', ()
 type Refusal = Error & {
   readonly status: number
   readonly error: string
-  readonly errors: readonly client.FieldError[]
+  readonly errors: readonly FieldError[]
 }
 
-type RefusalConstructor = new (
-  status: number,
-  error: string,
-  errors: readonly client.FieldError[]
-) => Refusal
-
-// The generator does not emit the class yet (#106), so the checks look it up
-// at runtime and compile before it lands.
-const RequestRefused = (client as unknown as { readonly RequestRefused?: RefusalConstructor })
-  .RequestRefused
-
-const operation: client.Operation = {
+const operation: Operation = {
   id: '0190f2c8-9a1e-7c3b-8f2a-6d4e1b0c9a87',
   type: 'step.completed@1',
   at: 1,
@@ -92,7 +87,7 @@ const operation: client.Operation = {
 }
 
 beforeEach(() => {
-  client.setClient({ baseUrl: 'http://api.test', token: 'token' })
+  setClient({ baseUrl: 'http://api.test', token: 'token' })
 })
 
 afterEach(() => {
@@ -107,14 +102,14 @@ function respond(status: number, body: string, statusText = ''): void {
 // of the check, because every status below is non-2xx.
 async function refusal(): Promise<Refusal> {
   try {
-    await client.appendOperation(operation)
+    await appendOperation(operation)
   } catch (error) {
     return error as Refusal
   }
   throw new Error('the client resolved a non-2xx response')
 }
 
-test.fails('#106 a 409 refusal surfaces its reason and every field error (FM-4, DX-4, I12)', async () => {
+test('#106 a 409 refusal surfaces its reason and every field error (FM-4, DX-4, I12)', async () => {
   const body = {
     error: 'step request: summary is required (FM-4)',
     errors: [{ path: 'summary', message: 'is required' }],
@@ -129,7 +124,7 @@ test.fails('#106 a 409 refusal surfaces its reason and every field error (FM-4, 
   expect(error.message).toContain(body.error)
 })
 
-test.fails('#106 a 400 refusal without field errors reports an empty list (FM-4, DX-4)', async () => {
+test('#106 a 400 refusal without field errors reports an empty list (FM-4, DX-4)', async () => {
   respond(400, JSON.stringify({ error: 'intent: the instance id is missing' }))
   const error = await refusal()
   expect(error).toBeInstanceOf(RequestRefused)
