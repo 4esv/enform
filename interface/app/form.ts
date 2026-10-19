@@ -67,6 +67,8 @@ export interface FormField {
 export interface FormSection {
   readonly key: string
   readonly fields: readonly FormField[]
+  /** Whether the step shows the section collapsed (FM-1, FM-2). */
+  readonly collapsed: boolean
 }
 
 /** The form that a step shows: sections or flat fields, never both (FM-1). */
@@ -74,6 +76,20 @@ export interface StepForm {
   readonly stepKey: string
   readonly fields: readonly FormField[]
   readonly sections: readonly FormSection[]
+}
+
+/**
+ * The part of an instance view that decides the form (FM-2, FM-3). It is the
+ * `visible`, `editable`, `required` and `collapsed` lists of the step read
+ * (#76), and each list, when given, replaces the definition's static setting:
+ * visible filters the fields, editable decides who may change them, required
+ * marks them, and collapsed marks the section keys.
+ */
+export interface FormView {
+  readonly visible?: readonly string[]
+  readonly editable?: readonly string[]
+  readonly required?: readonly string[]
+  readonly collapsed?: readonly string[]
 }
 
 /** The only definition version this interface reads (MVP.md 9.3). */
@@ -147,6 +163,7 @@ type Field = {
 type Section = {
   readonly key: string
   readonly fields: readonly Field[]
+  readonly collapsed?: boolean
 }
 
 type Step = {
@@ -155,6 +172,7 @@ type Step = {
   readonly sections?: readonly Section[]
   readonly visible?: readonly string[]
   readonly editable?: readonly string[]
+  readonly outcomes?: readonly string[]
 }
 
 /** The step keys of a definition, in definition order. */
@@ -162,26 +180,49 @@ export function stepKeys(definition: Record<string, unknown>): readonly string[]
   return readDefinition(definition).map((step) => step.key)
 }
 
+/** The outcomes that a step offers (AC-4, WF-2), in definition order; empty when it declares none. */
+export function stepOutcomes(
+  definition: Record<string, unknown>,
+  stepKey: string
+): readonly string[] {
+  return readStepOf(definition, stepKey).outcomes ?? []
+}
+
+/** The step that a key names, or an error when the definition has no such step. */
+function readStepOf(definition: Record<string, unknown>, stepKey: string): Step {
+  const step = readDefinition(definition).find((candidate) => candidate.key === stepKey)
+  if (step === undefined) throw new Error(`flow form model: the flow has no step ${stepKey}`)
+  return step
+}
+
 /**
- * The form that the named step shows (FM-1, FM-3, FM-7). A step shows either
- * flat fields or sections, never both. `visible` names the fields the step
- * shows and is absent when every field shows; `editable` names the fields the
- * actor may edit and is absent when no field is editable. The current value of
- * each field comes from `values`, and is absent when the values hold no entry
- * for the key.
+ * The form that the named step shows (FM-1, FM-2, FM-3, FM-7). A step shows
+ * either flat fields or sections, never both. `visible` names the fields the
+ * step shows and is absent when every field shows; `editable` names the fields
+ * the actor may edit and is absent when no field is editable; `required` names
+ * the fields the step requires. When `view` is given, its lists replace the
+ * definition's static setting, so the form shows exactly what the engine read
+ * says (FM-2, FM-3). The current value of each field comes from `values`, and
+ * is absent when the values hold no entry for the key.
  */
 export function formModel(
   definition: Record<string, unknown>,
   stepKey: string,
-  values: Readonly<Record<string, JsonValue>> = {}
+  values: Readonly<Record<string, JsonValue>> = {},
+  view?: FormView
 ): StepForm {
-  const step = readDefinition(definition).find((candidate) => candidate.key === stepKey)
-  if (step === undefined) throw new Error(`flow form model: the flow has no step ${stepKey}`)
+  const step = readStepOf(definition, stepKey)
 
-  const visible = step.visible
-  const editable = step.editable
+  // The view that the engine read decides what the form shows and who may
+  // change it (FM-2, FM-3); without one, the definition's static lists do.
+  const visible = view?.visible ?? step.visible
+  const editable = view?.editable ?? step.editable
+  const required = view?.required
+  const collapsed = view?.collapsed
   const shows = (key: string) => visible === undefined || visible.includes(key)
   const mayEdit = (key: string) => editable?.includes(key) ?? false
+  const mustFill = (field: Field) =>
+    required === undefined ? (field.required ?? false) : required.includes(field.key)
 
   const toField = (field: Field): FormField => {
     const hasValue = Object.hasOwn(values, field.key)
@@ -190,7 +231,7 @@ export function formModel(
       control: field.control,
       ...(field.label === undefined ? {} : { label: field.label }),
       options: field.options ?? [],
-      required: field.required ?? false,
+      required: mustFill(field),
       editable: mayEdit(field.key),
       ...(hasValue ? { value: values[field.key] } : {}),
     }
@@ -200,6 +241,8 @@ export function formModel(
     const sections = step.sections.map((section) => ({
       key: section.key,
       fields: section.fields.filter((field) => shows(field.key)).map(toField),
+      collapsed:
+        collapsed === undefined ? (section.collapsed ?? false) : collapsed.includes(section.key),
     }))
     return { stepKey: step.key, fields: [], sections }
   }
@@ -245,12 +288,14 @@ function readStep(body: unknown): Step {
   }
   const visible = readKeys(body.visible, 'visible')
   const editable = readKeys(body.editable, 'editable')
+  const outcomes = readOutcomes(body.outcomes)
   return {
     key: body.key,
     ...(fields === undefined ? {} : { fields }),
     ...(sections === undefined ? {} : { sections }),
     ...(visible === undefined ? {} : { visible }),
     ...(editable === undefined ? {} : { editable }),
+    ...(outcomes === undefined ? {} : { outcomes }),
   }
 }
 
@@ -272,7 +317,14 @@ function readSection(body: unknown): Section {
   if (!Array.isArray(body.fields)) {
     throw new Error('flow form model: section fields must be an array')
   }
-  return { key: body.key, fields: body.fields.map(readField) }
+  if (body.collapsed !== undefined && typeof body.collapsed !== 'boolean') {
+    throw new Error('flow form model: collapsed must be a boolean (FM-1)')
+  }
+  return {
+    key: body.key,
+    fields: body.fields.map(readField),
+    ...(body.collapsed === undefined ? {} : { collapsed: body.collapsed }),
+  }
 }
 
 function readField(body: unknown): Field {
@@ -288,6 +340,17 @@ function readField(body: unknown): Field {
     ...(options === undefined ? {} : { options }),
     ...(required === undefined ? {} : { required }),
   }
+}
+
+function readOutcomes(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new Error('flow form model: outcomes must be an array')
+  return value.map((outcome) => {
+    if (typeof outcome !== 'string') {
+      throw new Error('flow form model: an outcome must be a string (AC-4)')
+    }
+    return outcome
+  })
 }
 
 function readRequired(value: unknown): boolean | undefined {

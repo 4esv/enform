@@ -9,9 +9,10 @@
     <main id="app"></main>
     <script type="module">
       // The form link carries the flow and the principal (S06: Sam opens the
-      // form link): /app/?slug=<flow>&actor=<principal>. The page and the API
-      // share one origin, so baseUrl defaults to it, and gui mode can point a
-      // browser at any flow without changing the app.
+      // form link): /app/?slug=<flow>&actor=<principal>. The task page also
+      // carries the instance it acts on: /app/?slug=<flow>&instance=<id>&actor=<principal>.
+      // The page and the API share one origin, so baseUrl defaults to it, and
+      // gui mode can point a browser at any flow without changing the app.
       import { mountApp } from './app.js'
 
       // The deterministic sources that gui mode injects (I6). A real user never
@@ -22,12 +23,14 @@
       const sources = globalThis.__enformSources
 
       const params = new URLSearchParams(location.search)
+      const instance = params.get('instance')
       mountApp({
         root: document.getElementById('app'),
         baseUrl: params.get('baseUrl') ?? location.origin,
         token: params.get('token') ?? '',
         slug: params.get('slug') ?? '',
         actor: params.get('actor') ?? '',
+        ...(instance === null ? {} : { instance }),
         ...(sources
           ? { clock: sources.clock, ids: sources.ids, instanceIds: sources.instanceIds }
           : {}),

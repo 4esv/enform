@@ -72,7 +72,7 @@ async function withTaskPage(
   }
 }
 
-test.fails('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
+test('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
   await withTaskPage(async (page, api) => {
     const before = api.state().log.length
     await page.click(`[data-outcome="${OUTCOME}"]`)
@@ -91,7 +91,7 @@ test.fails('#106 FM-4 the browser shows a server refusal at its control by path'
   })
 }, 30_000)
 
-test.fails('#106 FM-4 the holder completes the step and the browser appends the engine operation', async () => {
+test('#106 FM-4 the holder completes the step and the browser appends the engine operation', async () => {
   await withTaskPage(async (page, api) => {
     const before = api.state().log.length
     const instance = instanceOf(api.state().log, INSTANCE_ID)
