@@ -33,7 +33,12 @@ export const OUTCOME = 'approve'
 /** The resource of the request step (MVP.md 5.6). */
 export const STEP_RESOURCE = `flow:${SLUG}/step:${STEP}`
 
-/** The definition: one request step with a required summary, all fields editable (FM-3, FM-4). */
+/**
+ * The definition: one request step with a required summary. `details` is not
+ * editable, so the completion the browser posts must leave it out of the
+ * capture (FM-3, FM-4): a reader for it would make the server refuse the
+ * submission with a 409.
+ */
 export const definition: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
@@ -46,7 +51,7 @@ export const definition: FlowDefinition = parse(`{
         { "key": "details", "control": "long-text" },
         { "key": "urgent", "control": "checkbox" }
       ],
-      "editable": ["summary", "details", "urgent"]
+      "editable": ["summary", "urgent"]
     }
   ]
 }

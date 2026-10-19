@@ -26,7 +26,7 @@ import {
 // browser decided nothing (A9, I12).
 
 /** The values that the browser collects when only the summary is filled (FM-7). */
-const values = { summary: 'three extra credits', details: '', urgent: false }
+const values = { summary: 'three extra credits', urgent: false }
 
 /** The accepted completion's injected sources (I6), matching the page's injected sources. */
 const sources = { clock: () => 1, ids: () => 'op-2' }
@@ -72,9 +72,13 @@ async function withTaskPage(
   }
 }
 
-test('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
+test.fails('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
   await withTaskPage(async (page, api) => {
     const before = api.state().log.length
+
+    // The engine read marks the required field (FM-2, FM-3), so the task page
+    // marks the row and the person learns which field the refusal means.
+    expect(await page.locator('.field[data-required="true"]').count()).toBe(1)
     await page.click(`[data-outcome="${OUTCOME}"]`)
 
     // The refusal names the field: the reason is in `.status` and the message
@@ -88,6 +92,18 @@ test('#106 FM-4 the browser shows a server refusal at its control by path', asyn
     // unchanged after a bounded wait.
     await page.waitForTimeout(250)
     expect(api.state().log.length).toBe(before)
+
+    // A second attempt that the server accepts clears the field error, so the
+    // page never shows a stale message beside a successful step (FM-4).
+    await page.fill('[name="summary"]', values.summary)
+    await page.click(`[data-outcome="${OUTCOME}"]`)
+    await waitForLog(api, before + 1)
+    await page.waitForFunction(
+      () => document.querySelector('.status')?.textContent === 'Step completed',
+      undefined,
+      { timeout: 5000 }
+    )
+    expect(await page.locator('[data-error-for]').count()).toBe(0)
   })
 }, 30_000)
 

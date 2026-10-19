@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { type Control, controlKind, formModel, isSingleInput } from './form.js'
+import { type Control, controlKind, formModel, isSingleInput, stepOutcomes } from './form.js'
 
 // Issue #181, FM-1, FM-3, FM-7, A9: the form model narrows a v2 flow
 // definition as it arrives from readFlow and answers what a step's form looks
@@ -162,4 +162,43 @@ test('#181 the form model maps each FM-1 control to what the DOM needs', () => {
   for (const control of notSingle) {
     expect(isSingleInput(control as Control), control).toBe(false)
   }
+})
+
+test('#106 the form model takes the lists that the engine read returns (FM-2, FM-3)', () => {
+  const definition = {
+    schemaVersion: 2,
+    steps: [
+      {
+        key: 'request',
+        targets: [{ user: 'user:okafor' }],
+        outcomes: ['approve', 'send_back'],
+        fields: [
+          { key: 'summary', control: 'text', required: false },
+          { key: 'details', control: 'long-text' },
+          { key: 'urgent', control: 'checkbox' },
+        ],
+        editable: ['summary', 'details', 'urgent'],
+      },
+    ],
+  }
+
+  // The step read decides what the form shows, marks and makes editable, so
+  // the view replaces the definition's static lists (FM-2, FM-3).
+  const model = formModel(
+    definition,
+    'request',
+    { summary: 'three extra credits' },
+    { visible: ['summary', 'urgent'], editable: ['urgent'], required: ['summary'] }
+  )
+
+  expect(model.fields.map((field) => field.key)).toEqual(['summary', 'urgent'])
+  const byKey = Object.fromEntries(model.fields.map((field) => [field.key, field]))
+  expect(byKey.summary?.required, 'the view marks the required field').toBe(true)
+  expect(byKey.summary?.editable, 'the view does not make it editable').toBe(false)
+  expect(byKey.urgent?.required, 'an unmarked field is not required').toBe(false)
+  expect(byKey.urgent?.editable, 'the view makes it editable').toBe(true)
+
+  // The outcomes come from the step, so the page offers the ones the engine
+  // authorizes (AC-4, WF-2).
+  expect(stepOutcomes(definition, 'request')).toEqual(['approve', 'send_back'])
 })
