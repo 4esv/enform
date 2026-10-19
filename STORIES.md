@@ -292,7 +292,7 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Interface path.** Sam opens a link while he is not signed in. SSO signs him in and returns him to the form. As he types, each field shows "Saved on this device", then "Synced". He submits. The step tracker shows "Waiting for Dr. Okafor. Not opened."
 
-The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The submit step has no browser path yet: a submit intent would have to name its instance, and an `instance.started@1` event carries no instance identity (#27).
+The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The submit step still has no browser path: the public API has no client intent for `instance.submitted@1` (ADR 0010 covers a start and a completion). The `instance.started@1` event has carried the instance identity since #187, so the old reason no longer holds.
 
 **Acceptance**
 
