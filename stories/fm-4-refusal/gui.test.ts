@@ -72,7 +72,7 @@ async function withTaskPage(
   }
 }
 
-test.fails('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
+test('#106 FM-4 the browser shows a server refusal at its control by path', async () => {
   await withTaskPage(async (page, api) => {
     const before = api.state().log.length
 

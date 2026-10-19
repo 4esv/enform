@@ -86,6 +86,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
     row.className = 'field'
     const label = document.createElement('label')
     label.textContent = field.label ?? field.key
+    // The step read says which fields it requires (FM-2, FM-3). The page marks
+    // them, so the person knows which field a refusal will name; it enforces
+    // nothing, because only the server validates (A9, FM-4).
+    if (field.required) {
+      row.dataset.required = 'true'
+      const mark = document.createElement('span')
+      mark.className = 'required'
+      mark.textContent = ' (required)'
+      label.appendChild(mark)
+    }
     row.appendChild(label)
     row.appendChild(renderControl(field, readers, readValue))
     rows.set(field.key, row)
@@ -120,8 +130,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * error keeps the plain message. The previous errors are cleared first, so a
    * second attempt does not stack them.
    */
-  const showRefusal = (status: HTMLElement, form: HTMLElement, error: unknown): void => {
+  const clearErrors = (): void => {
     for (const node of options.root.querySelectorAll('[data-error-for]')) node.remove()
+  }
+
+  const showRefusal = (status: HTMLElement, form: HTMLElement, error: unknown): void => {
+    clearErrors()
     if (error instanceof RequestRefused && error.errors.length > 0) {
       status.textContent = error.error
       for (const failure of error.errors) {
@@ -188,6 +202,9 @@ export async function mountApp(options: AppOptions): Promise<void> {
           }
           void appendOperation(intent)
             .then(() => {
+              // An accepted attempt also clears what a refused one left at the
+              // controls (FM-4).
+              clearErrors()
               status.textContent = 'Step completed'
             })
             .catch((error: unknown) => {
@@ -223,6 +240,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
       void appendOperation(intent)
         .then(() => {
+          clearErrors()
           status.textContent = 'Synced'
         })
         .catch((error: unknown) => {

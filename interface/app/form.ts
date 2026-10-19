@@ -67,8 +67,6 @@ export interface FormField {
 export interface FormSection {
   readonly key: string
   readonly fields: readonly FormField[]
-  /** Whether the step shows the section collapsed (FM-1, FM-2). */
-  readonly collapsed: boolean
 }
 
 /** The form that a step shows: sections or flat fields, never both (FM-1). */
@@ -80,16 +78,14 @@ export interface StepForm {
 
 /**
  * The part of an instance view that decides the form (FM-2, FM-3). It is the
- * `visible`, `editable`, `required` and `collapsed` lists of the step read
- * (#76), and each list, when given, replaces the definition's static setting:
- * visible filters the fields, editable decides who may change them, required
- * marks them, and collapsed marks the section keys.
+ * `visible`, `editable` and `required` lists of the step read (#76), and each
+ * list, when given, replaces the definition's static setting: visible filters
+ * the fields, editable decides who may change them, and required marks them.
  */
 export interface FormView {
   readonly visible?: readonly string[]
   readonly editable?: readonly string[]
   readonly required?: readonly string[]
-  readonly collapsed?: readonly string[]
 }
 
 /** The only definition version this interface reads (MVP.md 9.3). */
@@ -163,7 +159,6 @@ type Field = {
 type Section = {
   readonly key: string
   readonly fields: readonly Field[]
-  readonly collapsed?: boolean
 }
 
 type Step = {
@@ -218,7 +213,6 @@ export function formModel(
   const visible = view?.visible ?? step.visible
   const editable = view?.editable ?? step.editable
   const required = view?.required
-  const collapsed = view?.collapsed
   const shows = (key: string) => visible === undefined || visible.includes(key)
   const mayEdit = (key: string) => editable?.includes(key) ?? false
   const mustFill = (field: Field) =>
@@ -241,8 +235,6 @@ export function formModel(
     const sections = step.sections.map((section) => ({
       key: section.key,
       fields: section.fields.filter((field) => shows(field.key)).map(toField),
-      collapsed:
-        collapsed === undefined ? (section.collapsed ?? false) : collapsed.includes(section.key),
     }))
     return { stepKey: step.key, fields: [], sections }
   }
@@ -317,14 +309,7 @@ function readSection(body: unknown): Section {
   if (!Array.isArray(body.fields)) {
     throw new Error('flow form model: section fields must be an array')
   }
-  if (body.collapsed !== undefined && typeof body.collapsed !== 'boolean') {
-    throw new Error('flow form model: collapsed must be a boolean (FM-1)')
-  }
-  return {
-    key: body.key,
-    fields: body.fields.map(readField),
-    ...(body.collapsed === undefined ? {} : { collapsed: body.collapsed }),
-  }
+  return { key: body.key, fields: body.fields.map(readField) }
 }
 
 function readField(body: unknown): Field {
