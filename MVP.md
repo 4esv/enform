@@ -118,6 +118,7 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 | ID-3 | Anonymous access is an explicit setting for each flow. The builder and the form show a visible label for it. | A4 |
 | ID-4 | Immutable directory IDs identify people and groups. Names and email addresses do not. | A8 |
 | ID-5 | Group membership synchronizes at sign-in and on a schedule. When a user is deprovisioned, their claimed tasks go back to the pool. The log records this. | A1, A8 |
+| ID-6 | The built-in directory is the default. Administrators create users, groups and teams in enform; users sign in against the local Keycloak user store. Federation with Active Directory and Microsoft Entra ID is optional and configured per installation. There is no self-signup. | A3, A4 |
 
 ### 5.2 Definitions (DF)
 
@@ -262,6 +263,16 @@ A combination such as "reviewer", "approver" or "administrator approver" is a se
 | ID | Requirement | Traces to |
 |---|---|---|
 | OU-1 | The engine renders an instance as a PDF on request. The PDF shows the form as a given step sees it, and the step history. | I8 |
+
+### 5.13 Deployment and template (DE)
+
+| ID | Requirement | Traces to |
+|---|---|---|
+| DE-1 | A new installation starts from a copy of the repository with one documented command. It writes the configuration, creates the database, runs the migrations, creates the first administrator, and serves the application at the configured public URL. It needs no manual SQL and no source edit. | A3, A4 |
+| DE-2 | The product ships one executable, `enform`, with subcommands `serve`, `worker`, `migrate`, `admin`, `seed`, `doctor` and `version`. Configuration is a file with environment overrides and command-line flags; precedence is flag, environment, file, default. Secrets are never stored in the repository. | A3 |
+| DE-3 | The repository ships a systemd unit and a container image. The service runs as an unprivileged user, logs to stderr (journald or the container runtime), handles SIGTERM with a graceful drain, refuses to start on invalid configuration, and exposes liveness and readiness endpoints. | A3, A4 |
+| DE-4 | A fresh installation shows an empty get-started page. `enform seed demo` loads an idempotent demo organization: users, groups, teams, grants, a published flow, and instances at different steps. Seeded records are marked; `enform seed clear` removes only seeded records. | A4 |
+| DE-5 | The installation has documented and tested procedures for backup, restore, schema migration and upgrade. `enform doctor` checks the configuration, the database, the identity provider and the mail transport, and reports the version. | A3, A8 |
 
 ## 6. Out of scope
 
@@ -479,3 +490,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-08 | Reviewer-only work is a named variant of S09 and S11. No S17. | AC-4, WF-2 | S02 and S11 already test the reviewer's limits (#105). |
 | 2026-10-11 | 5.3 gains FM-7: the engine records the values that a form holds, a start and a step completion carry them, and the public API reads them back. Section 8 places FM-7 at `0.4.0`. S06 cites it. | FM-7 | FM-1 validates a value and FM-4 re-validates a submission, but no value reached the server: `Instance` had no field for values, the `instance.started@1` and `instance.submitted@1` payloads recorded only the route, and no event type carried one, so the form, its PDF (OU-1) and its re-validation had no data (#175). |
 | 2026-10-12 | 9.3: before the first tagged release, a shape change extends the current event type version in place. The bump rule applies from the first release. | I4 | No release tag exists, so no event with the old shape was ever written: an upcaster would have to mint an instance id for events that do not exist, and the only deterministic input an old event carries is its operation id (#188). |
+| 2026-10-20 | 5.1 gains ID-6. A new section 5.13 gives DE-1 to DE-5: the template bootstrap, one executable and its configuration, the service surface, the demo seed, and the upgrade and doctor procedures. Section 8 placement lands with the first failing test for each requirement (11.1): ID-6 and DE-1 to DE-3 in `0.1.0`, DE-4 in `0.4.0`, DE-5 in `0.8.0`. | ID-6, DE-1 to DE-5 | The `0.1.0` demonstration could not run: there was no server image, no init, no config and no local directory. The template goal had no requirements (#206). |
