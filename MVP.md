@@ -113,7 +113,7 @@ Requirement IDs are permanent. Do not reuse or renumber them. A withdrawn requir
 
 | ID | Requirement | Traces to |
 |---|---|---|
-| ID-1 | Sign-in uses OIDC through Keycloak. Keycloak connects to on-premises Active Directory and to Microsoft Entra ID. | A3 |
+| ID-1 | Sign-in uses OIDC through Keycloak. Keycloak connects to on-premises Active Directory and to Microsoft Entra ID when the installation configures that federation; the built-in user store is the default (ID-6). | A3 |
 | ID-2 | Each flow URL requires sign-in by default. A visitor who is not signed in goes to SSO, then returns to the same location. | A4 |
 | ID-3 | Anonymous access is an explicit setting for each flow. The builder and the form show a visible label for it. | A4 |
 | ID-4 | Immutable directory IDs identify people and groups. Names and email addresses do not. | A8 |
@@ -491,3 +491,4 @@ This ledger is append-only. The newest entry is last.
 | 2026-10-11 | 5.3 gains FM-7: the engine records the values that a form holds, a start and a step completion carry them, and the public API reads them back. Section 8 places FM-7 at `0.4.0`. S06 cites it. | FM-7 | FM-1 validates a value and FM-4 re-validates a submission, but no value reached the server: `Instance` had no field for values, the `instance.started@1` and `instance.submitted@1` payloads recorded only the route, and no event type carried one, so the form, its PDF (OU-1) and its re-validation had no data (#175). |
 | 2026-10-12 | 9.3: before the first tagged release, a shape change extends the current event type version in place. The bump rule applies from the first release. | I4 | No release tag exists, so no event with the old shape was ever written: an upcaster would have to mint an instance id for events that do not exist, and the only deterministic input an old event carries is its operation id (#188). |
 | 2026-10-20 | 5.1 gains ID-6. A new section 5.13 gives DE-1 to DE-5: the template bootstrap, one executable and its configuration, the service surface, the demo seed, and the upgrade and doctor procedures. Section 8 placement lands with the first failing test for each requirement (11.1): ID-6 and DE-1 to DE-3 in `0.1.0`, DE-4 in `0.4.0`, DE-5 in `0.8.0`. | ID-6, DE-1 to DE-5 | The `0.1.0` demonstration could not run: there was no server image, no init, no config and no local directory. The template goal had no requirements (#206). |
+| 2026-10-20 | 5.1 ID-1 states that Active Directory and Microsoft Entra ID federation is configured per installation and that the built-in user store is the default (ID-6). | ID-1, ID-6 | ID-1 read as requiring federation while ID-6 makes it optional (#206). |
