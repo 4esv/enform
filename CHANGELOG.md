@@ -79,6 +79,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- The Entra test realm imports into Keycloak 26.0: the `entra` identity provider sets `pkceMethod` to `S256` beside `pkceEnabled`, so a fresh Compose stack starts and the integration suite can run (ID-1, ADR 0005) (#214).
 - A start records the steps its route skipped, with the conditions, on the instance's `instance.started@1` event, and `status.skipped` reads only that instance's skips, so another instance's skip or a draft run's `step.skipped@1` no longer appears (WF-1, VT-2, S05, S14, I4) (#192).
 
 ## [0.0.0] - 2026-10-08

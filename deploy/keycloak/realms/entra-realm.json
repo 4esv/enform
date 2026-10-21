@@ -54,7 +54,8 @@
         "defaultScope": "openid profile email",
         "validateSignature": "true",
         "useJwksUrl": "true",
-        "pkceEnabled": "true"
+        "pkceEnabled": "true",
+        "pkceMethod": "S256"
       }
     }
   ],
