@@ -47,6 +47,23 @@ jobs:
       - name: Run the complete local check
         run: make check
 
+      - name: Start PostgreSQL and Keycloak
+        run: >-
+          docker compose -f deploy/compose.yaml up -d --wait
+          postgres keycloak
+
+      - name: Run the integration suite
+        env:
+          ENFORM_TEST_DATABASE_URL: >-
+            postgres://enform:enform@127.0.0.1:5432/enform
+          ENFORM_TEST_KEYCLOAK_URL: http://127.0.0.1:8081
+          ENFORM_TEST_KEYCLOAK_REALM: enform-local
+          ENFORM_TEST_KEYCLOAK_ADMIN: admin
+          ENFORM_TEST_KEYCLOAK_ADMIN_PASSWORD: admin
+          ENFORM_TEST_CLIENT_ID: enform
+          ENFORM_TEST_CLIENT_SECRET: enform-dev-secret
+        run: make integration
+
       - name: Changelog rule (MVP.md 9.5)
         if: github.event_name == 'pull_request'
         run: node tools/changelog-rule.mjs "origin/${{ github.base_ref }}..HEAD"
