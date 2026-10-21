@@ -18,7 +18,7 @@ One PostgreSQL database. An append-only `events` table holds the log: `seq` as a
 
 Read-model tables hold current state: flows and versions, instances and tasks, grants, teams and members, principals (the profile cache), outbox, timers, sessions, and seed markers. Each row carries the `seq` that it was built from. A write appends the event, updates the projections and inserts the outbox and the timer rows in one transaction (I2, SE-5). Reads answer from the projections, and the engine authorizes every read (I8).
 
-`enform rebuild` truncates the projections and folds the event log in order, and a rebuild must reproduce the same projections (I4). `instances.version` is the last applied `seq`, and a completion updates with `WHERE version = $expected` (I5).
+`enform admin rebuild` truncates the projections and folds the event log in order, and a rebuild must reproduce the same projections (I4). `instances.version` is the last applied `seq`, and a completion updates with `WHERE version = $expected` (I5).
 
 Migrations are embedded, versioned SQL files with a `schema_migrations` table, each applied in one transaction by `enform migrate` (ADR 0011). There is no ORM: a thin SQL layer over the `pg` driver, with typed row mappers. The driver choice is recorded here.
 
