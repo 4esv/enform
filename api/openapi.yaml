@@ -2,16 +2,19 @@
 openapi: 3.1.0
 info:
   title: enform
-  version: 0.1.0
+  version: 0.2.0
   description: >-
     The HTTP API of the enform engine. It appends operations to the
     append-only log and reads the log and the state rebuilt from it. A
     configuration change is an operation whose type is
-    `config.<kind>.changed@1` (I14), not a separate endpoint.
+    `config.<kind>.changed@1` (I14), not a separate endpoint. A request
+    authenticates with the browser session cookie or with a bearer token, and
+    both map to one principal and one session (ADR 0012).
 servers:
   - url: /api/v1
 security:
   - keycloak: []
+  - cookieAuth: []
 paths:
   /api/v1/operations:
     post:
@@ -164,13 +167,477 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/auth/login:
+    get:
+      operationId: login
+      summary: Start a sign-in
+      description: >-
+        Answers 302 to the identity provider's authorization endpoint, with the
+        state and the PKCE challenge of this attempt (ID-1, ID-2, ADR 0012).
+        The request creates no session; the callback creates it. `returnTo` is
+        the relative path that the visitor came from, so the sign-in puts the
+        browser back on the same location (ID-2).
+      security: []
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          description: >-
+            The relative path to return to after the sign-in (ID-2). The server
+            keeps it with the state of this attempt, because the callback
+            cannot trust a value that a caller could change.
+          schema:
+            type: string
+      responses:
+        '302':
+          description: >-
+            Redirect to the identity provider. The `Location` header names its
+            authorization endpoint with the state and the PKCE challenge
+            (ADR 0012).
+          headers:
+            Location:
+              description: >-
+                The identity provider's authorization endpoint (ADR 0012).
+              schema:
+                type: string
+  /api/v1/auth/callback:
+    get:
+      operationId: authCallback
+      summary: Finish a sign-in
+      description: >-
+        The identity provider redirects here with the code and the state of an
+        attempt that `login` started. The server exchanges the code, validates
+        the issuer, the audience, the nonce, the signature through the JWKS and
+        the expiry, creates the session row in PostgreSQL, rotates the session
+        id and sets the `enform_session` cookie, then answers 302 to the
+        `returnTo` that the attempt recorded (ID-1, ID-2, ADR 0012). A failed
+        exchange answers 401 and creates no session.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: >-
+            The authorization code that the identity provider issued (ADR 0012).
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: >-
+            The state of the attempt that `login` started; it names the stored
+            PKCE verifier and the recorded `returnTo` (ADR 0012).
+          schema:
+            type: string
+      responses:
+        '302':
+          description: >-
+            Redirect to the recorded `returnTo`, with the session cookie set
+            (ID-2, ADR 0012).
+          headers:
+            Location:
+              description: The relative path that the sign-in returns to (ID-2).
+              schema:
+                type: string
+            Set-Cookie:
+              description: >-
+                The `enform_session` cookie, `HttpOnly`, `Secure` and
+                `SameSite=Lax` (ADR 0012).
+              schema:
+                type: string
+        '401':
+          description: >-
+            The code exchange failed, so no session exists and no cookie is set
+            (ADR 0012).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: End the session
+      description: >-
+        Revokes the session row and ends the identity provider session, so the
+        cookie stops authenticating at once and a deprovisioned user cannot
+        continue (ADR 0012, ID-5). The request carries the session cookie and
+        the CSRF token that `readSession` returned, and the response is 204
+        with no body.
+      responses:
+        '204':
+          description: >-
+            The session and the identity provider session are revoked; no body.
+        '401':
+          description: There is no session to end.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/session:
+    get:
+      operationId: readSession
+      summary: Read the signed-in principal
+      description: >-
+        The principal of the current session, the absolute expiry and the CSRF
+        token that a state-changing request carries (ADR 0012). The principal
+        id is the identity provider's subject: it is the immutable ID that a
+        grant names, never a name or an email address (ID-4). The browser and
+        the CLI read the same session through this path, because the cookie and
+        the bearer token map to one principal and one session row (ADR 0012).
+      responses:
+        '200':
+          description: >-
+            The principal, the expiry and the CSRF token of the session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: >-
+            There is no session; the caller signs in first (ID-2, ADR 0012).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/admin/users:
+    get:
+      operationId: listUsers
+      summary: List the directory users
+      description: >-
+        The users of the built-in directory with the status of each one, so an
+        administrator sees whom an installation holds before it federates
+        (ID-6, ADR 0012). The read requires `org.grants` on `org`, the
+        organization-administration scope of `MVP.md` 5.6, because the
+        directory is an administrator surface (ID-6).
+      responses:
+        '200':
+          description: The users of the local directory.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DirectoryUser'
+        '403':
+          description: >-
+            The principal does not hold `org.grants` on the organization (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      operationId: createUser
+      summary: Create a directory user
+      description: >-
+        Creates the user in the local directory through the identity provider's
+        admin API with the dedicated service account, because enform stores no
+        credentials (ID-6, ADR 0012). With `sendInvite` the user receives a
+        one-time invite or a temporary credential and sets a password on the
+        first sign-in; there is no self-signup (ID-6, DE-1). The request
+        requires `org.grants` on `org` (I8, `MVP.md` 5.6).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUser'
+      responses:
+        '201':
+          description: The user exists in the directory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectoryUser'
+        '403':
+          description: >-
+            The principal does not hold `org.grants` on the organization (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: >-
+            The directory already holds this email address, and a second user
+            is not created (ID-4, ID-6).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/flows:
+    get:
+      operationId: listFlows
+      summary: List the flows
+      description: >-
+        One summary per flow of the installation, which is the builder's
+        starting point from the empty get-started page (DF-1, DE-4). It reuses
+        the engine's flow state: the draft version is the version the current
+        draft would publish as, and the published version is the newest
+        immutable version (DF-2, DF-4).
+      responses:
+        '200':
+          description: The flows of the installation, newest activity first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FlowSummary'
+    post:
+      operationId: createFlow
+      summary: Create a flow
+      description: >-
+        Creates a flow with this slug and an empty draft (DF-1, DF-4). The slug
+        names the flow in its path and in a grant resource, so a slug that
+        exists answers 409 and creates nothing (`MVP.md` 5.6). The request
+        requires `flow.build` on the new flow, because the first draft of a
+        flow is structural (DF-5, D2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFlow'
+      responses:
+        '201':
+          description: The new flow with its empty draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftFlow'
+        '403':
+          description: >-
+            The principal does not hold `flow.build` on the new flow (DF-5, I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: >-
+            A flow already has this slug, and nothing is created (DF-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/flows/{slug}/draft:
+    get:
+      operationId: readDraft
+      summary: Read the draft definition
+      description: >-
+        The draft that the builder edits, with the version it is based on
+        (DF-1, DF-4, I5). The draft is the working copy of the people who may
+        change the flow, so the read requires `flow.read`, `flow.edit` or
+        `flow.build` on it (DF-3, DF-5, I8). A flow whose draft is still empty
+        answers 404, because a definition needs at least one step
+        (`schemas/flow/v2.json`).
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The draft definition and the version it is based on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftFlow'
+        '403':
+          description: The principal may not change this flow (DF-5, I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: >-
+            No flow has this slug, or its draft is still empty (DF-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    put:
+      operationId: writeDraft
+      summary: Write the draft definition
+      description: >-
+        Records an edit of the draft. The write is an engine change, not a file
+        write: the server parses the definition (`schemas/flow/v2.json`), diffs
+        it against the current draft, classifies every change as edit-class or
+        structural (DF-3, DF-5) and appends the attributed operations that
+        record it (I14). `version` is the draft version the client based the
+        edit on, so a stale write is refused with 409 and appends nothing (I5),
+        and the client re-reads and retries (A1). A definition that the schema
+        rejects answers 422 with every error by path, and nothing is appended
+        (DF-1, A9).
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftWrite'
+      responses:
+        '200':
+          description: The draft after the write, with the changes it made.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftFlow'
+        '403':
+          description: >-
+            The principal does not hold the scope that the classified change
+            needs: `flow.build` for a structural change, `flow.edit` or
+            `flow.build` for an edit-class change (DF-5, D2).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No flow has this slug (DF-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: >-
+            The version is stale: another write reached the draft first, so
+            this one appends nothing and the client re-reads (I5, A1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '422':
+          description: >-
+            The definition is not valid, and `errors` lists every failure by
+            path (DF-1, FM-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/flows/{slug}/publish:
+    post:
+      operationId: publishFlow
+      summary: Publish the draft
+      description: >-
+        Freezes the draft into the next immutable version with its content
+        hash, and answers the published version (DF-2, VT-6). An instance stays
+        on the version that it started on, so publishing changes no running
+        instance (I13). `version` names the draft version that the client
+        publishes, so a stale version answers 409 and publishes nothing (I5).
+        The request needs `flow.build`, or `flow.edit` when the change since
+        the last publication is edit-class only (DF-5, D2); the engine
+        classifies the change and decides, so the client names no scope.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishDraft'
+      responses:
+        '200':
+          description: The new immutable version of the flow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedFlow'
+        '403':
+          description: >-
+            The principal does not hold the scope that the change needs
+            (DF-5, I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: >-
+            No flow has this slug, or its draft is still empty (DF-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: >-
+            The version is stale, so this publication writes nothing and the
+            client re-reads (I5, A1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '422':
+          description: >-
+            The draft is not a valid definition, and `errors` lists every
+            failure by path (DF-1, FM-1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/inbox:
+    get:
+      operationId: readInbox
+      summary: Read the inbox
+      description: >-
+        The tasks of one tab of the inbox: the tasks that the principal holds,
+        the tasks that it may claim, or the instances that it started (VT-1).
+        An item shows one step of one instance with its state, its holder, its
+        due time and the last activity on it (VT-2), so the reader sees whether
+        nobody has opened the task yet, who holds it, and how long it sits
+        there (AS-2, S14). The engine authorizes every item: a task appears
+        only when the principal is a target of its step, its holder, or the
+        starter (AS-2, AC-5, I8).
+      parameters:
+        - name: tab
+          in: query
+          required: false
+          description: >-
+            The tab to read: `my` (the tasks the principal holds), `available`
+            (the tasks it may claim) or `started` (the instances it started)
+            (VT-1).
+          schema:
+            type: string
+            enum: [my, available, started]
+            default: my
+      responses:
+        '200':
+          description: The tasks of the tab, in the engine's order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InboxItem'
 components:
   securitySchemes:
     keycloak:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: A Keycloak access token (ADR 0005).
+      description: >-
+        A Keycloak access token (ADR 0005). The CLI presents it, and the server
+        maps it to the same principal and the same session row as the browser
+        cookie (ADR 0012).
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: enform_session
+      description: >-
+        The browser credential: the server-side session cookie, `HttpOnly`,
+        `Secure` and `SameSite=Lax`, that names a session row in PostgreSQL
+        (ADR 0012). Logout and deprovisioning revoke the row, so the cookie
+        stops authenticating at once (ID-5). A state-changing request also
+        carries the CSRF token that `readSession` returns (ADR 0012).
   schemas:
     ActorId:
       type: string
@@ -470,11 +937,28 @@ components:
           additionalProperties: true
     ApiError:
       type: object
-      description: An error response, with a short machine-readable message.
+      description: >-
+        An error response that names the reason and, when it has them, a
+        machine-readable code and the field errors that caused it. A 4xx
+        response of the HTTP API carries this shape; a completion refusal keeps
+        `CompletionRefusal`, which always lists its field errors.
       required: [error]
       properties:
         error:
           type: string
+          description: A short reason that the reader can act on.
+        code:
+          type: string
+          description: >-
+            A stable machine-readable code for the reason, for example
+            `slug-exists`, `version-stale` or `invalid-definition`.
+        errors:
+          type: array
+          description: >-
+            Every field error of a refused request, by path (FM-1, FM-4);
+            absent when no field of the request is at fault.
+          items:
+            $ref: '#/components/schemas/FieldError'
     FieldError:
       type: object
       description: >-
@@ -507,3 +991,297 @@ components:
             empty when `error` alone names the refusal.
           items:
             $ref: '#/components/schemas/FieldError'
+    Principal:
+      type: object
+      description: >-
+        The signed-in person (ADR 0012, ID-4). `id` is the identity provider's
+        subject, the immutable ID that a grant names, and `groups` holds the
+        immutable group ids that the last sign-in synchronized, so a group
+        grant reaches the person (ID-4, ID-5). A name or an email address
+        identifies nobody.
+      required: [id, displayName, groups]
+      properties:
+        id:
+          $ref: '#/components/schemas/ActorId'
+        displayName:
+          type: string
+          description: >-
+            The display name that the directory holds (ID-4). It is for
+            display only.
+        email:
+          type: string
+          description: >-
+            The email address that the directory holds (ID-4). It is for
+            display only, and it is absent when the directory holds none.
+        groups:
+          type: array
+          description: >-
+            The immutable ids of the directory groups that the principal
+            belongs to (ID-4, ID-5).
+          items:
+            $ref: '#/components/schemas/ActorId'
+    Session:
+      type: object
+      description: >-
+        One signed-in session, as `readSession` reports it (ADR 0012). The
+        server holds the session row, so logout and deprovisioning revoke it
+        and the cookie stops authenticating at once (ID-5). The browser and the
+        CLI read the same session: one principal and one session row
+        (ADR 0012).
+      required: [principal, expiresAt, csrfToken]
+      properties:
+        principal:
+          $ref: '#/components/schemas/Principal'
+        expiresAt:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6): the
+            absolute expiry of the session (ADR 0012).
+        csrfToken:
+          type: string
+          description: >-
+            The token that a state-changing request carries, so a page from
+            another origin cannot act as the principal (ADR 0012).
+    DirectoryUser:
+      type: object
+      description: >-
+        One user of the built-in directory, as an administrator reads it
+        (ID-6, ADR 0012). `status` says whether the user is invited, active or
+        disabled, so the administrator sees whom the installation holds; a
+        disabled user signs in no more, and the claimed tasks of a
+        deprovisioned user return to the pool (ID-5, ID-6).
+      required: [id, displayName, email, status, groups]
+      properties:
+        id:
+          $ref: '#/components/schemas/ActorId'
+        displayName:
+          type: string
+          description: >-
+            The display name that the directory holds (ID-4). It is for
+            display only.
+        email:
+          type: string
+          description: >-
+            The email address that the directory holds; it is the address that
+            an invite goes to (ID-6).
+        status:
+          type: string
+          description: >-
+            Whether the user is invited and sets a password on the first
+            sign-in, active, or disabled (ID-6).
+          enum: [invited, active, disabled]
+        groups:
+          type: array
+          description: >-
+            The immutable ids of the groups that the user belongs to (ID-4).
+          items:
+            $ref: '#/components/schemas/ActorId'
+    CreateUser:
+      type: object
+      description: >-
+        One user to create in the local directory (ID-6, ADR 0012). enform
+        creates the user through the identity provider's admin API with its
+        service account, because it stores no credentials; there is no
+        self-signup (ID-6).
+      required: [email, displayName, sendInvite]
+      properties:
+        email:
+          type: string
+          description: >-
+            The email address that the user signs in with and that the invite
+            goes to (ID-6).
+        displayName:
+          type: string
+          description: The display name that the directory holds (ID-4).
+        groups:
+          type: array
+          description: >-
+            The immutable ids of the groups that the user joins (ID-4); a
+            group grant then reaches the user at the next sign-in (ID-5).
+          items:
+            $ref: '#/components/schemas/ActorId'
+        sendInvite:
+          type: boolean
+          description: >-
+            Whether the user receives a one-time invite and sets a password on
+            the first sign-in, instead of a temporary credential (ID-6).
+    CreateFlow:
+      type: object
+      description: >-
+        One flow to create (DF-1, DF-4). The slug names the flow in its path
+        and in a grant resource, so it is fixed at creation (ID-1, `MVP.md`
+        5.6). `title` is the name that the builder shows for the flow; the
+        definition format has no title, so it is optional and a flow may start
+        without one.
+      required: [slug]
+      properties:
+        slug:
+          type: string
+          description: >-
+            The flow slug (ID-1). It names the flow in its URL and in a grant
+            resource, and a flow keeps it (`MVP.md` 5.6).
+        title:
+          type: string
+          description: The name that the builder shows for the flow.
+    FlowSummary:
+      type: object
+      description: >-
+        One flow in the list that `listFlows` returns (DF-1, DE-4). It
+        summarizes the engine's flow state: the draft version is the version
+        that the current draft would publish as, which is the published
+        version plus one, and 1 when nothing is published yet (DF-2, DF-4).
+      required: [slug, draftVersion, updatedAt]
+      properties:
+        slug:
+          type: string
+          description: The flow slug (ID-1).
+        title:
+          type: string
+          description: >-
+            The title that the builder shows for the flow. It is absent when
+            the definition holds none, because the flow definition format has
+            no title (`schemas/flow/v2.json`).
+        draftVersion:
+          type: integer
+          minimum: 1
+          description: >-
+            The version number that the current draft would publish as: the
+            published version plus one, or 1 when nothing is published yet
+            (DF-2, DF-4).
+        publishedVersion:
+          type: integer
+          minimum: 1
+          description: >-
+            The newest published version, absent before the first publication
+            (DF-2).
+        updatedAt:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6): the
+            time of the newest event that this flow recorded.
+    DraftFlow:
+      type: object
+      description: >-
+        The draft of one flow: the editable copy before publication (DF-1,
+        DF-4). `version` names the draft version that a write or a publication
+        is based on, so a stale write is refused (I5). `definition` is the
+        canonical v2 definition object; it is absent on a flow whose draft is
+        still empty, because a definition holds at least one step and the
+        engine creates no draft before the first push (DF-4).
+      required: [slug, version]
+      properties:
+        slug:
+          type: string
+          description: The flow slug (ID-1).
+        version:
+          type: integer
+          minimum: 1
+          description: >-
+            The draft version that this read is based on and that the next
+            write names (DF-2, I5).
+        definition:
+          type: object
+          description: >-
+            The canonical v2 definition object (DF-1, I9,
+            `schemas/flow/v2.json`): the same document that the CLI pulls and
+            pushes (DF-4).
+        changes:
+          type: array
+          description: >-
+            The changes that the last write made, as the engine classified
+            them (DF-3, DF-5, DF-6). It is absent when the server has no
+            classification to report, because the append-only log records the
+            definition and not the list of changes (I4).
+          items:
+            $ref: '#/components/schemas/DefinitionChange'
+    DefinitionChange:
+      type: object
+      description: >-
+        One difference between two definitions, as the engine classifies it
+        (DF-5, D2, DF-6). An edit-class change touches a label, help text, an
+        option list or email copy and needs `flow.edit`; a structural change
+        touches the shape of the flow and needs `flow.build`.
+      required: [class, message]
+      properties:
+        class:
+          type: string
+          description: >-
+            Whether the change needs `flow.edit` or `flow.build` (DF-5, D2).
+          enum: [edit, structural]
+        message:
+          type: string
+          description: >-
+            A short description of the difference, for the builder and for a
+            refusal (DF-6).
+    DraftWrite:
+      type: object
+      description: >-
+        One write of a draft definition (DF-4, I5). `version` is the draft
+        version that the edit is based on, so the server refuses a stale write
+        and appends nothing (I5, A1); `definition` is the whole canonical v2
+        definition, because the server diffs it against the draft and
+        classifies every change (DF-3, DF-5).
+      required: [version, definition]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The draft version that the edit is based on (I5).
+        definition:
+          type: object
+          description: >-
+            The canonical v2 definition object (DF-1, I9,
+            `schemas/flow/v2.json`).
+    PublishDraft:
+      type: object
+      description: >-
+        One request to publish the draft (DF-2, I5). `version` is the draft
+        version that the client publishes, so a publication that is based on a
+        stale read writes nothing.
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The draft version that the publication is based on (I5).
+    InboxItem:
+      type: object
+      description: >-
+        One task or instance in the inbox (VT-1, VT-2, S14). The item shows one
+        step of one instance with its state, its holder, its due time and the
+        last activity on it, so the reader sees whether nobody opened the task
+        yet, who holds it, and how long it sits there (VT-2, AS-2).
+      required: [instanceId, flowSlug, step, state]
+      properties:
+        instanceId:
+          type: string
+          description: >-
+            The id of the instance that the task belongs to (DX-1, #187).
+        flowSlug:
+          type: string
+          description: The slug of the flow that the instance runs (ID-1).
+        step:
+          type: string
+          description: The key of the step that the task sits on (WF-1, VT-2).
+        state:
+          type: string
+          description: >-
+            The state of the step for this instance (VT-2): not opened yet,
+            opened and in progress, completed, skipped by a condition, or sent
+            back for revision (VT-2, WF-3, AS-2).
+          enum: [unopened, opened, completed, skipped, sent-back]
+        holder:
+          $ref: '#/components/schemas/ActorId'
+        dueAt:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6): the
+            due time of the step, which the reminders and the escalation count
+            from (VT-2, SE-3, SE-4). It is absent when the step sets no
+            deadline.
+        lastActivityAt:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6): the
+            time of the newest event on this instance, so a task that is
+            opened shows how long it sits with its holder (VT-2, S14).

@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   appendOperation,
   type FieldError,
+  login,
+  logout,
   type Operation,
   RequestRefused,
   setClient,
@@ -139,6 +141,34 @@ test('#106 a 500 with a non-JSON body keeps the plain Error that names the statu
   expect(error.name, 'a body that is not a refusal stays a plain Error').toBe('Error')
   expect(error.message).toContain('500')
   expect(error.message).toContain('Internal Server Error')
+})
+
+// Issue #211, DX-1, ADR 0012: the sign-in answers a 302 redirect and logout a
+// 204, so a generated operation accepts exactly the success statuses that
+// api/openapi.yaml declares. A redirect is a success, and an optional query
+// parameter that the caller omits sets nothing.
+test('#211 a redirect success resolves and an omitted query sets nothing (DX-1, ADR 0012)', async () => {
+  let requested = ''
+  vi.stubGlobal('fetch', (url: string) => {
+    requested = url
+    return Promise.resolve(new Response(null, { status: 302 }))
+  })
+
+  await login()
+  expect(requested, 'an absent returnTo appends no query').toBe('http://api.test/api/v1/auth/login')
+  await login('/flows/demo')
+  expect(requested, 'the returnTo is percent-encoded').toBe(
+    'http://api.test/api/v1/auth/login?returnTo=%2Fflows%2Fdemo'
+  )
+})
+
+test('#211 a status that the operation does not declare is a failure (DX-1, ADR 0012)', async () => {
+  respond(200, JSON.stringify({ signedIn: true }))
+  await expect(login(), 'login declares 302 only').rejects.toThrow()
+  await expect(logout(), 'logout declares 204 only').rejects.toThrow()
+
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response(null, { status: 204 })))
+  await expect(logout(), 'the declared 204 resolves').resolves.toBeUndefined()
 })
 
 test('#93 DX-4 a hand-written /api/v1 call in the interface fails the rule (I12)', () => {

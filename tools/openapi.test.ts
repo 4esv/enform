@@ -18,11 +18,30 @@ const documentPath = join(repo, 'api', 'openapi.yaml')
 // state, read a published flow by slug (issue #91, #172, DX-1). Configuration
 // changes are operations whose type is `config.<kind>.changed@1` (I14), not a
 // separate endpoint.
+//
+// Issue #211, DX-1, DX-4, ID-6, DE-1, DE-2, ADR 0012, ADR 0013: the 0.2.0
+// surface adds the foundation of the walking skeleton. A session and the
+// sign-in redirects are the browser credential and the CLI credential
+// (ADR 0012), the admin users are the local directory (ID-6, DE-1), the flows
+// and the draft are the builder (DF-1, DF-4, DF-5, DE-2), and the inbox is the
+// three tabs of VT-1.
 const operations = [
   ['/api/v1/operations', 'post'],
   ['/api/v1/log', 'get'],
   ['/api/v1/state', 'get'],
   ['/api/v1/flows/{slug}', 'get'],
+  ['/api/v1/auth/login', 'get'],
+  ['/api/v1/auth/callback', 'get'],
+  ['/api/v1/auth/logout', 'post'],
+  ['/api/v1/session', 'get'],
+  ['/api/v1/admin/users', 'get'],
+  ['/api/v1/admin/users', 'post'],
+  ['/api/v1/flows', 'get'],
+  ['/api/v1/flows', 'post'],
+  ['/api/v1/flows/{slug}/draft', 'get'],
+  ['/api/v1/flows/{slug}/draft', 'put'],
+  ['/api/v1/flows/{slug}/publish', 'post'],
+  ['/api/v1/inbox', 'get'],
 ] as const
 
 test('#91 DX-1 api/openapi.yaml is valid OpenAPI 3.1 for /api/v1', async () => {

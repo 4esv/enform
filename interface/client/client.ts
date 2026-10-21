@@ -123,10 +123,14 @@ export interface InstanceView {
 }
 
 /**
- * An error response, with a short machine-readable message.
+ * An error response that names the reason and, when it has them, a machine-readable code and
+ * the field errors that caused it. A 4xx response of the HTTP API carries this shape; a
+ * completion refusal keeps `CompletionRefusal`, which always lists its field errors.
  */
 export interface ApiError {
   readonly error: string
+  readonly code?: string
+  readonly errors?: readonly FieldError[]
 }
 
 /**
@@ -146,6 +150,139 @@ export interface FieldError {
 export interface CompletionRefusal {
   readonly error: string
   readonly errors: readonly FieldError[]
+}
+
+/**
+ * The signed-in person (ADR 0012, ID-4). `id` is the identity provider's subject, the immutable
+ * ID that a grant names, and `groups` holds the immutable group ids that the last sign-in
+ * synchronized, so a group grant reaches the person (ID-4, ID-5). A name or an email address
+ * identifies nobody.
+ */
+export interface Principal {
+  readonly id: ActorId
+  readonly displayName: string
+  readonly email?: string
+  readonly groups: readonly ActorId[]
+}
+
+/**
+ * One signed-in session, as `readSession` reports it (ADR 0012). The server holds the session
+ * row, so logout and deprovisioning revoke it and the cookie stops authenticating at once
+ * (ID-5). The browser and the CLI read the same session: one principal and one session row (ADR
+ * 0012).
+ */
+export interface Session {
+  readonly principal: Principal
+  readonly expiresAt: number
+  readonly csrfToken: string
+}
+
+/**
+ * One user of the built-in directory, as an administrator reads it (ID-6, ADR 0012). `status`
+ * says whether the user is invited, active or disabled, so the administrator sees whom the
+ * installation holds; a disabled user signs in no more, and the claimed tasks of a
+ * deprovisioned user return to the pool (ID-5, ID-6).
+ */
+export interface DirectoryUser {
+  readonly id: ActorId
+  readonly displayName: string
+  readonly email: string
+  readonly status: string
+  readonly groups: readonly ActorId[]
+}
+
+/**
+ * One user to create in the local directory (ID-6, ADR 0012). enform creates the user through
+ * the identity provider's admin API with its service account, because it stores no credentials;
+ * there is no self-signup (ID-6).
+ */
+export interface CreateUser {
+  readonly email: string
+  readonly displayName: string
+  readonly groups?: readonly ActorId[]
+  readonly sendInvite: boolean
+}
+
+/**
+ * One flow to create (DF-1, DF-4). The slug names the flow in its path and in a grant resource,
+ * so it is fixed at creation (ID-1, `MVP.md` 5.6). `title` is the name that the builder shows
+ * for the flow; the definition format has no title, so it is optional and a flow may start
+ * without one.
+ */
+export interface CreateFlow {
+  readonly slug: string
+  readonly title?: string
+}
+
+/**
+ * One flow in the list that `listFlows` returns (DF-1, DE-4). It summarizes the engine's flow
+ * state: the draft version is the version that the current draft would publish as, which is the
+ * published version plus one, and 1 when nothing is published yet (DF-2, DF-4).
+ */
+export interface FlowSummary {
+  readonly slug: string
+  readonly title?: string
+  readonly draftVersion: number
+  readonly publishedVersion?: number
+  readonly updatedAt: number
+}
+
+/**
+ * The draft of one flow: the editable copy before publication (DF-1, DF-4). `version` names the
+ * draft version that a write or a publication is based on, so a stale write is refused (I5).
+ * `definition` is the canonical v2 definition object; it is absent on a flow whose draft is
+ * still empty, because a definition holds at least one step and the engine creates no draft
+ * before the first push (DF-4).
+ */
+export interface DraftFlow {
+  readonly slug: string
+  readonly version: number
+  readonly definition?: Record<string, unknown>
+  readonly changes?: readonly DefinitionChange[]
+}
+
+/**
+ * One difference between two definitions, as the engine classifies it (DF-5, D2, DF-6). An
+ * edit-class change touches a label, help text, an option list or email copy and needs
+ * `flow.edit`; a structural change touches the shape of the flow and needs `flow.build`.
+ */
+export interface DefinitionChange {
+  readonly class: string
+  readonly message: string
+}
+
+/**
+ * One write of a draft definition (DF-4, I5). `version` is the draft version that the edit is
+ * based on, so the server refuses a stale write and appends nothing (I5, A1); `definition` is
+ * the whole canonical v2 definition, because the server diffs it against the draft and
+ * classifies every change (DF-3, DF-5).
+ */
+export interface DraftWrite {
+  readonly version: number
+  readonly definition: Record<string, unknown>
+}
+
+/**
+ * One request to publish the draft (DF-2, I5). `version` is the draft version that the client
+ * publishes, so a publication that is based on a stale read writes nothing.
+ */
+export interface PublishDraft {
+  readonly version: number
+}
+
+/**
+ * One task or instance in the inbox (VT-1, VT-2, S14). The item shows one step of one instance
+ * with its state, its holder, its due time and the last activity on it, so the reader sees
+ * whether nobody opened the task yet, who holds it, and how long it sits there (VT-2, AS-2).
+ */
+export interface InboxItem {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly state: string
+  readonly holder?: ActorId
+  readonly dueAt?: number
+  readonly lastActivityAt?: number
 }
 
 export interface ClientConfig {
@@ -210,6 +347,108 @@ export async function appendOperation(operation: Operation): Promise<Event> {
   return (await response.json()) as Event
 }
 
+export async function authCallback(code: string, state: string): Promise<void> {
+  const query = new URLSearchParams()
+  query.set('code', String(code))
+  query.set('state', String(state))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/auth/callback${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+    redirect: 'manual',
+  })
+  if (![302].includes(response.status)) throw await refusal(response)
+}
+
+export async function createFlow(createFlow: CreateFlow): Promise<DraftFlow> {
+  const url = `${configured().baseUrl}/api/v1/flows`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(createFlow),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DraftFlow
+}
+
+export async function createUser(createUser: CreateUser): Promise<DirectoryUser> {
+  const url = `${configured().baseUrl}/api/v1/admin/users`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(createUser),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DirectoryUser
+}
+
+export async function listFlows(): Promise<readonly FlowSummary[]> {
+  const url = `${configured().baseUrl}/api/v1/flows`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly FlowSummary[]
+}
+
+export async function listUsers(): Promise<readonly DirectoryUser[]> {
+  const url = `${configured().baseUrl}/api/v1/admin/users`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly DirectoryUser[]
+}
+
+export async function login(returnTo?: string): Promise<void> {
+  const query = new URLSearchParams()
+  if (returnTo !== undefined) query.set('returnTo', String(returnTo))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/auth/login${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+    redirect: 'manual',
+  })
+  if (![302].includes(response.status)) throw await refusal(response)
+}
+
+export async function logout(): Promise<void> {
+  const url = `${configured().baseUrl}/api/v1/auth/logout`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: headers(),
+  })
+  if (![204].includes(response.status)) throw await refusal(response)
+}
+
+export async function publishFlow(
+  publishDraft: PublishDraft,
+  slug: string
+): Promise<PublishedFlow> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/publish`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(publishDraft),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as PublishedFlow
+}
+
+export async function readDraft(slug: string): Promise<DraftFlow> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/draft`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DraftFlow
+}
+
 export async function readFlow(slug: string): Promise<PublishedFlow> {
   const url = `${configured().baseUrl}/api/v1/flows/${slug}`
   const response = await fetch(url, {
@@ -220,8 +459,24 @@ export async function readFlow(slug: string): Promise<PublishedFlow> {
   return (await response.json()) as PublishedFlow
 }
 
+export async function readInbox(tab?: string): Promise<readonly InboxItem[]> {
+  const query = new URLSearchParams()
+  if (tab !== undefined) query.set('tab', String(tab))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/inbox${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly InboxItem[]
+}
+
 export async function readInstance(instanceId: string, actor: string): Promise<InstanceView> {
-  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}?actor=${encodeURIComponent(String(actor))}`
+  const query = new URLSearchParams()
+  query.set('actor', String(actor))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}${search}`
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
@@ -240,6 +495,16 @@ export async function readLog(): Promise<Log> {
   return (await response.json()) as Log
 }
 
+export async function readSession(): Promise<Session> {
+  const url = `${configured().baseUrl}/api/v1/session`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as Session
+}
+
 export async function readState(): Promise<State> {
   const url = `${configured().baseUrl}/api/v1/state`
   const response = await fetch(url, {
@@ -248,4 +513,15 @@ export async function readState(): Promise<State> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as State
+}
+
+export async function writeDraft(draftWrite: DraftWrite, slug: string): Promise<DraftFlow> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/draft`
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(draftWrite),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DraftFlow
 }
