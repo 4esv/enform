@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-20 |
 | Refs | DE-2, DE-3, DE-5, DX-3, ADR 0003 |
 

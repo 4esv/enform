@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-20 |
 | Refs | ID-1, ID-4, ID-5, ID-6, DX-3, ADR 0005, ADR 0011 |
 

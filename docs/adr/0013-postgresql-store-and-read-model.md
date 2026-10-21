@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-20 |
 | Refs | I1, I2, I4, I5, SE-5, DE-2, DE-3, DE-5, ADR 0003, ADR 0004 |
 
