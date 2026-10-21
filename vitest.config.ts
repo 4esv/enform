@@ -1,7 +1,9 @@
 import { defineConfig } from 'vitest/config'
 
-// Four projects, so that `make invariants`, `make stories` and `make browser`
-// run one suite each and `make check` runs all of them (MVP.md 11.4).
+// Five projects, so that `make invariants`, `make stories` and `make browser`
+// run one suite each and `make check` runs all of them (MVP.md 11.4). The
+// integration project runs on its own, against the Compose stack, because the
+// unit project would otherwise pick up `integration/**`.
 //
 // The browser suite is a project of its own because driving Chromium (`gui`
 // mode, #27) starves the other suites when it runs beside them: on a cold
@@ -15,7 +17,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['**/*.test.ts'],
-          exclude: ['node_modules/**', 'invariants/**', 'stories/**'],
+          exclude: ['node_modules/**', 'invariants/**', 'stories/**', 'integration/**'],
         },
       },
       { test: { name: 'invariants', include: ['invariants/**/*.test.ts'] } },
@@ -31,6 +33,15 @@ export default defineConfig({
           name: 'browser',
           include: ['stories/**/gui.test.ts'],
           testTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'integration',
+          include: ['integration/**/*.test.ts'],
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+          fileParallelism: false,
         },
       },
     ],

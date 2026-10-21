@@ -1,5 +1,5 @@
-# The five commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack
+# The commands of enform. CONTRIBUTING.md describes them.
+.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack integration
 
 setup:
 	pnpm install --frozen-lockfile
@@ -49,6 +49,12 @@ invariants:
 
 stories:
 	pnpm exec vitest run --project stories
+
+# The integration suite: the real server against the Compose PostgreSQL and
+# Keycloak (DE-1, DE-3, ID-6). It is not part of `make check`, because it needs
+# the stack; CI starts the two services first.
+integration:
+	pnpm exec vitest run --project integration
 
 stack:
 	docker compose -f deploy/compose.yaml up --wait

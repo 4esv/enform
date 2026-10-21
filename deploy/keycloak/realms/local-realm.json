@@ -1,0 +1,36 @@
+{
+  "realm": "enform-local",
+  "enabled": true,
+  "displayName": "enform local directory (test)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "rememberMe": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "users": [],
+  "clients": [
+    {
+      "clientId": "enform",
+      "name": "enform",
+      "description": "The enform engine and web interface (ID-1, ID-6).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": ["http://127.0.0.1:*", "http://localhost:*"],
+      "secret": "enform-dev-secret",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ]
+}

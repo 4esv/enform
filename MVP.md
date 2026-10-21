@@ -318,7 +318,7 @@ All criteria must be true for 14 consecutive days, in production, on the pilot f
 | Version | Milestone | Contents | Demonstration |
 |---|---|---|---|
 | `0.0.0` | Charter | This document, `STORIES.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, ADRs 0001 and 0002. No product code. | The scope is ready for review. |
-| `0.1.0` | Foundation | Repository layout, CI, Compose stack, PostgreSQL, Keycloak with AD and Entra ID (ID-1, ID-4), the OpenAPI document (DX-1), the log and the operation model (I1, I4, I6, I14), the invariant and story harness. | A user signs in. Operations are idempotent. State rebuilds from the log. |
+| `0.1.0` | Foundation | Repository layout, CI, Compose stack, PostgreSQL, Keycloak with AD and Entra ID (ID-1, ID-4), the built-in directory and the template bootstrap (ID-6, DE-1, DE-2, DE-3), the OpenAPI document (DX-1), the log and the operation model (I1, I4, I6, I14), the invariant and story harness. | A user signs in. Operations are idempotent. State rebuilds from the log. The installation starts from a copy of the repository with `make init` and serves at the configured public URL. |
 | `0.2.0` | Engine | ID-2, ID-3, ID-5, DF-1, DF-2, WF-1 to WF-3, WF-5, AS-1 to AS-6, AC-1 to AC-4, DX-3, the side-effect sink with live and dry-run modes (I2, I5, I7 to I10, I13). | A flow runs from start to end through the API and the CLI, live and dry. |
 | `0.3.0` | Side effects | WF-4, AC-5, SE-1 to SE-7, DR-1 to DR-6, I3. | Reminders and escalations fire on a simulated clock. Email status is visible. |
 | `0.4.0` | Forms | FM-1 to FM-7, OU-1. The web interface starts: the generated API client (DX-4, I12) and the form. | A dynamic form shows, validates on the server and prints. |
