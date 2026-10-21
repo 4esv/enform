@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   appendOperation,
   type FieldError,
-  login,
+  loginUrl,
   logout,
   type Operation,
   RequestRefused,
@@ -143,28 +143,21 @@ test('#106 a 500 with a non-JSON body keeps the plain Error that names the statu
   expect(error.message).toContain('Internal Server Error')
 })
 
-// Issue #211, DX-1, ADR 0012: the sign-in answers a 302 redirect and logout a
-// 204, so a generated operation accepts exactly the success statuses that
-// api/openapi.yaml declares. A redirect is a success, and an optional query
-// parameter that the caller omits sets nothing.
-test('#211 a redirect success resolves and an omitted query sets nothing (DX-1, ADR 0012)', async () => {
-  let requested = ''
-  vi.stubGlobal('fetch', (url: string) => {
-    requested = url
-    return Promise.resolve(new Response(null, { status: 302 }))
-  })
-
-  await login()
-  expect(requested, 'an absent returnTo appends no query').toBe('http://api.test/api/v1/auth/login')
-  await login('/flows/demo')
-  expect(requested, 'the returnTo is percent-encoded').toBe(
+// Issue #211, DX-1, ADR 0012: a redirect cannot be observed through `fetch` in
+// a browser, so the generated client exposes the sign-in as a URL that the
+// page navigates to. An optional query parameter that the caller omits sets
+// nothing, and the returnTo is percent-encoded.
+test('#211 a redirect builds a URL and an omitted query sets nothing (DX-1, ADR 0012)', () => {
+  expect(loginUrl(), 'an absent returnTo appends no query').toBe(
+    'http://api.test/api/v1/auth/login'
+  )
+  expect(loginUrl('/flows/demo'), 'the returnTo is percent-encoded').toBe(
     'http://api.test/api/v1/auth/login?returnTo=%2Fflows%2Fdemo'
   )
 })
 
 test('#211 a status that the operation does not declare is a failure (DX-1, ADR 0012)', async () => {
   respond(200, JSON.stringify({ signedIn: true }))
-  await expect(login(), 'login declares 302 only').rejects.toThrow()
   await expect(logout(), 'logout declares 204 only').rejects.toThrow()
 
   vi.stubGlobal('fetch', () => Promise.resolve(new Response(null, { status: 204 })))

@@ -347,18 +347,12 @@ export async function appendOperation(operation: Operation): Promise<Event> {
   return (await response.json()) as Event
 }
 
-export async function authCallback(code: string, state: string): Promise<void> {
+export function authCallbackUrl(code: string, state: string): string {
   const query = new URLSearchParams()
   query.set('code', String(code))
   query.set('state', String(state))
   const search = query.size === 0 ? '' : `?${query}`
-  const url = `${configured().baseUrl}/api/v1/auth/callback${search}`
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: headers(),
-    redirect: 'manual',
-  })
-  if (![302].includes(response.status)) throw await refusal(response)
+  return `${configured().baseUrl}/api/v1/auth/callback${search}`
 }
 
 export async function createFlow(createFlow: CreateFlow): Promise<DraftFlow> {
@@ -403,17 +397,11 @@ export async function listUsers(): Promise<readonly DirectoryUser[]> {
   return (await response.json()) as readonly DirectoryUser[]
 }
 
-export async function login(returnTo?: string): Promise<void> {
+export function loginUrl(returnTo?: string): string {
   const query = new URLSearchParams()
   if (returnTo !== undefined) query.set('returnTo', String(returnTo))
   const search = query.size === 0 ? '' : `?${query}`
-  const url = `${configured().baseUrl}/api/v1/auth/login${search}`
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: headers(),
-    redirect: 'manual',
-  })
-  if (![302].includes(response.status)) throw await refusal(response)
+  return `${configured().baseUrl}/api/v1/auth/login${search}`
 }
 
 export async function logout(): Promise<void> {

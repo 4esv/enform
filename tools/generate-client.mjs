@@ -164,9 +164,11 @@ function renderPath(path, pathParams) {
 // substituted into the URL. A query parameter (for example `actor`) becomes a
 // function argument too and is appended to the URL, percent-encoded; a
 // parameter that the document marks optional appends nothing when it is
-// absent. An operation whose success carries no JSON body (a redirect or a
-// 204) resolves to nothing and accepts exactly the statuses that the document
-// declares, so the sign-in redirect is a success (ADR 0012).
+// absent. An operation whose success is only a redirect emits a URL builder
+// instead of a fetch, because a browser cannot observe a redirect through
+// `fetch` and must navigate to it (ADR 0012). An operation whose success
+// carries no JSON body (a 204) resolves to nothing and accepts exactly the
+// statuses that the document declares.
 function renderOperation({ path, method, operation }) {
   const request = operation.requestBody?.content?.['application/json']?.schema
   const parameter = request === undefined ? undefined : lowerFirst(refName(request.$ref))
@@ -180,6 +182,7 @@ function renderOperation({ path, method, operation }) {
   const returnType =
     body === undefined ? 'void' : typeOf(body[1].content['application/json'].schema)
   const statuses = successes.map(([status]) => Number(status))
+  const redirectOnly = successes.length > 0 && successes.every(([status]) => /^3\d\d$/.test(status))
   const pathParams = (operation.parameters ?? []).filter((param) => param.in === 'path')
   const queryParams = (operation.parameters ?? []).filter((param) => param.in === 'query')
 
@@ -190,17 +193,25 @@ function renderOperation({ path, method, operation }) {
       (param) => `${param.name}${param.required ? '' : '?'}: ${typeOf(param.schema)}`
     ),
   ]
+  const url = `\`${BASE_URL}${renderPath(path, pathParams)}${queryParams.length === 0 ? '' : SEARCH}\``
+  if (redirectOnly) {
+    if (parameter !== undefined) {
+      throw new Error(`a redirect operation cannot carry a request body: ${operation.operationId}`)
+    }
+    return [
+      ...signature(`${operation.operationId}Url`, args, 'string', true),
+      ...renderQuery(queryParams),
+      `  return ${url}`,
+      '}',
+    ].join('\n')
+  }
   const init = [`    method: '${method}',`]
   if (parameter === undefined) init.push('    headers: headers(),')
   else {
     init.push("    headers: { ...headers(), 'content-type': 'application/json' },")
     init.push(`    body: JSON.stringify(${parameter}),`)
   }
-  // A redirect is observed rather than followed, so the success check can
-  // accept the status that the document declares (ADR 0012).
-  if (statuses.some((status) => status >= 300)) init.push("    redirect: 'manual',")
 
-  const url = `\`${BASE_URL}${renderPath(path, pathParams)}${queryParams.length === 0 ? '' : SEARCH}\``
   return [
     ...signature(operation.operationId, args, returnType),
     ...renderQuery(queryParams),
@@ -218,10 +229,11 @@ function renderOperation({ path, method, operation }) {
 
 // The declaration line of an operation function. A signature that fits the
 // formatter's line width stays on one line; a longer one breaks its arguments
-// onto their own lines, exactly as the formatter writes them.
-function signature(operationId, args, returnType) {
-  const opened = `export async function ${operationId}(`
-  const tail = `): Promise<${returnType}> {`
+// onto their own lines, exactly as the formatter writes them. A sync function
+// returns its type directly; an async one returns a promise.
+function signature(name, args, returnType, sync = false) {
+  const opened = `export ${sync ? '' : 'async '}function ${name}(`
+  const tail = `): ${sync ? '' : 'Promise<'}${returnType}${sync ? '' : '>'} {`
   const oneLine = `${opened}${args.join(', ')}${tail}`
   if (oneLine.length <= LINE_WIDTH) return [oneLine]
   return [
