@@ -76,6 +76,7 @@ import {
   principalFromToken,
   tokenExpiry,
 } from './keycloak.js'
+import { mountInterface } from './static.js'
 import { versionLine } from './version.js'
 
 /** The injected sources of a server-created operation (I6, ADR 0004). */
@@ -118,6 +119,11 @@ export function createApp(config: Config, pool: Pool): Hono {
   })
 
   app.get('/version', (c) => c.text(versionLine()))
+
+  // Issue #224: the app and the API share one origin. The interface is
+  // registered before the API routes, so `/app/*` and `/client/*` never cover
+  // `/api/v1`, `/healthz`, `/readyz` or `/version`.
+  mountInterface(app)
 
   app.get('/api/v1/session', async (c) => {
     const auth = await authenticate(c, pool, config)

@@ -46,8 +46,9 @@ wins over the default (ADR 0011).
 ## Container
 
 `deploy/Dockerfile` is a multi-stage Node 26 build. It runs `pnpm build`, copies
-`dist/`, `schemas/` and `server/migrations/`, and runs as the unprivileged
-`enform` user:
+`dist/`, `schemas/`, `server/migrations/` and `interface/`, and runs as the
+unprivileged `enform` user. The server serves the interface at the site root and
+the API under `/api/v1`, so one container answers both:
 
 ```sh
 docker build -f deploy/Dockerfile -t enform:local .

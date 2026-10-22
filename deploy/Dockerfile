@@ -23,6 +23,10 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 COPY --from=build /app/dist ./dist
 COPY schemas ./schemas
 COPY server/migrations ./server/migrations
+# Issue #224: the server serves the interface at the site root. The app is
+# TypeScript, and ADR 0009 has no build step, so the runtime image carries the
+# sources and the server strips the types on the way out.
+COPY interface ./interface
 USER enform
 EXPOSE 8080
 ENTRYPOINT ["node", "dist/cli/main.js"]
