@@ -31,6 +31,9 @@ const APPROVER_EMAIL = `browser-approver-${RUN}@test.local`
 const APPROVER_NAME = `Browser Approver ${RUN}`
 const TWO_USER_SLUG = `browser-two-users-${RUN}`
 const TWO_USER_TITLE = `Two users ${RUN}`
+const STARTER_SLUG = `browser-starter-${RUN}`
+const STARTER_TITLE = `Starter ${RUN}`
+const REQUESTER_PASSWORD = 'browser-requester-password'
 
 type Setup = {
   readonly config: TestConfig
@@ -570,4 +573,145 @@ test('#228 an administrator creates a second user who claims and approves', asyn
   const done = page.locator('[data-done]')
   await done.waitFor({ timeout: 30_000 })
   expect(await done.textContent()).toBe('Done')
+}, 120_000)
+
+test('#232 a requester added as a starter starts and submits a published flow', async () => {
+  const { browser, config, page, publicUrl } = requireSetup()
+  await signIn(page, publicUrl)
+
+  // Two people outside the administrator: the requester who starts the flow
+  // and a third principal whose inbox must stay empty (ID-6, I8).
+  const adminToken = await keycloakAdminToken(config)
+  const requesterUsername = `browser-requester-${RUN}`
+  const requesterId = await createUser(config, adminToken, {
+    username: requesterUsername,
+    email: `${requesterUsername}@test.local`,
+    firstName: 'Browser',
+    lastName: 'Requester',
+    password: REQUESTER_PASSWORD,
+  })
+  const outsiderUsername = `browser-starter-outsider-${RUN}`
+  await createUser(config, adminToken, {
+    username: outsiderUsername,
+    email: `${outsiderUsername}@test.local`,
+    firstName: 'Starter',
+    lastName: 'Outsider',
+    password: OUTSIDER_PASSWORD,
+  })
+
+  // The administrator builds and publishes the two-step flow.
+  await page.goto(`${publicUrl}/?new=1`)
+  await page.getByRole('heading', { name: 'Create a flow' }).waitFor({ timeout: 30_000 })
+  await page.fill('#flow-slug', STARTER_SLUG)
+  await page.fill('#flow-title', STARTER_TITLE)
+  await page.getByRole('button', { name: 'Create flow' }).click()
+  await page.locator('[data-add-step]').waitFor({ timeout: 30_000 })
+
+  await page.fill('[data-step-index="0"] [data-step-key]', 'request')
+  await page.click('[data-step-index="0"] [data-add-field="0"]')
+  await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-key]', 'summary')
+  await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-label]', 'Summary')
+
+  await page.click('[data-add-step]')
+  await page.locator('[data-step-index="1"]').waitFor()
+  await page.fill('[data-step-index="0"] [data-outcomes]', 'submit')
+  await page.locator('[data-builder-title]').click()
+  await page.locator('[data-step-index="0"] [data-grant-outcome="submit"]').waitFor()
+  await page.fill('[data-step-index="1"] [data-step-key]', 'approve')
+  await page.fill('[data-step-index="1"] [data-outcomes]', 'approve')
+  await page.locator('[data-builder-title]').click()
+
+  await page.click('[data-save]')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-builder-status]')?.textContent?.startsWith('Saved')
+  )
+  await page.click('[data-publish]')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-published]')?.textContent?.includes('Published version 1')
+  )
+
+  // The Starters section adds the requester through the write path: two grant
+  // operations, `instance.start` on the flow and `step.outcome:submit` on the
+  // first step (AC-1, AC-2, I8).
+  expect(await page.locator('[data-starters-empty]').count(), 'no starter is set yet').toBe(1)
+  await page.fill('[data-starter-input]', `user:${requesterId}`)
+  await page.click('[data-add-starter]')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-starter-status]')?.textContent?.startsWith('Added')
+  )
+  expect(
+    await page.locator(`[data-starter-principal="${requesterId}"]`).count(),
+    'the Starters list shows the requester'
+  ).toBe(1)
+  expect(await page.getAttribute('[data-starter-link]', 'href')).toBe(`/?flow=${STARTER_SLUG}`)
+  expect(
+    await page.getAttribute('[data-step-index="0"] [data-grant-principal]', 'data-grant-principal'),
+    'the starter grid names the requester, not the builder actor'
+  ).toBe(requesterId)
+
+  const requesterToken = await passwordToken(config, requesterUsername, REQUESTER_PASSWORD)
+  const requesterContext = await browser.newContext()
+  const requesterPage = await requesterContext.newPage()
+  let instanceId = ''
+  try {
+    await signIn(requesterPage, publicUrl, requesterUsername, REQUESTER_PASSWORD)
+    // `instance.start` lets the requester read the published flow, so the form
+    // renders even though no flow read, edit or build scope is granted.
+    await requesterPage.goto(`${publicUrl}/?flow=${STARTER_SLUG}`)
+    const summary = requesterPage.locator('input[name="summary"]')
+    await summary.waitFor({ timeout: 30_000 })
+    expect(await summary.isVisible(), 'the requester sees the form').toBe(true)
+    await summary.fill('Started by the requester')
+    await requesterPage.click('[data-start]')
+    const link = requesterPage.locator('.instance-link a')
+    await link.waitFor({ timeout: 30_000 })
+    const href = await link.getAttribute('href')
+    if (href === null) throw new Error('the start page showed no instance link')
+    instanceId = instanceOfHref(href, publicUrl)
+    const taskUrl = new URL(href, publicUrl).toString()
+
+    await requesterPage.goto(taskUrl)
+    await requesterPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
+    expect(await requesterPage.textContent('.instance-status')).toContain('Step 1 of 2')
+    await requesterPage.click('[data-claim]')
+    await requesterPage.waitForFunction(
+      () => document.querySelector('.status')?.textContent === 'Claimed'
+    )
+    await requesterPage.click('[data-outcome="submit"]')
+    await requesterPage.waitForFunction(() =>
+      document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
+    )
+
+    // The requester never held a flow-level read, edit or build scope, and it
+    // may not read the grant set either.
+    const draft = await fetch(`${publicUrl}/api/v1/flows/${STARTER_SLUG}/draft`, {
+      headers: { authorization: `Bearer ${requesterToken}` },
+    })
+    expect(draft.status, await draft.text()).toBe(403)
+    const grants = await fetch(`${publicUrl}/api/v1/flows/${STARTER_SLUG}/grants`, {
+      headers: { authorization: `Bearer ${requesterToken}` },
+    })
+    expect(grants.status, await grants.text()).toBe(403)
+  } finally {
+    await requesterContext.close()
+  }
+
+  // A third principal signs in in its own context and reads no inbox item for
+  // the instance (I8, AC-5).
+  expect(instanceId, 'the requester started an instance').not.toBe('')
+  const outsiderContext = await browser.newContext()
+  const outsiderPage = await outsiderContext.newPage()
+  try {
+    await signIn(outsiderPage, publicUrl, outsiderUsername, OUTSIDER_PASSWORD)
+    for (const tab of ['my', 'available', 'started'] as const) {
+      await outsiderPage.goto(`${publicUrl}/?inbox=1&tab=${tab}`)
+      await outsiderPage.locator(`[data-inbox-tab="${tab}"]`).waitFor({ timeout: 30_000 })
+      expect(
+        await outsiderPage.locator(`[data-inbox-instance="${instanceId}"]`).count(),
+        `the outsider reads no ${tab} item`
+      ).toBe(0)
+    }
+  } finally {
+    await outsiderContext.close()
+  }
 }, 120_000)
