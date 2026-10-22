@@ -14,11 +14,13 @@
 
 import {
   appendOperation,
+  type Grant,
   listFlows,
   type Operation,
   publishFlow,
   RequestRefused,
   readDraft,
+  readFlowGrants,
   writeDraft,
 } from '../client/client.js'
 
@@ -94,6 +96,12 @@ type BuilderState = {
   title: string | undefined
   draftVersion: number
   steps: BuilderStep[]
+  /**
+   * The principals that hold `instance.start` on the flow (#232). A `starter`
+   * target grants its outcome to them; the builder actor is only the fallback
+   * when the flow names none.
+   */
+  starters: string[]
   /** The checked state of one step/target/outcome pair; absent means checked. */
   readonly grants: Map<string, boolean>
 }
@@ -107,7 +115,11 @@ const grantIds = new Map<string, string>()
 
 /** Mount the builder for one flow. */
 export async function mountBuilder(options: BuilderOptions): Promise<void> {
-  const [draft, flows] = await Promise.all([readDraft(options.slug), listFlows()])
+  const [draft, flows, grants] = await Promise.all([
+    readDraft(options.slug),
+    listFlows(),
+    readFlowGrants(options.slug),
+  ])
   const summary = flows.find((flow) => flow.slug === options.slug)
   const state: BuilderState = {
     slug: options.slug,
@@ -118,6 +130,7 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
     title: summary?.title,
     draftVersion: draft.version,
     steps: readSteps(draft.definition),
+    starters: startersOf(grants, options.slug),
     grants: new Map(),
   }
   render(state)
@@ -201,6 +214,8 @@ function render(state: BuilderState): void {
   published.className = 'published'
   published.dataset.published = ''
   root.appendChild(published)
+
+  root.appendChild(renderStarters(state))
 
   const steps = document.createElement('div')
   steps.id = 'builder-steps'
@@ -353,10 +368,90 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
 }
 
 /**
+ * Render the flow-level starters (#232): who may start this flow, the input
+ * that adds one, and the link the requester opens. Adding a starter appends
+ * two grants through the write path: `instance.start` on the flow and the
+ * first step's first outcome on the first step. The engine authorizes both
+ * from the administrator's `org.grants` on the organization or `flow.grant`
+ * on the flow.
+ */
+function renderStarters(state: BuilderState): HTMLElement {
+  const box = document.createElement('section')
+  box.className = 'builder-starters'
+  box.dataset.starters = ''
+  const heading = document.createElement('h2')
+  heading.textContent = 'Starters'
+  box.appendChild(heading)
+
+  const hint = document.createElement('p')
+  hint.className = 'hint'
+  hint.append('A starter opens ')
+  const link = document.createElement('a')
+  link.href = `/?flow=${encodeURIComponent(state.slug)}`
+  link.dataset.starterLink = ''
+  link.textContent = `/?flow=${state.slug}`
+  hint.append(
+    link,
+    ", fills the first step and submits. Adding a starter grants instance.start on this flow and the first step's first outcome."
+  )
+  box.appendChild(hint)
+
+  const list = document.createElement('ul')
+  list.className = 'starter-list'
+  list.dataset.starterList = ''
+  if (state.starters.length === 0) {
+    const empty = document.createElement('li')
+    empty.dataset.startersEmpty = ''
+    empty.textContent =
+      'No starters yet. The builder actor is the default starter in the outcome grid.'
+    list.appendChild(empty)
+  } else {
+    for (const principal of state.starters) {
+      const item = document.createElement('li')
+      item.dataset.starterPrincipal = principal
+      item.textContent = principal
+      list.appendChild(item)
+    }
+  }
+  box.appendChild(list)
+
+  const row = textRow('Principal (user:<id>, team:<name> or an id)')
+  row.input.dataset.starterInput = ''
+  row.input.placeholder = 'user:<id> or team:<name>'
+  box.appendChild(row.row)
+
+  const add = document.createElement('button')
+  add.type = 'button'
+  add.textContent = 'Add starter'
+  add.dataset.addStarter = ''
+  add.addEventListener('click', () => {
+    void addStarter(state, row.input)
+  })
+  box.appendChild(add)
+
+  const confirmation = document.createElement('p')
+  confirmation.className = 'status starter-status'
+  confirmation.dataset.starterStatus = ''
+  box.appendChild(confirmation)
+
+  // The engine records grants as append-only configuration and has no revoke
+  // operation (#232), so the section stays add-only rather than inventing one.
+  const gap = document.createElement('p')
+  gap.className = 'hint'
+  gap.dataset.starterGap = ''
+  gap.textContent =
+    'Removing a starter is not offered yet: the engine has no grant-revoke operation.'
+  box.appendChild(gap)
+  return box
+}
+
+/**
  * Render the grant grid of one step: one checkbox per target and outcome, and
  * a control that posts the checked pairs. The default is checked, so a fresh
  * flow grants its own outcomes to its targets and is usable at once; the
- * selection stays visible and editable.
+ * selection stays visible and editable. A `starter` target names every
+ * configured starter, and the builder actor only when the flow names none
+ * (#232).
  */
 function renderGrants(state: BuilderState, step: BuilderStep, index: number): HTMLElement {
   const box = document.createElement('div')
@@ -376,28 +471,26 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
   grid.className = 'grant-grid'
   for (const outcome of outcomes) {
     for (const target of targets) {
-      // A `starter` target is dynamic: the grant names the signed-in
-      // principal, because that is who the engine resolves `starter` to in an
-      // instance this person starts. A user target is its immutable ID (ID-4).
-      const principal = principalOf(state, target)
-      const key = grantKey(state.slug, step.key, principal, outcome)
-      const label = document.createElement('label')
-      const checkbox = document.createElement('input')
-      checkbox.type = 'checkbox'
-      checkbox.dataset.grantCheck = ''
-      checkbox.dataset.grantStep = step.key
-      checkbox.dataset.grantTarget = target
-      checkbox.dataset.grantPrincipal = principal
-      checkbox.dataset.grantOutcome = outcome
-      checkbox.checked = state.grants.get(key) ?? true
-      checkbox.addEventListener('change', () => {
-        state.grants.set(key, checkbox.checked)
-      })
-      label.append(
-        checkbox,
-        `${outcome} to ${target === 'starter' ? 'the starter' : userTargetOf(target)}`
-      )
-      grid.appendChild(label)
+      // A `starter` target is dynamic: each grant names a configured starter,
+      // because that is who the engine resolves `starter` to in an instance
+      // that person starts. A user target is its immutable ID (ID-4).
+      for (const principal of principalsOf(state, target)) {
+        const key = grantKey(state.slug, step.key, principal, outcome)
+        const label = document.createElement('label')
+        const checkbox = document.createElement('input')
+        checkbox.type = 'checkbox'
+        checkbox.dataset.grantCheck = ''
+        checkbox.dataset.grantStep = step.key
+        checkbox.dataset.grantTarget = target
+        checkbox.dataset.grantPrincipal = principal
+        checkbox.dataset.grantOutcome = outcome
+        checkbox.checked = state.grants.get(key) ?? true
+        checkbox.addEventListener('change', () => {
+          state.grants.set(key, checkbox.checked)
+        })
+        label.append(checkbox, `${outcome} to ${targetLabel(state, target, principal)}`)
+        grid.appendChild(label)
+      }
     }
   }
   box.appendChild(grid)
@@ -410,6 +503,56 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
   })
   box.appendChild(grant)
   return box
+}
+
+/**
+ * Add one starter through the write path (#232). The principal is normalized
+ * like a target (ID-4): `user:<id>` and a bare id are the same user, and a
+ * `team:<name>` stays a team. The builder appends the two grants the requester
+ * needs and re-renders, so the outcome grid names the new starter at once.
+ */
+async function addStarter(state: BuilderState, input: HTMLInputElement): Promise<void> {
+  const confirmation = starterStatusOf(state)
+  const principal = principalOfStarter(input.value)
+  if (principal === '') {
+    confirmation.textContent = 'Enter a user:<id>, team:<name> or an id.'
+    return
+  }
+  const first = state.steps[0]
+  if (first === undefined) {
+    confirmation.textContent = 'Add a first step before adding a starter.'
+    return
+  }
+  const firstOutcome = splitList(first.outcomes)[0] ?? 'submit'
+  const operations: Operation[] = [
+    {
+      id: grantId(starterGrantKey(state.slug, principal)),
+      type: GRANT_CHANGE_TYPE,
+      at: state.clock(),
+      actor: state.actor,
+      payload: { principal, scopes: ['instance.start'], resource: `flow:${state.slug}` },
+    },
+    {
+      id: grantId(grantKey(state.slug, first.key, principal, firstOutcome)),
+      type: GRANT_CHANGE_TYPE,
+      at: state.clock(),
+      actor: state.actor,
+      payload: {
+        principal,
+        scopes: [`step.outcome:${firstOutcome}`],
+        resource: `flow:${state.slug}/step:${first.key}`,
+      },
+    },
+  ]
+  try {
+    for (const operation of operations) await appendOperation(operation)
+    if (!state.starters.includes(principal)) state.starters.push(principal)
+    render(state)
+    starterStatusOf(state).textContent =
+      `Added ${principal}. They open /?flow=${state.slug} to start.`
+  } catch (error: unknown) {
+    confirmation.textContent = messageOf(error)
+  }
 }
 
 /** Write the draft through the API, and show the server's answer (DF-4, I5). */
@@ -582,12 +725,46 @@ function readTargets(value: unknown): string[] {
 }
 
 /**
- * The principal that a target names (ID-4). `starter` is the person who
- * starts the flow; a user target may be written `user:<id>` or `<id>`, so both
+ * The principals that a target's grant names (#232, ID-4). A `starter` target
+ * names every configured starter, and the builder actor only when the flow
+ * names none. A user target may be written `user:<id>` or `<id>`, so both
  * spellings reach the one immutable id that the grant and the definition use.
  */
-function principalOf(state: BuilderState, target: string): string {
-  return target === 'starter' ? state.actor : userTargetOf(target)
+function principalsOf(state: BuilderState, target: string): readonly string[] {
+  if (target !== 'starter') return [userTargetOf(target)]
+  return state.starters.length > 0 ? state.starters : [state.actor]
+}
+
+/** The name of one grant row: the starter's principal or the user's id (ID-4). */
+function targetLabel(state: BuilderState, target: string, principal: string): string {
+  if (target !== 'starter') return userTargetOf(target)
+  return state.starters.length > 0 ? principal : 'the starter'
+}
+
+/**
+ * The principal that the starter input names (#232, ID-4). `user:<id>` and a
+ * bare id are the same user, and `team:<name>` stays one team for the engine.
+ */
+function principalOfStarter(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed === '') return ''
+  if (trimmed.startsWith('team:')) {
+    const name = trimmed.slice('team:'.length).trim()
+    return name === '' ? '' : `team:${name}`
+  }
+  return userTargetOf(trimmed)
+}
+
+/** The starters on one flow: grants on the flow that hold `instance.start` (#232). */
+function startersOf(grants: readonly Grant[], slug: string): string[] {
+  const resource = `flow:${slug}`
+  const starters: string[] = []
+  for (const grant of grants) {
+    if (grant.resource !== resource) continue
+    if (!grant.scopes.includes('instance.start')) continue
+    if (!starters.includes(grant.principal)) starters.push(grant.principal)
+  }
+  return starters
 }
 
 /** The immutable id of a user target, without the optional `user:` prefix (ID-4). */
@@ -606,6 +783,18 @@ function grantId(key: string): string {
 
 function grantKey(slug: string, step: string, principal: string, outcome: string): string {
   return `${slug}\u0000${step}\u0000${principal}\u0000${outcome}`
+}
+
+/** The ID key of the flow-level `instance.start` grant (#232). */
+function starterGrantKey(slug: string, principal: string): string {
+  return `${slug}\u0000starter\u0000${principal}`
+}
+
+/** The status element of the Starters section (#232). */
+function starterStatusOf(state: BuilderState): HTMLElement {
+  const element = state.root.querySelector<HTMLElement>('[data-starter-status]')
+  if (element === null) throw new Error('the builder has no starter status element')
+  return element
 }
 
 /** Split a comma-separated list, trimming and dropping empty entries. */
