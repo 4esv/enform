@@ -34,6 +34,7 @@ import {
   type Session,
   setClient,
 } from '../client/client.js'
+import { mountBuilder } from './builder.js'
 import {
   controlKind,
   type FormField,
@@ -487,11 +488,8 @@ export async function mountApp(options: AppOptions): Promise<void> {
     await renderStart(slug)
   }
 
-  // Issue #224 lands the builder in the next commit of this branch. Until it
-  // arrives the URL shows the published form, so the intermediate commit still
-  // serves a page.
   const renderBuilder = async (slug: string): Promise<void> => {
-    await renderStart(slug)
+    await mountBuilder({ root: main, slug, actor, clock, ids })
   }
 
   try {
