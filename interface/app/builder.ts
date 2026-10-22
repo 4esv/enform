@@ -475,6 +475,9 @@ function definitionOf(state: BuilderState): Record<string, unknown> {
         ...(field.control === 'select' ? { options: splitList(field.options) } : {}),
         ...(field.required ? { required: true } : {}),
       })),
+      // The step's assignees edit the fields the builder adds (FM-3); without
+      // this list the engine makes no field editable and the form is read-only.
+      ...(step.fields.length === 0 ? {} : { editable: step.fields.map((field) => field.key) }),
       outcomes: splitList(step.outcomes),
     })),
   }

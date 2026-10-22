@@ -145,8 +145,11 @@ test('#224 a person signs in, builds a flow, publishes it and opens the form', a
 
   // Open the published form. The first field renders.
   await page.goto(`${publicUrl}/?flow=${SLUG}`)
-  await page.locator('input[name="summary"]').waitFor({ timeout: 30_000 })
-  expect(await page.locator('input[name="summary"]').isVisible()).toBe(true)
+  const summary = page.locator('input[name="summary"]')
+  await summary.waitFor({ timeout: 30_000 })
+  expect(await summary.isVisible()).toBe(true)
+  expect(await summary.isDisabled(), 'the builder makes the field editable').toBe(false)
+  await summary.fill('First request')
 
   // Start the instance and follow the link the page shows.
   await page.click('[data-start]')
