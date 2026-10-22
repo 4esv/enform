@@ -1,9 +1,14 @@
 // Issue #216, DE-1, DE-3, ID-4, ID-5, ID-6, ADR 0011, ADR 0012: the HTTP
-// server. It answers the liveness, readiness and version surfaces of DE-3 and
-// the session and sign-in surfaces of ADR 0012. The browser authenticates with
-// the server-side session cookie and the CLI with a bearer token; both map to
-// one principal and one session row. A path that this slice does not serve
-// answers 404, and the PR says which ones.
+// server. It answers the liveness, readiness and version surfaces of DE-3, the
+// session and sign-in surfaces of ADR 0012 and the flow surfaces of #220. The
+// browser authenticates with the server-side session cookie and the CLI with a
+// bearer token; both map to one principal and one session row. A path that
+// this slice does not serve answers 404, and the PR says which ones.
+//
+// Issue #220, DF-1, DF-2, DF-4, DF-5, I4, I5, I8, I14: an administrator
+// creates, edits and publishes a flow through the engine. The server resolves
+// the request, calls the engine, appends the operation and projects it; the
+// engine decides authorization, classification and publication (A9).
 
 import { createHash } from 'node:crypto'
 import { serve } from '@hono/node-server'
@@ -17,16 +22,33 @@ import {
   randomState,
 } from 'openid-client'
 import type { Pool } from 'pg'
-import { authorize } from '../engine/authorize.js'
+import { authorize, type Grant } from '../engine/authorize.js'
+import { type FlowDefinition, parse } from '../engine/definition.js'
+import { classifyChange, type DefinitionChange } from '../engine/edit.js'
+import {
+  changeTitle,
+  createFlow,
+  type Flow,
+  publish,
+  publishedFlow,
+  push,
+  STARTER_DEFINITION,
+} from '../engine/flow.js'
+import type { OperationDeps } from '../engine/operation.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
 import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
+  appendOperation,
   createBrowserSession,
   createOidcAttempt,
   createPool,
+  flowExists,
   grantsOfPrincipal,
+  listFlowSummaries,
   type Principal,
   principalById,
+  readFlowProjection,
+  readLog,
   revokeSession,
   type SessionRow,
   sessionById,
@@ -35,6 +57,7 @@ import {
   upsertBearerSession,
   upsertPrincipal,
 } from './db.js'
+import { newOperationId } from './ids.js'
 import {
   endIdpSession,
   groupIds,
@@ -44,6 +67,18 @@ import {
   tokenExpiry,
 } from './keycloak.js'
 import { versionLine } from './version.js'
+
+/** The injected sources of a server-created operation (I6, ADR 0004). */
+const operationDeps: OperationDeps = { clock: () => Date.now(), ids: () => newOperationId() }
+
+/**
+ * The scopes that let a principal read a flow (#220). `flow.read` reads the
+ * published definition, `flow.edit` and `flow.build` read the draft, and
+ * `instance.start` reads the published definition to start an instance. The
+ * engine's `*` resource covers every flow, so an administrator's wildcard
+ * grant lists and reads them all.
+ */
+const FLOW_READ_SCOPES = ['flow.read', 'flow.edit', 'flow.build', 'instance.start'] as const
 
 /** The running HTTP server and the way to drain it (DE-3). */
 export type ServedHttp = {
@@ -196,6 +231,174 @@ export function createApp(config: Config, pool: Pool): Hono {
     return c.json(await listDirectoryUsers(config))
   })
 
+  app.get('/api/v1/flows', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const summaries = await listFlowSummaries(pool)
+    return c.json(summaries.filter((summary) => mayReadFlow(grants, summary.slug)))
+  })
+
+  app.post('/api/v1/flows', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const body = await readJsonObject(c)
+    const input = body === undefined ? undefined : readCreateFlow(body)
+    if (input === undefined) {
+      return c.json({ error: 'the body needs a slug and an optional title' }, 400)
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const resource = `flow:${input.slug}`
+    if (!authorize(grants, 'flow.build', resource)) {
+      return c.json({ error: `creating a flow requires the scope flow.build on ${resource}` }, 403)
+    }
+    if (await flowExists(pool, input.slug)) {
+      return c.json(
+        { error: `a flow with the slug ${input.slug} already exists`, code: 'slug-exists' },
+        409
+      )
+    }
+    const pushed = push(
+      createFlow(input.slug),
+      STARTER_DEFINITION,
+      operationDeps,
+      auth.principal.id,
+      grants
+    )
+    await appendOperation(pool, pushed.operation)
+    if (input.title !== undefined) {
+      await appendOperation(
+        pool,
+        changeTitle(input.slug, input.title, operationDeps, auth.principal.id)
+      )
+    }
+    return c.json(
+      { slug: input.slug, version: 1, definition: pushed.flow.draft ?? STARTER_DEFINITION },
+      201
+    )
+  })
+
+  app.get('/api/v1/flows/:slug/draft', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const slug = c.req.param('slug')
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!mayReadDraft(grants, slug)) {
+      return c.json({ error: `reading the draft requires a flow scope on flow:${slug}` }, 403)
+    }
+    const stored = await readFlowProjection(pool, slug)
+    if (stored === undefined || stored.flow.draft === undefined) {
+      return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
+    }
+    return c.json({ slug, version: stored.draftVersion, definition: stored.flow.draft })
+  })
+
+  app.put('/api/v1/flows/:slug/draft', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const body = await readJsonObject(c)
+    const input = body === undefined ? undefined : readDraftWrite(body)
+    if (input === undefined) {
+      return c.json({ error: 'the body needs a version and a definition' }, 400)
+    }
+    let definition: FlowDefinition
+    try {
+      definition = parse(JSON.stringify(input.definition))
+    } catch (error) {
+      return c.json(
+        { error: `the definition is not valid: ${messageOf(error)}`, code: 'invalid-definition' },
+        422
+      )
+    }
+    const slug = c.req.param('slug')
+    const stored = await readFlowProjection(pool, slug)
+    if (stored === undefined) {
+      return c.json({ error: `there is no flow with the slug ${slug}` }, 404)
+    }
+    if (input.version !== stored.draftVersion) {
+      return c.json(
+        {
+          error: `the draft version is ${stored.draftVersion}; ${input.version} is stale`,
+          code: 'version-stale',
+        },
+        409
+      )
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const changes = changesForPush(stored.flow, definition)
+    if (!changeAllowed(grants, slug, changes)) {
+      return c.json({ error: refusalFor(slug, changes) }, 403)
+    }
+    const pushed = push(stored.flow, definition, operationDeps, auth.principal.id, grants)
+    await appendOperation(pool, pushed.operation)
+    return c.json({
+      slug,
+      version: stored.draftVersion,
+      definition: pushed.flow.draft ?? definition,
+    })
+  })
+
+  app.post('/api/v1/flows/:slug/publish', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const body = await readJsonObject(c)
+    const input = body === undefined ? undefined : readPublish(body)
+    if (input === undefined) {
+      return c.json({ error: 'the body needs a version' }, 400)
+    }
+    const slug = c.req.param('slug')
+    const stored = await readFlowProjection(pool, slug)
+    if (stored === undefined || stored.flow.draft === undefined) {
+      return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
+    }
+    if (input.version !== stored.draftVersion) {
+      return c.json(
+        {
+          error: `the draft version is ${stored.draftVersion}; ${input.version} is stale`,
+          code: 'version-stale',
+        },
+        409
+      )
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const changes = changesForPublish(stored.flow)
+    if (!changeAllowed(grants, slug, changes)) {
+      return c.json({ error: refusalFor(slug, changes) }, 403)
+    }
+    const published = publish(stored.flow, operationDeps, auth.principal.id, grants)
+    await appendOperation(pool, published.operation)
+    const version = published.flow.versions[published.flow.versions.length - 1]
+    return c.json({
+      slug,
+      version: version.version,
+      contentHash: version.contentHash,
+      definition: version.definition,
+    })
+  })
+
+  app.get('/api/v1/flows/:slug', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const slug = c.req.param('slug')
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!mayReadFlow(grants, slug)) {
+      return c.json({ error: `reading the flow requires a scope on flow:${slug}` }, 403)
+    }
+    const published = publishedFlow(await readLog(pool), slug)
+    if (published === undefined) {
+      return c.json({ error: `no published flow has the slug ${slug}` }, 404)
+    }
+    return c.json({
+      slug,
+      version: published.version,
+      contentHash: published.contentHash,
+      definition: published.definition,
+    })
+  })
+
   app.all('*', (c) => c.json({ error: 'not found in this slice' }, 404))
 
   return app
@@ -312,6 +515,110 @@ function decryptStoredRefreshToken(config: Config, stored: string | null | undef
   } catch {
     return undefined
   }
+}
+
+/** Whether a principal may read a flow, its draft or its publication (#220, I8). */
+function mayReadFlow(grants: readonly Grant[], slug: string): boolean {
+  return FLOW_READ_SCOPES.some((scope) => authorize(grants, scope, `flow:${slug}`))
+}
+
+/** Whether a principal may read the draft of a flow (#220, DF-3, DF-5, I8). */
+function mayReadDraft(grants: readonly Grant[], slug: string): boolean {
+  return ['flow.read', 'flow.edit', 'flow.build'].some((scope) =>
+    authorize(grants, scope, `flow:${slug}`)
+  )
+}
+
+/** The change class from the current draft to the next one (#220, DF-5). */
+function changesForPush(flow: Flow, definition: FlowDefinition): readonly DefinitionChange[] {
+  return flow.draft === undefined
+    ? [{ class: 'structural', message: 'the first draft was created' }]
+    : classifyChange(flow.draft, definition)
+}
+
+/** The change class from the newest publication to the draft (#220, DF-5). */
+function changesForPublish(flow: Flow): readonly DefinitionChange[] {
+  const latest = flow.versions[flow.versions.length - 1]
+  return latest === undefined
+    ? [{ class: 'structural', message: 'the first publication created the flow' }]
+    : classifyChange(latest.definition, flow.draft ?? latest.definition)
+}
+
+/**
+ * Whether the acting principal may make a classified change (#220, DF-5, D2).
+ * A structural change needs `flow.build`; an edit-class change needs
+ * `flow.edit` or `flow.build`.
+ */
+function changeAllowed(
+  grants: readonly Grant[],
+  slug: string,
+  changes: readonly DefinitionChange[]
+): boolean {
+  const resource = `flow:${slug}`
+  if (changes.some((change) => change.class === 'structural')) {
+    return authorize(grants, 'flow.build', resource)
+  }
+  return authorize(grants, 'flow.edit', resource) || authorize(grants, 'flow.build', resource)
+}
+
+/** The reason that a flow change needs a scope, in plain language (#220). */
+function refusalFor(slug: string, changes: readonly DefinitionChange[]): string {
+  const resource = `flow:${slug}`
+  return changes.some((change) => change.class === 'structural')
+    ? `the change is structural; it requires the scope flow.build on ${resource}`
+    : `the change is edit-class; it requires the scope flow.edit on ${resource}`
+}
+
+/** Whether a state-changing request carries the cookie session's CSRF token (ADR 0012). */
+function csrfOk(c: Context, auth: Auth): boolean {
+  return auth.kind !== 'cookie' || c.req.header('x-csrf-token') === auth.session.csrfToken
+}
+
+/** One 403 body for a state-changing request without its CSRF token (ADR 0012). */
+function csrfRefused(c: Context) {
+  return c.json({ error: 'the CSRF token is missing or invalid' }, 403)
+}
+
+/** Read a JSON object body, or undefined when the body is not one (#220). */
+async function readJsonObject(c: Context): Promise<Record<string, unknown> | undefined> {
+  try {
+    const body = await c.req.json()
+    return isRecord(body) ? body : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Read the body of `POST /api/v1/flows` (#220). */
+function readCreateFlow(
+  body: Record<string, unknown>
+): { slug: string; title?: string } | undefined {
+  const { slug, title } = body
+  if (typeof slug !== 'string' || slug.trim() === '' || slug.includes('/')) return undefined
+  if (title !== undefined && typeof title !== 'string') return undefined
+  return { slug, ...(title === undefined ? {} : { title }) }
+}
+
+/** Read the body of `PUT /api/v1/flows/{slug}/draft` (#220, I5). */
+function readDraftWrite(
+  body: Record<string, unknown>
+): { version: number; definition: unknown } | undefined {
+  const { version, definition } = body
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) return undefined
+  if (!isRecord(definition)) return undefined
+  return { version, definition }
+}
+
+/** Read the body of `POST /api/v1/flows/{slug}/publish` (#220, I5). */
+function readPublish(body: Record<string, unknown>): { version: number } | undefined {
+  const { version } = body
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) return undefined
+  return { version }
+}
+
+/** Whether a value is a JSON object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** One 401 body, the same shape for every credential (ADR 0012). */
