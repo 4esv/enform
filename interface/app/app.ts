@@ -30,6 +30,7 @@ import {
   listUsers,
   loginUrl,
   logout,
+  type Note,
   type Operation,
   RequestRefused,
   readFlow,
@@ -57,6 +58,9 @@ const STEP_COMPLETED = 'step.completed@1'
 
 /** The versioned event type of a claim (S09, AS-2). */
 const STEP_CLAIMED = 'step.claimed@1'
+
+/** The versioned event type of a send back (S11, WF-3). */
+const STEP_SENT_BACK = 'step.sent-back@1'
 
 export interface AppOptions {
   /** The element that receives the page. */
@@ -333,6 +337,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     instanceStatus.className = 'instance-status'
     instanceStatus.textContent = statusLine(view.status)
     main.appendChild(instanceStatus)
+    renderNotes(view.notes)
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
     // status line and no form (VT-1, FM-3).
@@ -425,6 +430,128 @@ export async function mountApp(options: AppOptions): Promise<void> {
     }
     form.appendChild(status)
     main.appendChild(form)
+
+    // A holder may return the current step to an earlier one with a comment
+    // (S11, WF-3). The read names the steps it may choose (`previousSteps`),
+    // and the engine still decides the holder, the target, the comment and the
+    // version (A9); the page only renders the controls and shows the refusal.
+    if (view.status.holder === actor && view.previousSteps.length > 0) {
+      main.appendChild(renderSendBack(slug, instanceId, view))
+    }
+  }
+
+  /**
+   * The notes on the instance that this actor may read (VT-3, WF-3): the
+   * send-back comment shows to the target step's people, and the approver
+   * never sees a note it may not read.
+   */
+  const renderNotes = (notes: readonly Note[]): void => {
+    if (notes.length === 0) return
+    const heading = document.createElement('h2')
+    heading.textContent = 'Notes'
+    const list = document.createElement('ul')
+    list.className = 'notes'
+    list.dataset.notes = ''
+    for (const note of notes) {
+      const item = document.createElement('li')
+      item.className = 'note'
+      item.dataset.note = ''
+      item.dataset.noteStep = note.step
+      item.dataset.noteActor = note.actor
+      const step = document.createElement('span')
+      step.className = 'note-step'
+      step.textContent = note.step
+      const author = document.createElement('span')
+      author.className = 'note-actor'
+      author.textContent = note.actor
+      const comment = document.createElement('p')
+      comment.className = 'note-comment'
+      comment.textContent = note.comment
+      item.append(step, author, comment)
+      list.appendChild(item)
+    }
+    main.append(heading, list)
+  }
+
+  /**
+   * The send-back form (S11, WF-3): the earlier steps the read offers, a
+   * required comment and a submit. It posts the intent and re-reads the
+   * instance on success; a refusal that names no field re-reads too, so the
+   * page shows the state the log now holds (I5).
+   */
+  const renderSendBack = (slug: string, instanceId: string, view: InstanceView): HTMLElement => {
+    const section = document.createElement('section')
+    section.className = 'send-back'
+    section.dataset.sendBackSection = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Send back'
+    section.appendChild(heading)
+
+    const form = document.createElement('form')
+    const stepLabel = document.createElement('label')
+    stepLabel.textContent = 'Send back to'
+    const select = document.createElement('select')
+    select.name = 'to'
+    select.dataset.sendBackStep = ''
+    for (const key of view.previousSteps) {
+      const option = document.createElement('option')
+      option.value = key
+      option.textContent = key
+      select.appendChild(option)
+    }
+    stepLabel.appendChild(select)
+    form.appendChild(stepLabel)
+
+    const commentLabel = document.createElement('label')
+    commentLabel.textContent = 'Comment (required)'
+    const comment = document.createElement('textarea')
+    comment.name = 'comment'
+    comment.required = true
+    comment.dataset.sendBackComment = ''
+    commentLabel.appendChild(comment)
+    form.appendChild(commentLabel)
+
+    const submit = document.createElement('button')
+    submit.type = 'submit'
+    submit.textContent = 'Send back'
+    submit.dataset.sendBack = ''
+    form.appendChild(submit)
+
+    const status = document.createElement('p')
+    status.className = 'status'
+    form.appendChild(status)
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const intent: Operation = {
+        id: ids(),
+        type: STEP_SENT_BACK,
+        at: clock(),
+        actor,
+        payload: {
+          instanceId,
+          to: select.value,
+          comment: comment.value,
+          version: view.version,
+        },
+      }
+      void appendOperation(intent)
+        .then(() => renderTask(slug, instanceId, 'Sent back'))
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof RequestRefused &&
+            error.status === 409 &&
+            error.errors.length === 0
+          ) {
+            await renderTask(slug, instanceId, error.error)
+            return
+          }
+          showRefusal(status, form, error)
+        })
+    })
+
+    section.appendChild(form)
+    return section
   }
 
   /**
