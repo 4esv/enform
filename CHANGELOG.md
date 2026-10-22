@@ -85,6 +85,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- The builder grants a dynamic `starter` target to the signed-in principal instead of the literal target text, so the person who builds and starts the flow holds the `step.outcome` grant that the engine authorizes and can complete both steps (AS-2, AC-4, I8, ADR 0012) (#226).
+
 - The Entra test realm imports into Keycloak 26.0: the `entra` identity provider sets `pkceMethod` to `S256` beside `pkceEnabled`, so a fresh Compose stack starts and the integration suite can run (ID-1, ADR 0005) (#214).
 - A start records the steps its route skipped, with the conditions, on the instance's `instance.started@1` event, and `status.skipped` reads only that instance's skips, so another instance's skip or a draft run's `step.skipped@1` no longer appears (WF-1, VT-2, S05, S14, I4) (#192).
 - The OIDC callback carries every authorization response parameter into the code grant, so the `iss` parameter that Keycloak sends is no longer lost and the sign-in completes (ADR 0012) (#224).

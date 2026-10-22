@@ -348,13 +348,18 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
   grid.className = 'grant-grid'
   for (const outcome of outcomes) {
     for (const target of targets) {
-      const key = grantKey(state.slug, step.key, principalOf(state, target), outcome)
+      // A `starter` target is dynamic: the grant names the signed-in
+      // principal, because that is who the engine resolves `starter` to in an
+      // instance this person starts. A user target is its immutable ID (ID-4).
+      const principal = principalOf(state, target)
+      const key = grantKey(state.slug, step.key, principal, outcome)
       const label = document.createElement('label')
       const checkbox = document.createElement('input')
       checkbox.type = 'checkbox'
       checkbox.dataset.grantCheck = ''
       checkbox.dataset.grantStep = step.key
       checkbox.dataset.grantTarget = target
+      checkbox.dataset.grantPrincipal = principal
       checkbox.dataset.grantOutcome = outcome
       checkbox.checked = state.grants.get(key) ?? true
       checkbox.addEventListener('change', () => {
@@ -416,10 +421,9 @@ async function grantOutcomes(state: BuilderState, host: HTMLElement): Promise<vo
     for (const check of checks) {
       if (!check.checked) continue
       const step = check.dataset.grantStep ?? ''
-      const target = check.dataset.grantTarget ?? ''
+      const principal = check.dataset.grantPrincipal ?? ''
       const outcome = check.dataset.grantOutcome ?? ''
-      if (step === '' || target === '' || outcome === '') continue
-      const principal = principalOf(state, target)
+      if (step === '' || principal === '' || outcome === '') continue
       const operation: Operation = {
         id: grantId(grantKey(state.slug, step, principal, outcome)),
         type: GRANT_CHANGE_TYPE,
