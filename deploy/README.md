@@ -100,6 +100,7 @@ pipeline publishes. Until then, override `ENFORM_SERVER_IMAGE` and
 | `ENFORM_SESSION_COOKIE_NAME` | `enform_session` | The server-side session cookie. |
 | `ENFORM_SESSION_IDLE_MINUTES` | `30` | The idle timeout of a session. |
 | `ENFORM_SESSION_ABSOLUTE_HOURS` | `12` | The absolute lifetime of a session. |
+| `ENFORM_SESSION_ENCRYPTION_KEY` | none | The base64 32-byte key that encrypts the refresh token at rest. `enform init` writes one when the configuration has none, and `enform doctor` checks it. |
 | `ENFORM_SERVER_URL` | `http://server:8080` | The server URL the worker uses. |
 | `ENFORM_LOG_LEVEL` | `info` | The log level. |
 

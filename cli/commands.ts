@@ -22,6 +22,7 @@ import { versionDiff } from '../engine/version.js'
 import { runFlow } from '../engine/workflow.js'
 import { bootstrap } from '../server/bootstrap.js'
 import { configPath, issuerUrl, loadConfig, writeConfig } from '../server/config.js'
+import { newEncryptionKey, validEncryptionKey } from '../server/crypto.js'
 import { createPool, migrationStatus, rebuild, runMigrations } from '../server/db.js'
 import { serveHttp } from '../server/http.js'
 import { oidcConfiguration } from '../server/keycloak.js'
@@ -438,7 +439,17 @@ function runServiceCommand(
 async function commandInit(args: Args, json: boolean): Promise<number> {
   const usage = 'enform init --admin-email <email> --admin-password <password> [--config <path>]'
   const path = configPath(args.flags)
-  const config = loadConfig(args.flags)
+  const loaded = loadConfig(args.flags)
+  // The refresh-token cipher needs one key per installation (#218). `init`
+  // writes one when the configuration has none, so a fresh install is never
+  // left without the ability to store a refresh token.
+  const config =
+    loaded.session.encryptionKey === ''
+      ? {
+          ...loaded,
+          session: { ...loaded.session, encryptionKey: newEncryptionKey() },
+        }
+      : loaded
   const email = flag(args, '--admin-email', usage)
   const password = flag(args, '--admin-password', usage)
   writeConfig(config, path)
@@ -543,8 +554,16 @@ function commandSeed(action: string | undefined, json: boolean): number {
 /** `enform doctor`: check the configuration, the database and the identity provider (DE-5). */
 async function commandDoctor(args: Args, json: boolean): Promise<number> {
   const config = loadConfig(args.flags)
+  const keyOk = validEncryptionKey(config.session.encryptionKey)
   const checks: { readonly name: string; readonly ok: boolean; readonly detail: string }[] = [
     { name: 'config', ok: true, detail: `${configPath(args.flags)} -> ${config.publicUrl}` },
+    {
+      name: 'session encryption key',
+      ok: keyOk,
+      detail: keyOk
+        ? '32-byte key in base64'
+        : 'missing or not a 32-byte key in base64; run enform init or set session.encryptionKey',
+    },
   ]
 
   const pool = createPool(config.databaseUrl)

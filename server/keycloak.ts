@@ -80,7 +80,7 @@ export async function principalFromToken(config: Config, token: string): Promise
   >
   const id = stringClaim(info, 'sub')
   if (id === undefined) throw new Error('the access token carries no sub claim')
-  const groups = stringArrayClaim(info, 'groups')
+  const groups = groupIds(info.groups)
   const email = stringClaim(info, 'email')
   return {
     id,
@@ -331,8 +331,14 @@ function stringClaim(claims: Record<string, unknown>, key: string): string | und
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** One array-of-strings claim, or an empty array. */
-function stringArrayClaim(claims: Record<string, unknown>, key: string): readonly string[] {
-  const value = claims[key]
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : []
+/**
+ * The group ids of a `groups` claim (#218, ID-4, ID-5). Keycloak sends a JSON
+ * array when a user belongs to several groups and a single string when it
+ * belongs to one, so both shapes are valid. The result is deduplicated and
+ * empty strings are dropped; any other shape contributes nothing.
+ */
+export function groupIds(value: unknown): readonly string[] {
+  const entries = typeof value === 'string' ? [value] : Array.isArray(value) ? value : []
+  const ids = entries.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+  return [...new Set(ids)]
 }

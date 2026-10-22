@@ -19,6 +19,7 @@ import {
 import type { Pool } from 'pg'
 import { authorize } from '../engine/authorize.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
+import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
   createBrowserSession,
   createOidcAttempt,
@@ -36,6 +37,7 @@ import {
 } from './db.js'
 import {
   endIdpSession,
+  groupIds,
   listDirectoryUsers,
   oidcConfiguration,
   principalFromToken,
@@ -90,9 +92,8 @@ export function createApp(config: Config, pool: Pool): Hono {
     }
     const revoked = await revokeSession(pool, auth.session.id, Date.now())
     deleteCookie(c, config.session.cookieName, { path: '/' })
-    if (revoked?.refreshToken !== null && revoked?.refreshToken !== undefined) {
-      await endIdpSession(config, revoked.refreshToken)
-    }
+    const refreshToken = decryptStoredRefreshToken(config, revoked?.refreshToken)
+    if (refreshToken !== undefined) await endIdpSession(config, refreshToken)
     return c.body(null, 204)
   })
 
@@ -144,6 +145,9 @@ export function createApp(config: Config, pool: Pool): Hono {
       const subject = claims?.sub
       if (subject === undefined) throw new Error('the identity provider returned no subject')
       const email = typeof claims?.email === 'string' ? claims.email : undefined
+      // #218: Keycloak sends `groups` as an array when a user has several and
+      // as a single string when it has one. Both shapes are accepted, and the
+      // result is deduplicated.
       const principal: Principal = {
         id: subject,
         displayName:
@@ -152,15 +156,22 @@ export function createApp(config: Config, pool: Pool): Hono {
           email ||
           subject,
         ...(email === undefined ? {} : { email }),
-        groups: typeof claims?.groups === 'string' ? [claims.groups] : [],
+        groups: groupIds(claims?.groups),
       }
       await upsertPrincipal(pool, principal)
       const now = Date.now()
+      // #218: the refresh token is encrypted at rest and only logout decrypts
+      // it. An installation without a valid key stores no refresh token, so
+      // logout ends the local session and skips the identity provider.
+      const refreshToken =
+        typeof tokens.refresh_token === 'string'
+          ? encryptStoredRefreshToken(config, tokens.refresh_token)
+          : undefined
       const session = await createBrowserSession(pool, {
         principalId: principal.id,
         at: now,
         expiresAt: now + config.session.absoluteHours * 3_600_000,
-        ...(typeof tokens.refresh_token === 'string' ? { refreshToken: tokens.refresh_token } : {}),
+        ...(refreshToken === undefined ? {} : { refreshToken }),
       })
       setCookie(c, config.session.cookieName, session.id, {
         httpOnly: true,
@@ -276,6 +287,31 @@ function safeReturnTo(value: string | undefined): string {
 /** The SHA-256 of an access token, so the session stores no token (ADR 0012). */
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
+}
+
+/**
+ * Encrypt a refresh token for the session row (#218, ADR 0012). An absent or
+ * invalid key stores nothing: the local session still works and logout ends
+ * only the local session.
+ */
+function encryptStoredRefreshToken(config: Config, token: string): string | undefined {
+  if (!validEncryptionKey(config.session.encryptionKey)) return undefined
+  return encryptToken(config.session.encryptionKey, token)
+}
+
+/**
+ * Decrypt a stored refresh token, or undefined when the key is absent or the
+ * value does not decrypt. The caller has already revoked the local session, so
+ * a failed decryption skips the identity provider logout (#218).
+ */
+function decryptStoredRefreshToken(config: Config, stored: string | null | undefined) {
+  if (stored === null || stored === undefined) return undefined
+  if (!validEncryptionKey(config.session.encryptionKey)) return undefined
+  try {
+    return decryptToken(config.session.encryptionKey, stored)
+  } catch {
+    return undefined
+  }
 }
 
 /** One 401 body, the same shape for every credential (ADR 0012). */

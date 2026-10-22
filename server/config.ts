@@ -17,11 +17,17 @@ export type KeycloakConfig = {
   readonly adminPassword: string
 }
 
-/** The session settings of an installation (ADR 0012). */
+/** The session settings of an installation (ADR 0012, #218). */
 export type SessionConfig = {
   readonly cookieName: string
   readonly idleMinutes: number
   readonly absoluteHours: number
+  /**
+   * The base64 32-byte key that encrypts the refresh token at rest (ADR 0012,
+   * #218). `enform init` writes one when the configuration has none; an empty
+   * value means the installation cannot store a refresh token.
+   */
+  readonly encryptionKey: string
 }
 
 /** The configuration that `serve`, `migrate`, `worker`, `admin` and `doctor` read. */
@@ -54,6 +60,7 @@ export const defaultConfig: Config = {
     cookieName: 'enform_session',
     idleMinutes: 30,
     absoluteHours: 12,
+    encryptionKey: '',
   },
   logLevel: 'info',
 }
@@ -73,6 +80,7 @@ const FLAG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   '--session-cookie-name': ['session', 'cookieName'],
   '--session-idle-minutes': ['session', 'idleMinutes'],
   '--session-absolute-hours': ['session', 'absoluteHours'],
+  '--session-encryption-key': ['session', 'encryptionKey'],
 }
 
 /** The environment variables that name a configuration value, and the key they set. */
@@ -90,6 +98,7 @@ const ENV_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ENFORM_SESSION_COOKIE_NAME: ['session', 'cookieName'],
   ENFORM_SESSION_IDLE_MINUTES: ['session', 'idleMinutes'],
   ENFORM_SESSION_ABSOLUTE_HOURS: ['session', 'absoluteHours'],
+  ENFORM_SESSION_ENCRYPTION_KEY: ['session', 'encryptionKey'],
 }
 
 /** The deprecated OIDC names that an existing Compose file and unit may still carry. */
@@ -117,6 +126,7 @@ type Draft = {
     cookieName: string
     idleMinutes: number
     absoluteHours: number
+    encryptionKey: string
   }
 }
 
@@ -283,6 +293,7 @@ function applyValues(draft: Draft, values: Record<string, unknown>): void {
     draft.session.cookieName = text(session.cookieName, draft.session.cookieName)
     draft.session.idleMinutes = numberValue(session.idleMinutes, draft.session.idleMinutes)
     draft.session.absoluteHours = numberValue(session.absoluteHours, draft.session.absoluteHours)
+    draft.session.encryptionKey = text(session.encryptionKey, draft.session.encryptionKey)
   }
 }
 
@@ -337,6 +348,7 @@ function finalize(draft: Draft): Config {
       cookieName: String(draft.session.cookieName),
       idleMinutes: positiveNumber(draft.session.idleMinutes, 'session.idleMinutes'),
       absoluteHours: positiveNumber(draft.session.absoluteHours, 'session.absoluteHours'),
+      encryptionKey: String(draft.session.encryptionKey),
     },
   }
 }
