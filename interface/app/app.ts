@@ -29,6 +29,7 @@ import {
   type Operation,
   RequestRefused,
   readFlow,
+  readInbox,
   readInstance,
   readSession,
   type Session,
@@ -68,6 +69,10 @@ export interface AppOptions {
   readonly builder?: boolean
   /** Whether the URL asks for the create-flow page. */
   readonly newFlow?: boolean
+  /** Whether the URL asks for the inbox. */
+  readonly inbox?: boolean
+  /** The inbox tab that the URL names; absent means `my` (VT-1). */
+  readonly inboxTab?: string
   /** The injected clock (I6); absent means Date.now. */
   readonly clock?: () => number
   /** The injected operation ID source (I1, I6); absent means crypto.randomUUID. */
@@ -124,6 +129,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
   brand.href = '/'
   brand.textContent = 'enform'
   header.appendChild(brand)
+  const inbox = document.createElement('a')
+  inbox.href = '/?inbox=1'
+  inbox.textContent = 'Inbox'
+  inbox.dataset.inbox = ''
+  header.appendChild(inbox)
   if (displayName !== undefined) {
     const who = document.createElement('span')
     who.className = 'principal'
@@ -310,7 +320,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
     // status line and no form (VT-1, FM-3).
-    if (stepKey === undefined) return
+    if (stepKey === undefined) {
+      if (view.status.state === 'done') {
+        const done = document.createElement('p')
+        done.className = 'done'
+        done.dataset.done = ''
+        done.textContent = 'Done'
+        main.appendChild(done)
+      }
+      return
+    }
 
     // The read serves JSON values (FM-7). The generated type widens them to
     // unknown, so the form narrows them at this seam and checks nothing.
@@ -337,34 +356,132 @@ export async function mountApp(options: AppOptions): Promise<void> {
         }
         void appendOperation(intent)
           .then(() => renderTask(slug, instanceId, 'Claimed'))
-          .catch((error: unknown) => showRefusal(status, form, error))
+          .catch(async (error: unknown) => {
+            // A stale or refused claim re-reads: the holder the engine names
+            // is the one the page must show (I5, AS-2).
+            if (
+              error instanceof RequestRefused &&
+              error.status === 409 &&
+              error.errors.length === 0
+            ) {
+              await renderTask(slug, instanceId, error.error)
+              return
+            }
+            showRefusal(status, form, error)
+          })
       })
       form.appendChild(claimControl)
     }
 
     // The published definition names the outcomes the step offers (AC-4); the
     // engine authorizes the one the holder chooses and re-runs the rules (A9).
-    for (const outcome of stepOutcomes(flow.definition, stepKey)) {
-      const control = document.createElement('button')
-      control.type = 'button'
-      control.textContent = outcome
-      control.dataset.outcome = outcome
-      control.addEventListener('click', () => {
-        const intent: Operation = {
-          id: ids(),
-          type: STEP_COMPLETED,
-          at: clock(),
-          actor,
-          payload: { instanceId, version: view.version, outcome, values: readValues() },
-        }
-        void appendOperation(intent)
-          .then(() => renderTask(slug, instanceId, 'Step completed'))
-          .catch((error: unknown) => showRefusal(status, form, error))
-      })
-      form.appendChild(control)
+    // Only the holder may choose one, so the controls wait for the claim.
+    if (view.status.holder === actor) {
+      for (const outcome of stepOutcomes(flow.definition, stepKey)) {
+        const control = document.createElement('button')
+        control.type = 'button'
+        control.textContent = outcome
+        control.dataset.outcome = outcome
+        control.addEventListener('click', () => {
+          const intent: Operation = {
+            id: ids(),
+            type: STEP_COMPLETED,
+            at: clock(),
+            actor,
+            payload: { instanceId, version: view.version, outcome, values: readValues() },
+          }
+          void appendOperation(intent)
+            .then(() => renderTask(slug, instanceId, 'Step completed'))
+            .catch(async (error: unknown) => {
+              // A stale completion or a refusal that names no field re-reads,
+              // so the page shows the state the log now holds (I5, FM-4). A
+              // field error stays beside the control the engine named.
+              if (
+                error instanceof RequestRefused &&
+                error.status === 409 &&
+                error.errors.length === 0
+              ) {
+                await renderTask(slug, instanceId, error.error)
+                return
+              }
+              showRefusal(status, form, error)
+            })
+        })
+        form.appendChild(control)
+      }
     }
     form.appendChild(status)
     main.appendChild(form)
+  }
+
+  /**
+   * Render one inbox tab (VT-1, VT-2, S14, AS-2). Each item is a link to the
+   * task page; the state, the holder and the last activity tell the reader
+   * whether nobody opened the task, who holds it and how long it sits there.
+   * The empty state names the tab, so a blank list is never ambiguous.
+   */
+  const renderInbox = async (tab: string): Promise<void> => {
+    const current = inboxTabOf(tab)
+    const heading = document.createElement('h1')
+    heading.textContent = 'Inbox'
+    main.appendChild(heading)
+    const tabs = document.createElement('nav')
+    tabs.className = 'inbox-tabs'
+    for (const entry of inboxTabs) {
+      const link = document.createElement('a')
+      link.href = `/?inbox=1&tab=${entry.key}`
+      link.textContent = entry.label
+      link.dataset.inboxTab = entry.key
+      if (entry.key === current) link.setAttribute('aria-current', 'page')
+      tabs.appendChild(link)
+    }
+    main.appendChild(tabs)
+
+    const items = await readInbox(current)
+    const label = inboxTabs.find((entry) => entry.key === current)?.label ?? current
+    if (items.length === 0) {
+      const empty = document.createElement('p')
+      empty.className = 'empty'
+      empty.dataset.inboxEmpty = current
+      empty.textContent = `Nothing in ${label}.`
+      main.appendChild(empty)
+      return
+    }
+    const list = document.createElement('ul')
+    list.className = 'inbox'
+    for (const item of items) {
+      const entry = document.createElement('li')
+      entry.className = 'inbox-item'
+      const link = document.createElement('a')
+      link.href = `/?flow=${encodeURIComponent(item.flowSlug)}&instance=${encodeURIComponent(item.instanceId)}`
+      link.dataset.inboxInstance = item.instanceId
+      link.dataset.inboxState = item.state
+      const flow = document.createElement('strong')
+      flow.textContent = item.flowSlug
+      const step = document.createElement('span')
+      step.className = 'step'
+      step.textContent = item.step
+      const state = document.createElement('span')
+      state.className = 'state'
+      state.textContent = item.state
+      link.append(flow, step, state)
+      if (item.holder !== undefined) {
+        const holder = document.createElement('span')
+        holder.className = 'holder'
+        holder.textContent = item.holder
+        link.appendChild(holder)
+      }
+      if (item.lastActivityAt !== undefined) {
+        const activity = document.createElement('time')
+        activity.className = 'activity'
+        activity.dateTime = new Date(item.lastActivityAt).toISOString()
+        activity.textContent = new Date(item.lastActivityAt).toISOString()
+        link.appendChild(activity)
+      }
+      entry.appendChild(link)
+      list.appendChild(entry)
+    }
+    main.appendChild(list)
   }
 
   const renderFlows = async (create: boolean): Promise<void> => {
@@ -468,6 +585,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
 
   const renderRoute = async (): Promise<void> => {
     clearPage()
+    if (options.inbox === true) {
+      await renderInbox(options.inboxTab ?? 'my')
+      return
+    }
     const slug = options.slug.trim()
     if (slug === '') {
       await renderFlows(options.newFlow === true)
@@ -497,6 +618,18 @@ export async function mountApp(options: AppOptions): Promise<void> {
   } catch (error: unknown) {
     main.textContent = messageOf(error)
   }
+}
+
+/** The three inbox tabs, in the order the page shows them (VT-1). */
+const inboxTabs = [
+  { key: 'my', label: 'My tasks' },
+  { key: 'available', label: 'Available' },
+  { key: 'started', label: 'Started by me' },
+] as const
+
+/** The tab the URL names, or `my` for an absent or unknown value (VT-1). */
+function inboxTabOf(value: string): 'my' | 'available' | 'started' {
+  return value === 'available' || value === 'started' ? value : 'my'
 }
 
 /** The status line of an instance (VT-1, VT-2, S14): position, state and holder. */
