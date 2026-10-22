@@ -97,8 +97,9 @@ export type Rule = {
 
 /**
  * One form field of a step (FM-1, A3). `key` is the field's stable name within
- * the flow. `control` is one of the sixteen FM-1 controls. A choice control
- * (`select`, `multi-select`, `radio`) lists the values it accepts in
+ * the flow. `control` is one of the sixteen FM-1 controls. `label` is the
+ * human label the form shows; absent means the form shows the key. A choice
+ * control (`select`, `multi-select`, `radio`) lists the values it accepts in
  * `options`; the other controls ignore the list. `required` makes the field
  * mandatory, `default` is its default value, and `optionsFrom` and `valueFrom`
  * name the connector read operations that supply the option list and the
@@ -107,6 +108,7 @@ export type Rule = {
 export type Field = {
   readonly key: string
   readonly control: ControlType
+  readonly label?: string
   readonly options?: readonly string[]
   readonly required?: boolean
   readonly default?: JsonValue
@@ -454,9 +456,10 @@ function readV2Fields(body: unknown): readonly Field[] | undefined {
 }
 
 /**
- * Read one v2 field: a key, one of the sixteen controls, the optional option
- * list of a choice control (FM-1), and the optional required, default and
- * connector-supplied values (FM-6). An unknown control is refused.
+ * Read one v2 field: a key, one of the sixteen controls, the optional human
+ * label, the optional option list of a choice control (FM-1), and the optional
+ * required, default and connector-supplied values (FM-6). An unknown control
+ * or a malformed label is refused.
  */
 function readV2Field(body: unknown): Field {
   if (!isRecord(body)) throw new Error('flow definition: a field is not an object')
@@ -468,12 +471,19 @@ function readV2Field(body: unknown): Field {
   const field: {
     key: string
     control: ControlType
+    label?: string
     options?: readonly string[]
     required?: boolean
     default?: JsonValue
     optionsFrom?: string
     valueFrom?: string
   } = { key: body.key, control: body.control as ControlType }
+  if (body.label !== undefined) {
+    if (typeof body.label !== 'string' || body.label.length === 0) {
+      throw new Error('flow definition: label must be a non-empty string (FM-1)')
+    }
+    field.label = body.label
+  }
   const options = readOptions(body.options)
   if (options !== undefined) field.options = options
   if (body.required !== undefined) {
@@ -662,14 +672,15 @@ function canonicalSection(section: Section): JsonValue {
 }
 
 /**
- * The canonical value of one field: key, control, then the optional options,
- * required, default, optionsFrom and valueFrom (FM-1, FM-6).
+ * The canonical value of one field: key, control, then the optional label,
+ * options, required, default, optionsFrom and valueFrom (FM-1, FM-6).
  */
 function canonicalField(field: Field): JsonValue {
   const canonical: Record<string, JsonValue> = {
     key: field.key,
     control: field.control,
   }
+  if (field.label !== undefined) canonical.label = field.label
   if (field.options !== undefined) canonical.options = [...field.options]
   if (field.required !== undefined) canonical.required = field.required
   if (field.default !== undefined) canonical.default = canonicalJson(field.default)

@@ -74,7 +74,7 @@
       }
     },
     "field": {
-      "description": "One form field: a key, one of the sixteen controls (FM-1), the option list of a choice control, and the optional required, default and connector-supplied values (FM-6).",
+      "description": "One form field: a key, an optional human label, one of the sixteen controls (FM-1), the option list of a choice control, and the optional required, default and connector-supplied values (FM-6).",
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "control"],
@@ -86,6 +86,11 @@
           "not": { "const": "context" }
         },
         "control": { "$ref": "#/$defs/control" },
+        "label": {
+          "description": "The human label the form shows for the field (FM-1). Absent means the form shows the key.",
+          "type": "string",
+          "minLength": 1
+        },
         "options": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }

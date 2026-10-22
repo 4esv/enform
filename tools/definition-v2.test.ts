@@ -104,11 +104,13 @@ const V2_FILE = `{
             {
               "key": "summary",
               "control": "text",
+              "label": "Summary",
               "required": true
             },
             {
               "key": "advisor",
               "control": "select",
+              "label": "Advisor",
               "options": [
                 "one",
                 "two"
@@ -160,6 +162,18 @@ test('#170 a canonical v2 file round trips byte for byte (I9)', () => {
   expect(serialize(definition)).toBe(V2_FILE)
 })
 
+// Issue #230, DF-1, FM-1, I9: the field label is part of the definition
+// contract. The parser reads it, the canonical form writes it after the
+// control, and a second parse sees the same label and the same bytes.
+test('#230 a field label round trips through the canonical form (DF-1, FM-1, I9)', () => {
+  const once = parse(V2_FILE)
+  const bytes = serialize(once)
+  const twice = parse(bytes)
+  const fields = twice.steps[0]?.sections?.[0]?.fields ?? []
+  expect(fields.map((field) => field.label)).toEqual(['Summary', 'Advisor'])
+  expect(serialize(twice)).toBe(V2_FILE)
+})
+
 test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-1)', () => {
   const schema = JSON.parse(readFileSync(join(repo, 'schemas', 'flow', 'v2.json'), 'utf8'))
 
@@ -173,6 +187,12 @@ test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-
   expect(schema.$defs.field.additionalProperties).toBe(false)
   expect(schema.$defs.field.properties.required).toEqual({ type: 'boolean' })
   expect(schema.$defs.field.properties.key.not).toEqual({ const: 'context' })
+  expect(schema.$defs.field.properties.label).toEqual({
+    description:
+      'The human label the form shows for the field (FM-1). Absent means the form shows the key.',
+    type: 'string',
+    minLength: 1,
+  })
   expect(schema.$defs.field.properties.default).toEqual({ $ref: '#/$defs/jsonLogic' })
   expect(schema.$defs.field.properties.optionsFrom).toEqual({
     description: 'The connector read operation that supplies the option list (FM-6).',
@@ -211,6 +231,12 @@ test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-
   expect(() =>
     parse(step('"fields": [ { "key": "a", "control": "text", "required": "yes" } ]'))
   ).toThrow(/required must be a boolean/)
+  expect(() => parse(step('"fields": [ { "key": "a", "control": "text", "label": "" } ]'))).toThrow(
+    /label must be a non-empty string/
+  )
+  expect(() => parse(step('"fields": [ { "key": "a", "control": "text", "label": 3 } ]'))).toThrow(
+    /label must be a non-empty string/
+  )
   expect(() =>
     parse(step('"fields": [ { "key": "a", "control": "text", "optionsFrom": 3 } ]'))
   ).toThrow(/optionsFrom must be a string/)
