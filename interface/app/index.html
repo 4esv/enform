@@ -8,11 +8,12 @@
   <body>
     <main id="app"></main>
     <script type="module">
-      // The form link carries the flow and the principal (S06: Sam opens the
-      // form link): /app/?slug=<flow>&actor=<principal>. The task page also
-      // carries the instance it acts on: /app/?slug=<flow>&instance=<id>&actor=<principal>.
-      // The page and the API share one origin, so baseUrl defaults to it, and
-      // gui mode can point a browser at any flow without changing the app.
+      // Issue #224, ADR 0009, ADR 0012: the page and the API share one origin,
+      // so baseUrl is the origin. A production page reads the session cookie;
+      // the gui/harness link carries the flow and the principal instead:
+      // /app/?slug=<flow>&actor=<principal>. The task page adds instance=<id>.
+      // The pages of the release server are /?flow=<slug>, /?flow=<slug>&builder=1
+      // and /?flow=<slug>&instance=<id>; both spellings name the same flow here.
       import { mountApp } from './app.js'
 
       // The deterministic sources that gui mode injects (I6). A real user never
@@ -24,13 +25,15 @@
 
       const params = new URLSearchParams(location.search)
       const instance = params.get('instance')
+      const flow = params.get('flow') ?? params.get('slug') ?? ''
       mountApp({
         root: document.getElementById('app'),
         baseUrl: params.get('baseUrl') ?? location.origin,
-        token: params.get('token') ?? '',
-        slug: params.get('slug') ?? '',
+        slug: flow,
         actor: params.get('actor') ?? '',
         ...(instance === null ? {} : { instance }),
+        ...(params.get('builder') === '1' ? { builder: true } : {}),
+        ...(params.get('new') === '1' ? { newFlow: true } : {}),
         ...(sources
           ? { clock: sources.clock, ids: sources.ids, instanceIds: sources.instanceIds }
           : {}),
