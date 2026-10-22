@@ -13,6 +13,7 @@ import {
 } from '../engine/instances.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
+import { sendBack } from '../engine/sendBack.js'
 import { startInstance, submitInstance } from '../engine/submission.js'
 
 // Issue #76, FM-3, FM-7, VT-4, S14, DF-2, DX-1, I4, I6, I8: the instance as a
@@ -383,4 +384,105 @@ test('#191 the projected version counts the accepted actions the write path kept
   const projectedInstance = projected(state)
   expect(projectedInstance.version).toBe(completed.instance.version)
   expect(projectedInstance.version).toBe(2)
+})
+
+// Issue #48, S11, WF-3, VT-3, I4, I8: the instance read carries the steps a
+// send back may name and the notes the actor may read. The earlier steps are
+// the definition keys before the current step, in definition order. A send-back
+// note belongs to the target step and to this instance: its author and the
+// people who hold that step's outcome scope read it, while a reader without
+// that scope, and a reader of another instance, never sees it.
+test('#48 the read carries the previous steps and the visible send-back note (S11)', () => {
+  const sources = deps()
+  const okaforGrants: readonly Grant[] = [
+    {
+      principal: OKAFOR,
+      scopes: ['step.outcome:approve', 'step.outcome:send_back'],
+      resource: `flow:${SLUG}/step:review`,
+    },
+  ]
+  /** Start one instance and move it to `review`, where Okafor holds it. */
+  const atReview = (instanceId: string, state: State): State => {
+    let next = apply(
+      startInstance(flow, instanceId, { summary: instanceId }, SAM, sources, resolve, samGrants)
+        .operation,
+      state
+    )
+    const start = instanceOf(next.log, instanceId)
+    if (start === undefined) throw new Error('the start did not project')
+    const claimed = claim(start, SAM, start.version ?? 0, sources)
+    if (claimed.operation === undefined) throw new Error(claimed.reason)
+    next = apply(claimed.operation, next)
+    const completed = complete(
+      claimed.instance,
+      SAM,
+      'submit',
+      {},
+      claimed.instance.version ?? 0,
+      { flow: SLUG, definition, grants: samGrants, resolve },
+      sources
+    )
+    if (completed.operation === undefined) throw new Error(completed.reason)
+    next = apply(completed.operation, next)
+    const review = instanceOf(next.log, instanceId)
+    if (review === undefined) throw new Error('the review step did not project')
+    const held = claim(review, OKAFOR, review.version ?? 0, sources)
+    if (held.operation === undefined) throw new Error(held.reason)
+    return apply(held.operation, next)
+  }
+
+  let state = seeded(sources)
+  state = atReview(INSTANCE_ID, state)
+  state = atReview(OTHER_ID, state)
+
+  // While the instance sits at `review`, `request` is the earlier step a send
+  // back may name (WF-3).
+  const holding = readInstance(OKAFOR, projected(state), context(state, okaforGrants))
+  expect(holding?.previousSteps).toEqual(['request'])
+  expect(holding?.notes).toEqual([])
+
+  const sendOne = (instanceId: string, comment: string): void => {
+    const instance = instanceOf(state.log, instanceId)
+    if (instance === undefined) throw new Error(`the log holds no instance ${instanceId}`)
+    const sent = sendBack(
+      instance,
+      OKAFOR,
+      'request',
+      comment,
+      instance.version ?? 0,
+      {
+        flow: SLUG,
+        definition,
+        grants: okaforGrants,
+        resolve,
+      },
+      sources
+    )
+    if (sent.operation === undefined) throw new Error(sent.reason)
+    state = apply(sent.operation, state)
+  }
+  sendOne(INSTANCE_ID, 'Attach your degree audit')
+  sendOne(OTHER_ID, 'Another instance note')
+
+  // Sam holds the request step's outcome scope, so the note to that step is
+  // his; the earlier steps of `request` are none.
+  const samView = readInstance(SAM, projected(state), context(state, samGrants))
+  expect(samView?.previousSteps).toEqual([])
+  expect(samView?.notes).toEqual([
+    { step: 'request', actor: OKAFOR, comment: 'Attach your degree audit' },
+  ])
+
+  // Okafor wrote the note, so he reads it too (VT-3).
+  const okaforView = readInstance(OKAFOR, projected(state), context(state, okaforGrants))
+  expect(okaforView?.notes).toEqual(samView?.notes)
+
+  // Priscilla may read the instance but holds no outcome scope on `request`,
+  // so the note is absent (I8).
+  expect(readInstance(PRISCILLA, projected(state), context(state, readerGrants))?.notes).toEqual([])
+
+  // The note of the other instance never reaches this instance's read (I4).
+  const otherView = readInstance(SAM, projected(state, OTHER_ID), context(state, samGrants))
+  expect(otherView?.notes).toEqual([
+    { step: 'request', actor: OKAFOR, comment: 'Another instance note' },
+  ])
 })

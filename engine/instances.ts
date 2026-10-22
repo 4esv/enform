@@ -35,7 +35,15 @@ import { isLiveTarget } from './resolve.js'
 import type { TargetResolver } from './routing.js'
 import { evaluateRules } from './rules.js'
 import { STEP_SENT_BACK } from './sendBack.js'
-import { mayRead, type Status, type StatusContext, status } from './status.js'
+import {
+  mayRead,
+  type Note,
+  notesOf,
+  type Status,
+  type StatusContext,
+  status,
+  visibleNotes,
+} from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
@@ -107,6 +115,19 @@ export type InstanceView = {
    * once rather than overwriting a newer decision.
    */
   readonly version: number
+  /**
+   * The definition keys before the current step, in definition order (WF-3,
+   * S11). They are the steps a send back may return the instance to; empty
+   * when the current step is the first or no step is open.
+   */
+  readonly previousSteps: readonly string[]
+  /**
+   * The notes on this instance that the actor may read (VT-3, WF-3, I8): the
+   * send-back comment that the target step's people see, and a completion
+   * comment on its step. A note of another instance, or of a step whose
+   * outcome scope the actor does not hold and did not write, is absent.
+   */
+  readonly notes: readonly Note[]
 }
 
 /**
@@ -196,6 +217,8 @@ export function readInstance(
     fields,
     outcomes,
     version: current.version ?? 0,
+    previousSteps: stepsBefore(context.definition, current.currentStep),
+    notes: visibleNotes(actor, instanceNotes(context.log, current.instanceId), context),
   }
 }
 
@@ -329,6 +352,25 @@ function reopened(instance: ProjectedInstance, event: Event): ProjectedInstance 
     closedAt: undefined,
     closedBy: undefined,
   }
+}
+
+/**
+ * The definition keys before the current step, in definition order (WF-3). An
+ * absent or unknown current step has no earlier step to return to.
+ */
+function stepsBefore(definition: FlowDefinition, current: string | undefined): readonly string[] {
+  if (current === undefined) return []
+  const index = definition.steps.findIndex((step) => step.key === current)
+  return index <= 0 ? [] : definition.steps.slice(0, index).map((step) => step.key)
+}
+
+/**
+ * The notes that this instance's own events record (I4, VT-3). The read of one
+ * instance never shows another instance's note, whatever scope the actor
+ * holds; the caller then narrows by `visibleNotes` (I8).
+ */
+function instanceNotes(log: Log, instanceId: string): readonly Note[] {
+  return notesOf(log.filter((event) => event.payload.instanceId === instanceId))
 }
 
 /** The step of the definition that the instance is on (WF-1); absent when no step is open. */
