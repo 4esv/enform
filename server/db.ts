@@ -91,6 +91,41 @@ export type SessionRow = {
 /** The result of appending one operation: whether it was new, and its sequence. */
 export type AppendResult = { readonly inserted: boolean; readonly seq: number | null }
 
+/** The event that records a seed profile clear (DE-4, I14). It is internal: no interface reads it. */
+export const SEED_CLEARED_TYPE = 'seed.cleared@1'
+
+/** One kind of record that a seed profile created (DE-4). */
+export type SeedRecordKind = 'user' | 'team' | 'flow' | 'instance' | 'grant'
+
+/** One record that a seed profile created, marked in `seed_records` (DE-4). */
+export type SeedRecord = {
+  readonly profile: string
+  readonly kind: SeedRecordKind
+  readonly id: string
+  readonly createdAt: number
+  readonly clearedAt: number | null
+}
+
+/** A seed record before it is stored. */
+export type NewSeedRecord = {
+  readonly profile: string
+  readonly kind: SeedRecordKind
+  readonly id: string
+  readonly createdAt: number
+}
+
+/** The result of appending a seed run: the operations and their records. */
+export type SeedAppendResult = {
+  readonly operations: number
+  readonly records: number
+}
+
+/** The events that rebuild derived state from the log (I4, DE-4). */
+export type SeedClearResult = {
+  readonly records: readonly SeedRecord[]
+  readonly operationId: string
+}
+
 /** Create the connection pool that the server and the worker share. */
 export function createPool(databaseUrl: string): Pool {
   return new Pool({ connectionString: databaseUrl, max: 10 })
@@ -173,38 +208,44 @@ export async function appendOperation(pool: Pool, operation: Operation): Promise
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const result = await client.query<{ seq: string }>(
-      `insert into events (operation_id, type, at, actor, payload)
-       values ($1, $2, $3, $4, $5::jsonb)
-       on conflict (operation_id) do nothing
-       returning seq`,
-      [
-        operation.id,
-        operation.type,
-        operation.at,
-        operation.actor ?? null,
-        JSON.stringify(operation.payload),
-      ]
-    )
-    const seq = result.rows[0]?.seq
-    if (seq !== undefined) {
-      await projectEvent(client, {
-        seq: Number(seq),
-        operationId: operation.id,
-        type: operation.type,
-        at: operation.at,
-        actor: operation.actor,
-        payload: operation.payload,
-      })
-    }
+    const result = await appendOperationIn(client, operation)
     await client.query('commit')
-    return { inserted: seq !== undefined, seq: seq === undefined ? null : Number(seq) }
+    return result
   } catch (error) {
     await client.query('rollback')
     throw error
   } finally {
     client.release()
   }
+}
+
+/** Append one operation and fold its projection inside an open transaction (I2, I4). */
+async function appendOperationIn(client: PoolClient, operation: Operation): Promise<AppendResult> {
+  const result = await client.query<{ seq: string }>(
+    `insert into events (operation_id, type, at, actor, payload)
+     values ($1, $2, $3, $4, $5::jsonb)
+     on conflict (operation_id) do nothing
+     returning seq`,
+    [
+      operation.id,
+      operation.type,
+      operation.at,
+      operation.actor ?? null,
+      JSON.stringify(operation.payload),
+    ]
+  )
+  const seq = result.rows[0]?.seq
+  if (seq !== undefined) {
+    await projectEvent(client, {
+      seq: Number(seq),
+      operationId: operation.id,
+      type: operation.type,
+      at: operation.at,
+      actor: operation.actor,
+      payload: operation.payload,
+    })
+  }
+  return { inserted: seq !== undefined, seq: seq === undefined ? null : Number(seq) }
 }
 
 /** Read one event by the client-created operation id (I1), or undefined when it is absent. */
@@ -264,6 +305,10 @@ export async function rebuild(pool: Pool): Promise<number> {
         payload: row.payload,
       })
     }
+    // The seed record is operational state beside the log. Re-apply every
+    // cleared record after the fold, so a rebuild never resurrects a demo
+    // that `enform seed clear` removed (DE-4, I4).
+    await deleteClearedSeedProjections(client)
     await client.query('commit')
     return events.rowCount ?? events.rows.length
   } catch (error) {
@@ -292,6 +337,144 @@ export async function readLog(pool: Pool): Promise<readonly Event[]> {
     actor: row.actor ?? undefined,
     payload: row.payload,
   }))
+}
+
+/**
+ * Read the records that one seed profile created (DE-4). `liveOnly` reads the
+ * records that no clear removed, which is the set that a clear removes and the
+ * set that tells a second `seed demo` that a profile is already loaded.
+ */
+export async function readSeedRecords(
+  pool: Pool,
+  profile: string,
+  liveOnly = false
+): Promise<readonly SeedRecord[]> {
+  const result = await pool.query<{
+    profile: string
+    kind: SeedRecordKind
+    id: string
+    created_at: string
+    cleared_at: string | null
+  }>(
+    `select profile, kind, id, created_at, cleared_at
+     from seed_records
+     where profile = $1 ${liveOnly ? 'and cleared_at is null' : ''}
+     order by created_at, kind, id`,
+    [profile]
+  )
+  return result.rows.map(seedRecordRow)
+}
+
+/**
+ * Append the operations of one seed run and mark the records it created, in
+ * one transaction (DE-4, I2). A seed run is a batch: a failed append leaves
+ * neither an event nor a record behind.
+ */
+export async function appendSeedRun(
+  pool: Pool,
+  operations: readonly Operation[],
+  records: readonly NewSeedRecord[]
+): Promise<SeedAppendResult> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    for (const operation of operations) await appendOperationIn(client, operation)
+    for (const record of records) {
+      await client.query(
+        `insert into seed_records (profile, kind, id, created_at)
+         values ($1, $2, $3, $4)
+         on conflict (profile, kind, id) do nothing`,
+        [record.profile, record.kind, record.id, record.createdAt]
+      )
+    }
+    await client.query('commit')
+    return { operations: operations.length, records: records.length }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Clear one seed profile: mark every live record cleared, append one
+ * `seed.cleared@1` operation and remove the seeded projections (DE-4, I4). The
+ * log keeps its events; only derived rows and the Keycloak users that the
+ * caller already deleted are gone. The records stay for a rebuild.
+ */
+export async function clearSeedRecords(
+  pool: Pool,
+  profile: string,
+  at: number,
+  actor: string
+): Promise<SeedClearResult> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const live = await client.query<{
+      profile: string
+      kind: SeedRecordKind
+      id: string
+      created_at: string
+      cleared_at: string | null
+    }>(
+      `select profile, kind, id, created_at, cleared_at
+       from seed_records
+       where profile = $1 and cleared_at is null
+       order by created_at, kind, id
+       for update`,
+      [profile]
+    )
+    if (live.rows.length === 0) {
+      await client.query('commit')
+      return { records: [], operationId: '' }
+    }
+    await client.query(
+      'update seed_records set cleared_at = $2 where profile = $1 and cleared_at is null',
+      [profile, at]
+    )
+    const operation: Operation = {
+      id: newOperationId(at),
+      type: SEED_CLEARED_TYPE,
+      at,
+      actor,
+      payload: { profile },
+    }
+    await appendOperationIn(client, operation)
+    await client.query('commit')
+    return { records: live.rows.map(seedRecordRow), operationId: operation.id }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+/** Whether a read must hide one entity because `seed clear` removed it (DE-4). */
+export async function isClearedSeedRecord(
+  pool: Pool,
+  kind: SeedRecordKind,
+  id: string
+): Promise<boolean> {
+  const result = await pool.query(
+    'select 1 from seed_records where kind = $1 and id = $2 and cleared_at is not null limit 1',
+    [kind, id]
+  )
+  return result.rowCount !== 0
+}
+
+/** The ids of one kind that a clear removed, so a list read can exclude them (DE-4). */
+export async function clearedSeedIds(
+  pool: Pool,
+  kind: SeedRecordKind
+): Promise<ReadonlySet<string>> {
+  const result = await pool.query<{ id: string }>(
+    'select id from seed_records where kind = $1 and cleared_at is not null',
+    [kind]
+  )
+  return new Set(result.rows.map((row) => row.id))
 }
 
 /** Whether the projection holds a flow with this slug (#220, DF-1). */
@@ -873,6 +1056,12 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
       [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
     )
+    return
+  }
+  if (event.type === SEED_CLEARED_TYPE) {
+    // The records are already marked cleared in the same transaction (DE-4).
+    // Remove their projections again, so a live append and a rebuild agree.
+    await deleteClearedSeedProjections(client)
   }
 }
 
@@ -915,6 +1104,81 @@ async function upsertTask(client: PoolClient, task: TaskRow): Promise<void> {
 /** The stable id of one step's task on one instance (I4). */
 function taskId(instanceId: string, step: string): string {
   return `${instanceId}:${step}`
+}
+
+/** Map one `seed_records` row to its type. */
+function seedRecordRow(row: {
+  readonly profile: string
+  readonly kind: SeedRecordKind
+  readonly id: string
+  readonly created_at: string
+  readonly cleared_at: string | null
+}): SeedRecord {
+  return {
+    profile: row.profile,
+    kind: row.kind,
+    id: row.id,
+    createdAt: Number(row.created_at),
+    clearedAt: row.cleared_at === null ? null : Number(row.cleared_at),
+  }
+}
+
+/**
+ * Delete every projection that a cleared seed record created (DE-4, I4). The
+ * function is idempotent: a missing row is already gone. A user record has no
+ * local projection except the principal cache; its Keycloak user is deleted by
+ * the caller because the directory is not in this database.
+ */
+async function deleteClearedSeedProjections(client: PoolClient): Promise<void> {
+  const result = await client.query<{ kind: SeedRecordKind; id: string }>(
+    'select kind, id from seed_records where cleared_at is not null order by created_at, kind, id'
+  )
+  for (const record of result.rows) {
+    if (record.kind === 'user') {
+      await client.query('delete from principals where id = $1', [record.id])
+      continue
+    }
+    if (record.kind === 'team') {
+      await client.query('delete from team_members where team_slug = $1', [record.id])
+      await client.query('delete from teams where slug = $1', [record.id])
+      continue
+    }
+    if (record.kind === 'flow') {
+      await client.query('delete from flow_versions where slug = $1', [record.id])
+      await client.query('delete from flows where slug = $1', [record.id])
+      continue
+    }
+    if (record.kind === 'instance') {
+      await client.query('delete from tasks where instance_id = $1', [record.id])
+      await client.query('delete from instances where id = $1', [record.id])
+      continue
+    }
+    const grant = readSeedGrantId(record.id)
+    if (grant !== undefined) {
+      await client.query(
+        'delete from grants where principal = $1 and resource = $2 and scopes = $3::text[]',
+        [grant.principal, grant.resource, grant.scopes]
+      )
+    }
+  }
+}
+
+/** Read the grant key that a seed record holds, or undefined when it is malformed. */
+function readSeedGrantId(
+  id: string
+):
+  | { readonly principal: string; readonly resource: string; readonly scopes: readonly string[] }
+  | undefined {
+  try {
+    const value = JSON.parse(id) as unknown
+    if (!Array.isArray(value) || value.length !== 3) return undefined
+    const [principal, resource, scopes] = value
+    if (typeof principal !== 'string' || typeof resource !== 'string') return undefined
+    if (!isStringArray(scopes)) return undefined
+    return { principal, resource, scopes }
+  } catch {
+    return undefined
+  }
 }
 
 /** The step that follows one key in the definition that the instance pins (WF-1, DF-2). */

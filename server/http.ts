@@ -48,6 +48,7 @@ import { type Config, issuerUrl, listenAddress } from './config.js'
 import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
   appendOperation,
+  clearedSeedIds,
   createBrowserSession,
   createOidcAttempt,
   createPool,
@@ -55,6 +56,7 @@ import {
   grantsOfFlow,
   grantsOfPrincipal,
   type InboxTab,
+  isClearedSeedRecord,
   listFlowSummaries,
   type Principal,
   principalById,
@@ -316,7 +318,14 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (auth === undefined) return unauthorized(c)
     const grants = await grantsOfPrincipal(pool, auth.principal.id)
     const summaries = await listFlowSummaries(pool)
-    return c.json(summaries.filter((summary) => mayReadFlow(grants, summary.slug)))
+    // A cleared seed flow is absent from the projection already; the seed
+    // record check keeps the list honest even if a read races a clear (DE-4).
+    const cleared = await clearedSeedIds(pool, 'flow')
+    return c.json(
+      summaries
+        .filter((summary) => !cleared.has(summary.slug))
+        .filter((summary) => mayReadFlow(grants, summary.slug))
+    )
   })
 
   app.post('/api/v1/flows', async (c) => {
@@ -468,7 +477,7 @@ export function createApp(config: Config, pool: Pool): Hono {
       return c.json({ error: `reading the flow requires a scope on flow:${slug}` }, 403)
     }
     const published = publishedFlow(await readLog(pool), slug)
-    if (published === undefined) {
+    if (published === undefined || (await readFlowProjection(pool, slug)) === undefined) {
       return c.json({ error: `no published flow has the slug ${slug}` }, 404)
     }
     return c.json({
@@ -528,8 +537,15 @@ export function createApp(config: Config, pool: Pool): Hono {
   app.get('/api/v1/instances/:instanceId', async (c) => {
     const auth = await authenticate(c, pool, config)
     if (auth === undefined) return unauthorized(c)
+    const instanceId = c.req.param('instanceId')
+    // The log still holds a cleared demo instance (I4). The seed record is the
+    // operational mark that its projection was removed, so the read answers
+    // 404 exactly as a missing projection row would (DE-4).
+    if (await isClearedSeedRecord(pool, 'instance', instanceId)) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
     const log = await readLog(pool)
-    const instance = instanceOf(log, c.req.param('instanceId'))
+    const instance = instanceOf(log, instanceId)
     if (instance === undefined) {
       return c.json({ error: 'the log holds no such instance' }, 404)
     }
@@ -571,7 +587,9 @@ export function createApp(config: Config, pool: Pool): Hono {
     const log = await readLog(pool)
     const grants = grantsFor(log, auth.principal)
     const items: InboxItem[] = []
+    const cleared = await clearedSeedIds(pool, 'instance')
     for (const row of await readInboxRows(pool, tab, auth.principal.id)) {
+      if (cleared.has(row.instanceId)) continue
       const instance = instanceOf(log, row.instanceId)
       if (instance === undefined) continue
       const published = publishedByHash(log, instance.definitionVersion)
