@@ -26,13 +26,16 @@ paths:
         intent instead of a resolved operation (ADR 0010). A start intent
         (`StartIntent`) names the flow and the values it collected, and a
         completion intent (`CompletionIntent`) names the instance, the
-        outcome it chose and the values it captured. The server resolves the
+        version it read, the outcome it chose and the values it captured. A
+        claim (`step.claimed@1`) names the instance and the version it read as
+        `expectedVersion`; the server applies it through the engine and
+        records no `expectedVersion` on the log. The server resolves the
         route, the transition, the assignees, the version stamp and the
-        authorization through the engine before it appends. The two intents
-        are told apart by `type` (`instance.started@1` or
-        `step.completed@1`) and by their payload shape, and an already
-        resolved operation is appended as it stands. The appended event keeps
-        the client's ID and time.
+        authorization through the engine before it appends. The intents are
+        told apart by `type` and by their payload shape. A raw start or a raw
+        completion is refused, because the client posts the intent; any other
+        operation is refused in this slice. The appended event keeps the
+        client's ID and time.
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
       requestBody:
