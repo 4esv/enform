@@ -247,6 +247,23 @@ export async function createDirectoryUser(
   return { id, temporaryPassword }
 }
 
+/**
+ * Delete one user from the local realm through the Admin API (DE-4). A user
+ * that is already gone is success, so clearing a seed twice is harmless.
+ */
+export async function deleteDirectoryUser(config: Config, id: string): Promise<void> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!response.ok && response.status !== 404) {
+    throw new Error(
+      `keycloak: deleting the user ${id} failed: ${response.status} ${await response.text()}`
+    )
+  }
+}
+
 /** Every user of the configured realm, for the administrator surface (ID-6). */
 export async function listDirectoryUsers(config: Config): Promise<readonly DirectoryUser[]> {
   const token = await adminToken(config)
