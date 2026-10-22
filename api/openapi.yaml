@@ -33,6 +33,8 @@ paths:
         `step.completed@1`) and by their payload shape, and an already
         resolved operation is appended as it stands. The appended event keeps
         the client's ID and time.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -263,6 +265,8 @@ paths:
         continue (ADR 0012, ID-5). The request carries the session cookie and
         the CSRF token that `readSession` returned, and the response is 204
         with no body.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
       responses:
         '204':
           description: >-
@@ -335,6 +339,8 @@ paths:
         one-time invite or a temporary credential and sets a password on the
         first sign-in; there is no self-signup (ID-6, DE-1). The request
         requires `org.grants` on `org` (I8, `MVP.md` 5.6).
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -391,6 +397,8 @@ paths:
         exists answers 409 and creates nothing (`MVP.md` 5.6). The request
         requires `flow.build` on the new flow, because the first draft of a
         flow is structural (DF-5, D2).
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -476,6 +484,7 @@ paths:
           description: The flow slug (ID-1).
           schema:
             type: string
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -540,6 +549,7 @@ paths:
           description: The flow slug (ID-1).
           schema:
             type: string
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -619,6 +629,18 @@ paths:
                 items:
                   $ref: '#/components/schemas/InboxItem'
 components:
+  parameters:
+    CsrfToken:
+      name: x-csrf-token
+      in: header
+      required: false
+      description: >-
+        The token that `readSession` returned. A state-changing request with a
+        cookie session carries it, so a page from another origin cannot act as
+        the principal (ADR 0012). The bearer path is exempt, so this parameter
+        is optional and the server refuses a cookie request without it.
+      schema:
+        type: string
   securitySchemes:
     keycloak:
       type: http

@@ -88,7 +88,7 @@ function requireSetup(): Setup {
   return setup
 }
 
-test.fails('DE-1 enform init creates the database, migrates, creates the first administrator and serves the configured URL', async () => {
+test('DE-1 enform init creates the database, migrates, creates the first administrator and serves the configured URL', async () => {
   const { config, configPath, databaseUrl, publicUrl } = requireSetup()
 
   expect(existsSync(configPath), `${configPath} exists`).toBe(true)
@@ -118,7 +118,7 @@ test.fails('DE-1 enform init creates the database, migrates, creates the first a
   expect(body, 'the version names a version number').toMatch(/\b\d+\.\d+\.\d+\b/)
 })
 
-test.fails('ID-6 the built-in directory creates a local user who signs in without federation', async () => {
+test('ID-6 the built-in directory creates a local user who signs in without federation', async () => {
   const { config, publicUrl } = requireSetup()
   const adminToken = await keycloakAdminToken(config)
   const suffix = randomUUID().slice(0, 8)
