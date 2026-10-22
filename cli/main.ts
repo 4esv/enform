@@ -21,5 +21,5 @@ registerHooks({
   },
 })
 
-const { main } = await import('./commands.js')
-process.exitCode = main(process.argv.slice(2))
+const { runCli } = await import('./commands.js')
+process.exitCode = await runCli(process.argv.slice(2))

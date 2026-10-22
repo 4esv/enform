@@ -26,7 +26,7 @@ function capturedStdout(argv: readonly string[]): { status: number; text: string
   }
 }
 
-test.fails('DE-2 the enform binary exposes serve, worker, migrate, admin, seed, doctor and version', () => {
+test('DE-2 the enform binary exposes serve, worker, migrate, admin, seed, doctor and version', () => {
   const version = capturedStdout(['version'])
   expect(version.status, version.text).toBe(0)
   expect(version.text, 'the version names enform').toMatch(/\benform\b/i)

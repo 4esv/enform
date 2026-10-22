@@ -20,6 +20,13 @@ import type { ActorId, OperationDeps } from '../engine/operation.js'
 import type { RunSources } from '../engine/run.js'
 import { versionDiff } from '../engine/version.js'
 import { runFlow } from '../engine/workflow.js'
+import { bootstrap } from '../server/bootstrap.js'
+import { configPath, issuerUrl, loadConfig, writeConfig } from '../server/config.js'
+import { createPool, migrationStatus, rebuild, runMigrations } from '../server/db.js'
+import { serveHttp } from '../server/http.js'
+import { oidcConfiguration } from '../server/keycloak.js'
+import { versionLine } from '../server/version.js'
+import { startWorker } from '../server/worker.js'
 import { readFlow, writeFlow } from './store.js'
 
 /** The canonical extension of a flow definition file (DF-4). */
@@ -58,22 +65,46 @@ const STARTER_DEFINITION: FlowDefinition = {
 }
 
 /**
- * Run one `enform` command line and return its exit code. The result goes to
- * stdout, an error to stderr; success is 0 and every error is 1 (MVP.md 9.1).
- * With `--json` both cases write one JSON object to stdout, so a caller reads
- * the outcome the same way on success and on failure.
+ * Run one `enform` command line synchronously and return its exit code. The
+ * result goes to stdout, an error to stderr; success is 0 and every error is 1
+ * (MVP.md 9.1). This entry point serves the synchronous commands (`version`,
+ * `help` and the `flow` group); an asynchronous command is refused rather than
+ * reporting an exit code before the command finished. `runCli` is the bin's
+ * entry point and awaits every command.
  */
 export function main(argv: readonly string[]): number {
   const json = argv.includes('--json')
   const args = argv.filter((arg) => arg !== '--json')
   try {
-    return run(args, json, process.cwd())
+    const result = run(args, json, process.cwd())
+    if (typeof result !== 'number') {
+      throw new Error(
+        `${args[0] ?? 'this command'} runs asynchronously; run it through the enform bin`
+      )
+    }
+    return result
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (json) process.stdout.write(`${JSON.stringify({ ok: false, error: message })}\n`)
-    else process.stderr.write(`enform: ${message}\n`)
-    return 1
+    return fail(error, json)
   }
+}
+
+/** Run one `enform` command line and await it: the `enform` bin entry point. */
+export async function runCli(argv: readonly string[]): Promise<number> {
+  const json = argv.includes('--json')
+  const args = argv.filter((arg) => arg !== '--json')
+  try {
+    return await run(args, json, process.cwd())
+  } catch (error) {
+    return fail(error, json)
+  }
+}
+
+/** Write one failure and return the exit code (MVP.md 9.1). */
+function fail(error: unknown, json: boolean): number {
+  const message = error instanceof Error ? error.message : String(error)
+  if (json) process.stdout.write(`${JSON.stringify({ ok: false, error: message })}\n`)
+  else process.stderr.write(`enform: ${message}\n`)
+  return 1
 }
 
 /**
@@ -81,10 +112,33 @@ export function main(argv: readonly string[]): number {
  * action. The positionals name the group, the action and the subject; the
  * flags carry the values that are not positional.
  */
-function run(argv: readonly string[], json: boolean, cwd: string): number {
+function run(argv: readonly string[], json: boolean, cwd: string): number | Promise<number> {
   const args = parseArgs(argv)
   const [group, action, name] = args.positionals
-  if (group !== 'flow') throw new Error(`unknown command group: ${group ?? ''}`.trim())
+  if (group === undefined || group === 'help') {
+    printHelp()
+    return 0
+  }
+  if (group === 'version') {
+    process.stdout.write(`${versionLine()}\n`)
+    return 0
+  }
+  if (group === 'flow') return runFlowGroup(action, name, args, json, cwd)
+  if (SERVICE_COMMANDS.has(group)) return runServiceCommand(group, action, args, json)
+  throw new Error(`unknown command group: ${group}`.trim())
+}
+
+/** The service commands that ADR 0011 gives the one `enform` binary. */
+const SERVICE_COMMANDS = new Set(['init', 'serve', 'migrate', 'worker', 'admin', 'seed', 'doctor'])
+
+/** Dispatch the `flow` group, which is synchronous and file-backed. */
+function runFlowGroup(
+  action: string | undefined,
+  name: string | undefined,
+  args: Args,
+  json: boolean,
+  cwd: string
+): number {
   if (action === 'init') return flowInit(name, json, cwd)
   if (action === 'validate') return flowValidate(name, json, cwd)
   if (action === 'pull') return flowPull(name, json, cwd)
@@ -278,13 +332,21 @@ function slugOf(file: string): string {
   return base.slice(0, -FILE_SUFFIX.length)
 }
 
+/** The flags that take no value, so the next argument is a positional. */
+const BOOLEAN_FLAGS = new Set(['--no-open', '--no-serve', '--status', '--auto-migrate'])
+
 /** One parsed command line: the positionals and the flag values, in order. */
 type Args = {
   readonly positionals: readonly string[]
   readonly flags: ReadonlyMap<string, readonly string[]>
 }
 
-/** Split the command line into positionals and value flags. `--json` is already removed. */
+/** Whether a value-less flag is present. */
+function has(args: Args, key: string): boolean {
+  return args.flags.has(key)
+}
+
+/** Split the command line into positionals and flags. `--json` is already removed. */
 function parseArgs(argv: readonly string[]): Args {
   const positionals: string[] = []
   const flags = new Map<string, string[]>()
@@ -292,6 +354,10 @@ function parseArgs(argv: readonly string[]): Args {
     const arg = argv[index]
     if (!arg.startsWith('--')) {
       positionals.push(arg)
+      continue
+    }
+    if (BOOLEAN_FLAGS.has(arg)) {
+      flags.set(arg, ['true'])
       continue
     }
     const value = argv[index + 1]
@@ -325,4 +391,229 @@ function required(value: string | undefined, usage: string): string {
 /** Write the outcome: one JSON object with `--json`, a plain line otherwise. */
 function report(json: boolean, value: Record<string, unknown>, text: string): void {
   process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${text}\n`)
+}
+
+/** The help text: every service command and the `flow` group (DE-2). */
+function printHelp(): void {
+  process.stdout.write(
+    [
+      versionLine(),
+      '',
+      'Commands:',
+      '  init      write the configuration, create the database, migrate, create the first administrator and serve',
+      '  serve     serve the configured public URL',
+      '  migrate   apply the schema migrations; --status reports them',
+      '  worker    run the outbox and timer loop',
+      '  admin     create the first administrator, or rebuild the projections (admin rebuild)',
+      '  seed      load a demo seed (DE-4 is not implemented in this release)',
+      '  doctor    check the configuration, the database and the identity provider',
+      '  version   print the version',
+      '  help      print this help',
+      '',
+      'Flow commands:',
+      '  flow init|validate|pull|push|publish|diff|dry-run',
+      '',
+    ].join('\n')
+  )
+}
+
+/** Dispatch one service command of ADR 0011. */
+function runServiceCommand(
+  group: string,
+  action: string | undefined,
+  args: Args,
+  json: boolean
+): number | Promise<number> {
+  if (group === 'init') return commandInit(args, json)
+  if (group === 'serve') return commandServe(args)
+  if (group === 'migrate') return commandMigrate(args, json)
+  if (group === 'worker') return commandWorker(args)
+  if (group === 'admin') return commandAdmin(action, args, json)
+  if (group === 'seed') return commandSeed(action, json)
+  if (group === 'doctor') return commandDoctor(args, json)
+  throw new Error(`unknown command: ${group}`)
+}
+
+/** `enform init`: the walking skeleton of DE-1. */
+async function commandInit(args: Args, json: boolean): Promise<number> {
+  const usage = 'enform init --admin-email <email> --admin-password <password> [--config <path>]'
+  const path = configPath(args.flags)
+  const config = loadConfig(args.flags)
+  const email = flag(args, '--admin-email', usage)
+  const password = flag(args, '--admin-password', usage)
+  writeConfig(config, path)
+  const admin = await bootstrap(config, { email, password })
+  report(
+    json,
+    { ok: true, config: path, admin },
+    `wrote ${path}; the first administrator is ${email}`
+  )
+  if (has(args, '--no-serve')) return 0
+  return serveUntilStopped(config)
+}
+
+/** `enform serve`: refuse pending migrations unless `--auto-migrate` (ADR 0011). */
+async function commandServe(args: Args): Promise<number> {
+  const config = loadConfig(args.flags)
+  const pool = createPool(config.databaseUrl)
+  try {
+    const status = await migrationStatus(pool)
+    if (status.pending.length > 0 && !has(args, '--auto-migrate')) {
+      throw new Error(
+        `pending migrations: ${status.pending.join(', ')}; run enform migrate or pass --auto-migrate`
+      )
+    }
+    if (status.pending.length > 0) await runMigrations(pool)
+  } finally {
+    await pool.end()
+  }
+  return serveUntilStopped(config)
+}
+
+/** `enform migrate [--status]`: apply or report the migrations (DE-5, ADR 0011). */
+async function commandMigrate(args: Args, json: boolean): Promise<number> {
+  const config = loadConfig(args.flags)
+  const pool = createPool(config.databaseUrl)
+  try {
+    if (has(args, '--status')) {
+      const status = await migrationStatus(pool)
+      const text =
+        status.pending.length === 0
+          ? `applied ${status.applied.length} migration(s); none pending`
+          : `applied ${status.applied.length} migration(s); pending ${status.pending.join(', ')}`
+      report(json, { ok: true, ...status }, text)
+      return 0
+    }
+    const applied = await runMigrations(pool)
+    report(json, { ok: true, applied }, `applied ${applied.length} migration(s)`)
+    return 0
+  } finally {
+    await pool.end()
+  }
+}
+
+/** `enform worker`: poll the outbox and timers until SIGTERM (ADR 0011, ADR 0013). */
+async function commandWorker(args: Args): Promise<number> {
+  const config = loadConfig(args.flags)
+  const worker = startWorker(config)
+  process.stderr.write('enform worker: polling the outbox and timers\n')
+  await waitForSignal(async () => worker.stop())
+  return 0
+}
+
+/** `enform admin create|rebuild`: the first administrator and the rebuild (ADR 0013). */
+async function commandAdmin(
+  action: string | undefined,
+  args: Args,
+  json: boolean
+): Promise<number> {
+  if (action === 'create') {
+    const usage = 'enform admin create --admin-email <email> --admin-password <password>'
+    const email = flagAny(args, ['--admin-email', '--email'], usage)
+    const password = flagAny(args, ['--admin-password', '--password'], usage)
+    const config = loadConfig(args.flags)
+    const admin = await bootstrap(config, { email, password })
+    report(json, { ok: true, admin }, `created ${email}`)
+    return 0
+  }
+  if (action === 'rebuild') {
+    const config = loadConfig(args.flags)
+    const pool = createPool(config.databaseUrl)
+    try {
+      const events = await rebuild(pool)
+      report(json, { ok: true, events }, `rebuilt ${events} event(s)`)
+      return 0
+    } finally {
+      await pool.end()
+    }
+  }
+  throw new Error(`unknown admin command: ${action ?? ''}`.trim())
+}
+
+/** `enform seed`: DE-4 profiles are not implemented in this release, and no seed is faked. */
+function commandSeed(action: string | undefined, json: boolean): number {
+  const text =
+    action === undefined
+      ? 'enform seed: DE-4 profiles are not implemented in this release'
+      : `enform seed ${action}: DE-4 profiles are not implemented in this release`
+  report(json, { ok: true, implemented: false, text }, text)
+  return 0
+}
+
+/** `enform doctor`: check the configuration, the database and the identity provider (DE-5). */
+async function commandDoctor(args: Args, json: boolean): Promise<number> {
+  const config = loadConfig(args.flags)
+  const checks: { readonly name: string; readonly ok: boolean; readonly detail: string }[] = [
+    { name: 'config', ok: true, detail: `${configPath(args.flags)} -> ${config.publicUrl}` },
+  ]
+
+  const pool = createPool(config.databaseUrl)
+  try {
+    await pool.query('select 1')
+    const status = await migrationStatus(pool)
+    checks.push({
+      name: 'database',
+      ok: status.pending.length === 0,
+      detail:
+        status.pending.length === 0
+          ? `${status.applied.length} migration(s) applied`
+          : `pending migrations: ${status.pending.join(', ')}`,
+    })
+  } catch (error) {
+    checks.push({ name: 'database', ok: false, detail: messageOf(error) })
+  } finally {
+    await pool.end()
+  }
+
+  try {
+    await oidcConfiguration(config)
+    checks.push({ name: 'identity provider', ok: true, detail: issuerUrl(config) })
+  } catch (error) {
+    checks.push({ name: 'identity provider', ok: false, detail: messageOf(error) })
+  }
+
+  const ok = checks.every((check) => check.ok)
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ ok, checks })}\n`)
+  } else {
+    for (const check of checks) {
+      process.stdout.write(`${check.ok ? 'ok' : 'fail'} ${check.name}: ${check.detail}\n`)
+    }
+  }
+  return ok ? 0 : 1
+}
+
+/** Serve until SIGTERM or SIGINT drains the server (DE-3). */
+async function serveUntilStopped(config: ReturnType<typeof loadConfig>): Promise<number> {
+  const service = await serveHttp(config)
+  process.stderr.write(`enform: serving ${config.publicUrl} on ${config.httpAddr}\n`)
+  await waitForSignal(() => service.close())
+  return 0
+}
+
+/** Await SIGTERM or SIGINT, run the drain, and resolve once it finished. */
+function waitForSignal(drain: () => Promise<void>): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const stop = (): void => {
+      process.off('SIGTERM', stop)
+      process.off('SIGINT', stop)
+      drain().then(resolve, reject)
+    }
+    process.on('SIGTERM', stop)
+    process.on('SIGINT', stop)
+  })
+}
+
+/** The first of several flag spellings, or an error that names the usage. */
+function flagAny(args: Args, keys: readonly string[], usage: string): string {
+  for (const key of keys) {
+    const values = args.flags.get(key)
+    if (values !== undefined && values.length > 0) return values[0]
+  }
+  throw new Error(`missing ${keys[0]}: usage is ${usage}`)
+}
+
+/** The message of an unknown error. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
