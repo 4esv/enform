@@ -37,7 +37,7 @@ import {
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
-import { grantsOf } from '../engine/grants.js'
+import { addGrant, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
@@ -486,7 +486,7 @@ async function serveOperation(c: Context, pool: Pool, auth: Auth, body: Record<s
   if ('error' in resolved) {
     return c.json(
       { error: resolved.error, ...('errors' in resolved ? { errors: resolved.errors } : {}) },
-      resolved.status as 400 | 409
+      resolved.status as 400 | 403 | 409
     )
   }
   return appendAndAnswer(c, pool, resolved.operation)
@@ -545,6 +545,9 @@ async function resolveOperation(
     if (body.type === STEP_CLAIMED) {
       return claimOperation(log, principal, body)
     }
+    if (body.type === GRANT_CHANGE_TYPE) {
+      return grantOperation(body, principal, grants)
+    }
     return { status: 400, error: 'this operation is not served in this slice' }
   } catch (error) {
     if (error instanceof CompletionRefused) {
@@ -589,6 +592,53 @@ function claimOperation(
     return { status: 409, error: result.reason ?? 'the claim was refused' }
   }
   return { operation: result.operation }
+}
+
+/**
+ * Resolve one grant change (#224, AC-2, AC-4, I14). The client names the
+ * principal, the scopes and the resource; the server authorizes `org.grants`
+ * on `org` or `flow.grant` on the resource, then records the grant with the
+ * client's ID and time, so a retry with the same ID appends nothing (I1). A
+ * member of a team or a group reaches this through the grants that apply to
+ * it, because the caller already merged them. Any other configuration event is
+ * refused, so the write path serves only this one kind.
+ */
+function grantOperation(
+  body: Record<string, unknown>,
+  principal: Principal,
+  grants: readonly Grant[]
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const grantPrincipal = stringValue(payload?.principal)
+  const resource = stringValue(payload?.resource)
+  const scopes = payload?.scopes
+  if (
+    grantPrincipal === undefined ||
+    resource === undefined ||
+    !Array.isArray(scopes) ||
+    scopes.length === 0 ||
+    !scopes.every((scope) => typeof scope === 'string' && scope !== '') ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return {
+      status: 400,
+      error: 'a grant needs an id, a time, a principal, scopes and a resource',
+    }
+  }
+  const allowed =
+    authorize(grants, 'org.grants', 'org') || authorize(grants, 'flow.grant', resource)
+  if (!allowed) {
+    return {
+      status: 403,
+      error: `a grant requires the scope org.grants on org or flow.grant on ${resource}`,
+    }
+  }
+  const operation = addGrant({ principal: grantPrincipal, scopes, resource }, principal.id, {
+    clock: () => body.at as number,
+    ids: () => body.id as string,
+  })
+  return { operation }
 }
 
 /** Append one resolved operation and answer the event that the log holds (I1, I4). */

@@ -32,10 +32,14 @@ paths:
         records no `expectedVersion` on the log. The server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
-        told apart by `type` and by their payload shape. A raw start or a raw
-        completion is refused, because the client posts the intent; any other
-        operation is refused in this slice. The appended event keeps the
-        client's ID and time.
+        told apart by `type` and by their payload shape. A
+        `config.grant.changed@1` operation is the one configuration event this
+        path serves: its payload names `principal`, `scopes` and `resource`,
+        and the server authorizes `org.grants` on `org` or `flow.grant` on the
+        resource before it appends the grant with the client's ID and time, so
+        a retry with the same ID appends nothing. A raw start, a raw completion,
+        any other configuration event or any other operation is refused. The
+        appended event keeps the client's ID and time.
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
       requestBody:
@@ -54,10 +58,17 @@ paths:
         '400':
           description: >-
             The operation is invalid, a raw `instance.started@1` or
-            `step.completed@1` was posted instead of its intent, or an intent
-            cannot be resolved: an intent that lacks the instance id or the
-            version, or that names an unknown instance, appends nothing. A
-            configuration operation is not served in this slice.
+            `step.completed@1` was posted instead of its intent, an intent
+            cannot be resolved (an intent that lacks the instance id or the
+            version, or that names an unknown instance), or a
+            `config.grant.changed@1` lacks its id, time, principal, scopes or
+            resource. Nothing is appended. A configuration event other than a
+            grant is not served in this slice.
+        '403':
+          description: >-
+            The principal may not make this change, or a state-changing cookie
+            request carries no valid CSRF token. A grant requires `org.grants`
+            on `org` or `flow.grant` on the resource. Nothing is appended.
         '409':
           description: >-
             The engine refused the completion or the claim and appended

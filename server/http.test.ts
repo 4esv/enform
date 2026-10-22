@@ -67,3 +67,49 @@ test('#224 an empty bearer header without a cookie answers 401', async () => {
   })
   expect(response.status).toBe(401)
 })
+
+test('#224 a malformed grant answers 400 and appends nothing', async () => {
+  const app = createApp(defaultConfig, sessionPool())
+  const response = await app.request('/api/v1/operations', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ',
+      cookie,
+      'content-type': 'application/json',
+      'x-csrf-token': 'csrf-1',
+    },
+    body: JSON.stringify({
+      id: 'grant-1',
+      type: 'config.grant.changed@1',
+      at: 1,
+      actor: 'ignored',
+      payload: { principal: 'user-1', scopes: 'step.outcome:approve', resource: 'org' },
+    }),
+  })
+  expect(response.status, await response.text()).toBe(400)
+})
+
+test('#224 a grant without a grant scope answers 403', async () => {
+  const app = createApp(defaultConfig, sessionPool())
+  const response = await app.request('/api/v1/operations', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ',
+      cookie,
+      'content-type': 'application/json',
+      'x-csrf-token': 'csrf-1',
+    },
+    body: JSON.stringify({
+      id: 'grant-2',
+      type: 'config.grant.changed@1',
+      at: 1,
+      actor: 'ignored',
+      payload: {
+        principal: 'user-1',
+        scopes: ['step.outcome:approve'],
+        resource: 'flow:demo/step:request',
+      },
+    }),
+  })
+  expect(response.status, await response.text()).toBe(403)
+})
