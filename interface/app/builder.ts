@@ -209,7 +209,7 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
     const input = textRow(target === 0 ? 'Target' : 'Second target (optional)')
     input.input.value = step.targets[target] ?? ''
     input.input.dataset.target = String(target)
-    input.input.placeholder = 'starter or a user id'
+    input.input.placeholder = 'starter, user:<id> or <id>'
     input.input.addEventListener('input', () => {
       const value = input.input.value.trim()
       if (value === '') {
@@ -365,7 +365,10 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
       checkbox.addEventListener('change', () => {
         state.grants.set(key, checkbox.checked)
       })
-      label.append(checkbox, `${outcome} to ${target === 'starter' ? 'the starter' : target}`)
+      label.append(
+        checkbox,
+        `${outcome} to ${target === 'starter' ? 'the starter' : userTargetOf(target)}`
+      )
       grid.appendChild(label)
     }
   }
@@ -471,7 +474,9 @@ function definitionOf(state: BuilderState): Record<string, unknown> {
       targets: step.targets
         .map((target) => target.trim())
         .filter((target) => target !== '')
-        .map((target) => (target === 'starter' ? { starter: 'starter' } : { user: target })),
+        .map((target) =>
+          target === 'starter' ? { starter: 'starter' } : { user: userTargetOf(target) }
+        ),
       fields: step.fields.map((field) => ({
         key: field.key,
         control: field.control,
@@ -544,9 +549,18 @@ function readTargets(value: unknown): string[] {
   return read.length === 0 ? ['starter'] : read
 }
 
-/** The principal that a target names; `starter` is the person who starts the flow. */
+/**
+ * The principal that a target names (ID-4). `starter` is the person who
+ * starts the flow; a user target may be written `user:<id>` or `<id>`, so both
+ * spellings reach the one immutable id that the grant and the definition use.
+ */
 function principalOf(state: BuilderState, target: string): string {
-  return target === 'starter' ? state.actor : target
+  return target === 'starter' ? state.actor : userTargetOf(target)
+}
+
+/** The immutable id of a user target, without the optional `user:` prefix (ID-4). */
+function userTargetOf(target: string): string {
+  return target.startsWith('user:') ? target.slice('user:'.length).trim() : target
 }
 
 /** The ID of one grant operation, created once and reused on a retry (I1). */
