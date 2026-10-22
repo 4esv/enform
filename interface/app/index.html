@@ -27,6 +27,7 @@
       const instance = params.get('instance')
       const flow = params.get('flow') ?? params.get('slug') ?? ''
       const inbox = params.get('inbox') === '1'
+      const users = params.get('users') === '1'
       mountApp({
         root: document.getElementById('app'),
         baseUrl: params.get('baseUrl') ?? location.origin,
@@ -36,6 +37,7 @@
         ...(params.get('builder') === '1' ? { builder: true } : {}),
         ...(params.get('new') === '1' ? { newFlow: true } : {}),
         ...(inbox ? { inbox: true, inboxTab: params.get('tab') ?? 'my' } : {}),
+        ...(users ? { users: true } : {}),
         ...(sources
           ? { clock: sources.clock, ids: sources.ids, instanceIds: sources.instanceIds }
           : {}),

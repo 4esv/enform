@@ -21,9 +21,13 @@
 
 import {
   appendOperation,
+  type CreatedUser,
   createFlow,
+  createUser,
+  type DirectoryUser,
   type InstanceView,
   listFlows,
+  listUsers,
   loginUrl,
   logout,
   type Operation,
@@ -73,6 +77,8 @@ export interface AppOptions {
   readonly inbox?: boolean
   /** The inbox tab that the URL names; absent means `my` (VT-1). */
   readonly inboxTab?: string
+  /** Whether the URL asks for the directory users page (ID-6). */
+  readonly users?: boolean
   /** The injected clock (I6); absent means Date.now. */
   readonly clock?: () => number
   /** The injected operation ID source (I1, I6); absent means crypto.randomUUID. */
@@ -134,6 +140,14 @@ export async function mountApp(options: AppOptions): Promise<void> {
   inbox.textContent = 'Inbox'
   inbox.dataset.inbox = ''
   header.appendChild(inbox)
+  // Issue #228, ID-6: the directory is an administrator surface. The link is
+  // always offered; the page shows the server's 403 to a principal without
+  // `org.grants` (I8), so the shell decides nothing (A9).
+  const users = document.createElement('a')
+  users.href = '/?users=1'
+  users.textContent = 'Users'
+  users.dataset.users = ''
+  header.appendChild(users)
   if (displayName !== undefined) {
     const who = document.createElement('span')
     who.className = 'principal'
@@ -583,8 +597,135 @@ export async function mountApp(options: AppOptions): Promise<void> {
     main.appendChild(form)
   }
 
+  /**
+   * Render the directory and the create form (ID-6, DE-1, ADR 0012). The read
+   * and the write go through the generated client, so the server decides who
+   * may see the directory and who may create a user (I8, I12). A created
+   * user's temporary password is shown once, with the id that the builder's
+   * target input uses (ID-4).
+   */
+  const renderUsers = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Users'
+    main.appendChild(heading)
+
+    let users: readonly DirectoryUser[]
+    try {
+      users = await listUsers()
+    } catch (error: unknown) {
+      const refusal = document.createElement('p')
+      refusal.className = 'status'
+      refusal.dataset.usersRefused = ''
+      refusal.textContent = messageOf(error)
+      main.appendChild(refusal)
+      return
+    }
+
+    const list = document.createElement('ul')
+    list.className = 'users'
+    list.dataset.userList = ''
+    main.appendChild(list)
+    const renderList = (entries: readonly DirectoryUser[]): void => {
+      list.replaceChildren()
+      if (entries.length === 0) {
+        const empty = document.createElement('li')
+        empty.className = 'empty'
+        empty.textContent = 'The directory holds no user yet.'
+        list.appendChild(empty)
+        return
+      }
+      for (const entry of entries) {
+        const item = document.createElement('li')
+        item.className = 'user'
+        item.dataset.userRow = ''
+        const name = document.createElement('strong')
+        name.dataset.userName = ''
+        name.textContent = entry.displayName
+        const email = document.createElement('span')
+        email.dataset.userEmailAddress = ''
+        email.textContent = entry.email
+        const id = document.createElement('code')
+        id.dataset.userId = ''
+        id.textContent = entry.id
+        const status = document.createElement('span')
+        status.dataset.userStatus = ''
+        status.textContent = entry.status
+        item.append(name, email, id, status)
+        list.appendChild(item)
+      }
+    }
+    renderList(users)
+
+    const form = document.createElement('form')
+    form.className = 'create-user'
+    const emailLabel = document.createElement('label')
+    emailLabel.textContent = 'Email'
+    const email = document.createElement('input')
+    email.type = 'email'
+    email.name = 'email'
+    email.dataset.userEmail = ''
+    email.required = true
+    emailLabel.appendChild(email)
+    form.appendChild(emailLabel)
+
+    const nameLabel = document.createElement('label')
+    nameLabel.textContent = 'Display name'
+    const displayName = document.createElement('input')
+    displayName.type = 'text'
+    displayName.name = 'displayName'
+    displayName.dataset.userDisplayName = ''
+    displayName.required = true
+    nameLabel.appendChild(displayName)
+    form.appendChild(nameLabel)
+
+    const create = document.createElement('button')
+    create.type = 'submit'
+    create.textContent = 'Create user'
+    create.dataset.createUser = ''
+    form.appendChild(create)
+
+    const status = document.createElement('p')
+    status.className = 'status'
+    form.appendChild(status)
+
+    const created = document.createElement('section')
+    created.className = 'created-user'
+    form.appendChild(created)
+
+    const submitCreateUser = async (): Promise<void> => {
+      const address = email.value.trim()
+      const name = displayName.value.trim()
+      if (address === '' || name === '') return
+      try {
+        const user = await createUser({ email: address, displayName: name, sendInvite: false })
+        status.textContent = `Created ${user.displayName}`
+        showCreatedUser(created, user)
+        email.value = ''
+        displayName.value = ''
+        try {
+          renderList(await listUsers())
+        } catch {
+          // The created user is shown either way; the list refreshes on the
+          // next visit.
+        }
+      } catch (error: unknown) {
+        status.textContent = messageOf(error)
+      }
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      void submitCreateUser()
+    })
+    main.appendChild(form)
+  }
+
   const renderRoute = async (): Promise<void> => {
     clearPage()
+    if (options.users === true) {
+      await renderUsers()
+      return
+    }
     if (options.inbox === true) {
       await renderInbox(options.inboxTab ?? 'my')
       return
@@ -630,6 +771,60 @@ const inboxTabs = [
 /** The tab the URL names, or `my` for an absent or unknown value (VT-1). */
 function inboxTabOf(value: string): 'my' | 'available' | 'started' {
   return value === 'available' || value === 'started' ? value : 'my'
+}
+
+/**
+ * Show the user the create call made, with the one-time temporary password
+ * (ID-6, ADR 0012). The id is the principal that a builder target names
+ * (ID-4). The password is shown once: a reload cannot show it again because
+ * the server keeps no copy in enform.
+ */
+function showCreatedUser(host: HTMLElement, user: CreatedUser): void {
+  host.replaceChildren()
+  const heading = document.createElement('h2')
+  heading.textContent = `Created ${user.displayName}`
+  const warning = document.createElement('p')
+  warning.className = 'warning'
+  warning.dataset.passwordOnce = ''
+  warning.textContent =
+    'This password is shown once. Copy it now and hand it to the user; it cannot be shown again.'
+
+  const idLabel = document.createElement('p')
+  idLabel.textContent = 'User id (the builder target)'
+  const id = document.createElement('code')
+  id.dataset.createdId = ''
+  id.textContent = user.id
+  idLabel.appendChild(id)
+
+  const passwordLabel = document.createElement('p')
+  passwordLabel.textContent = 'Temporary password'
+  const password = document.createElement('code')
+  password.dataset.createdPassword = ''
+  password.textContent = user.temporaryPassword
+  passwordLabel.appendChild(password)
+
+  const copy = document.createElement('button')
+  copy.type = 'button'
+  copy.textContent = 'Copy password'
+  copy.dataset.copyPassword = ''
+  copy.addEventListener('click', () => {
+    const clipboard = navigator.clipboard
+    if (clipboard === undefined) {
+      copy.disabled = true
+      copy.textContent = 'Copy unavailable'
+      return
+    }
+    void clipboard
+      .writeText(user.temporaryPassword)
+      .then(() => {
+        copy.textContent = 'Copied'
+      })
+      .catch(() => {
+        copy.textContent = 'Copy failed'
+      })
+  })
+
+  host.append(heading, warning, idLabel, passwordLabel, copy)
 }
 
 /** The status line of an instance (VT-1, VT-2, S14): position, state and holder. */
