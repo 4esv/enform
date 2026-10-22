@@ -77,11 +77,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 - The browser shows a holder's task: it renders the current step's form from the engine's read, marks the fields the step requires, offers one control per outcome, posts a completion, and shows a server refusal at the control it names, with the reason in the status line (FM-3, FM-4, FM-7, A9, I12, ADR 0010) (#106).
 - The HTTP API describes the foundation of the walking skeleton as version 0.2.0: the sign-in redirects, the session with its principal and CSRF token, the local directory of users, the flows and the draft, which the server diffs, classifies and appends, the publication, and the three inbox tabs. The generated client covers every operation and accepts the redirect and the no-content successes that the contract declares (DX-1, DX-4, ID-6, DE-1, DE-2, ADR 0012, ADR 0013) (#211).
 - The foundation bootstrap: one `enform` binary with `init`, `serve`, `migrate`, `worker`, `admin`, `seed`, `doctor`, `version` and `help`; a TOML configuration with flag, environment, file and default precedence; a PostgreSQL event store with versioned migrations and rebuildable projections; server-side sessions with OIDC authorization code and PKCE through Keycloak's built-in local directory; the systemd units and the container image; and `make init` (ID-6, DE-1, DE-2, DE-3, ADR 0011, ADR 0012, ADR 0013) (#216).
+- The generated client accepts a CSRF token through `setClient` and sends `x-csrf-token` with every request, so a cookie session can make a state-changing call while the bearer path remains unaffected (DX-4, ADR 0012, I12) (#218).
 
 ### Fixed
 
 - The Entra test realm imports into Keycloak 26.0: the `entra` identity provider sets `pkceMethod` to `S256` beside `pkceEnabled`, so a fresh Compose stack starts and the integration suite can run (ID-1, ADR 0005) (#214).
 - A start records the steps its route skipped, with the conditions, on the instance's `instance.started@1` event, and `status.skipped` reads only that instance's skips, so another instance's skip or a draft run's `step.skipped@1` no longer appears (WF-1, VT-2, S05, S14, I4) (#192).
+
+### Security
+
+- The browser session encrypts the Keycloak refresh token at rest with AES-256-GCM. `session.encryptionKey` (`ENFORM_SESSION_ENCRYPTION_KEY`) holds a 32-byte key, `enform init` writes one when the configuration has none, `enform doctor` checks it, and a missing key or a failed decryption ends only the local session (ID-1, ID-5, ADR 0012, I8) (#218).
+- The OIDC callback accepts `groups` as a JSON array of strings or as a single string, deduplicates the result and stores it with the principal. The bearer session keeps only the token hash, never the access token (ID-4, ID-5, ADR 0012) (#218).
 
 ## [0.0.0] - 2026-10-08
 

@@ -288,6 +288,13 @@ export interface InboxItem {
 export interface ClientConfig {
   readonly baseUrl: string
   readonly token: string
+  /**
+   * The CSRF token that `readSession` returned (ADR 0012). A cookie session
+   * must present it on a state-changing request. The client sends it on
+   * every request when it is configured; the server requires it only on a
+   * state-changing cookie request, and the bearer path ignores it.
+   */
+  readonly csrfToken?: string
 }
 
 let config: ClientConfig | undefined
@@ -302,7 +309,9 @@ function configured(): ClientConfig {
 }
 
 function headers(): Record<string, string> {
-  return { authorization: `Bearer ${configured().token}` }
+  const base = { authorization: `Bearer ${configured().token}` }
+  const csrfToken = configured().csrfToken
+  return csrfToken === undefined || csrfToken === '' ? base : { ...base, 'x-csrf-token': csrfToken }
 }
 
 // The engine refused the request and appended nothing (FM-3, FM-4, I1).

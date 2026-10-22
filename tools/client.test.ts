@@ -10,6 +10,7 @@ import {
   logout,
   type Operation,
   RequestRefused,
+  readLog,
   setClient,
 } from '../interface/client/client.js'
 
@@ -162,6 +163,26 @@ test('#211 a status that the operation does not declare is a failure (DX-1, ADR 
 
   vi.stubGlobal('fetch', () => Promise.resolve(new Response(null, { status: 204 })))
   await expect(logout(), 'the declared 204 resolves').resolves.toBeUndefined()
+})
+
+test('#218 the client sends the CSRF token on every request when it is configured (ADR 0012)', async () => {
+  const seen: Array<Record<string, string>> = []
+  vi.stubGlobal('fetch', (_url: string, init: { headers?: Record<string, string> }) => {
+    seen.push(init.headers ?? {})
+    return Promise.resolve(new Response('[]', { status: 200 }))
+  })
+
+  setClient({ baseUrl: 'http://api.test', token: 'token' })
+  await readLog()
+  expect(seen[0], 'no CSRF header without a token').not.toHaveProperty('x-csrf-token')
+
+  setClient({ baseUrl: 'http://api.test', token: 'token', csrfToken: 'csrf-1' })
+  await readLog()
+  expect(seen[1]['x-csrf-token'], 'the configured token is sent').toBe('csrf-1')
+
+  setClient({ baseUrl: 'http://api.test', token: 'token', csrfToken: 'csrf-1' })
+  await appendOperation(operation)
+  expect(seen[2]['x-csrf-token'], 'a state-changing request carries it too').toBe('csrf-1')
 })
 
 test('#93 DX-4 a hand-written /api/v1 call in the interface fails the rule (I12)', () => {
