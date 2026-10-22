@@ -42,8 +42,8 @@ const definition: FlowDefinition = parse(`{
       "key": "request",
       "targets": [{ "starter": "starter" }],
       "fields": [
-        { "key": "summary", "control": "text" },
-        { "key": "detail", "control": "long-text" }
+        { "key": "summary", "control": "text", "label": "Summary" },
+        { "key": "detail", "control": "long-text", "label": "Private detail" }
       ],
       "visible": ["summary"],
       "editable": ["summary"],
@@ -53,8 +53,8 @@ const definition: FlowDefinition = parse(`{
       "key": "review",
       "targets": [{ "user": "user:okafor" }],
       "fields": [
-        { "key": "summary", "control": "text" },
-        { "key": "decision", "control": "select", "options": ["approve", "reject"] }
+        { "key": "summary", "control": "text", "label": "Summary" },
+        { "key": "decision", "control": "select", "label": "Decision", "options": ["approve", "reject"] }
       ],
       "editable": ["decision"],
       "outcomes": ["approve", "reject"]
@@ -143,9 +143,14 @@ test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', (
     false
   )
   // The read carries the visible field definitions and the step's outcomes, so
-  // a task page renders without the whole definition (#228, AC-4). The hidden
-  // field is absent from `fields` exactly as it is absent from `values`.
-  expect(view?.fields).toEqual([{ key: 'summary', control: 'text' }])
+  // a task page renders without the whole definition (#228, AC-4). A visible
+  // field carries its label (#230); the hidden field is absent from `fields`
+  // exactly as it is absent from `values`, label included.
+  expect(view?.fields).toEqual([{ key: 'summary', control: 'text', label: 'Summary' }])
+  expect(
+    view?.fields.some((field) => field.key === 'detail'),
+    'a hidden field and its label are absent'
+  ).toBe(false)
   expect(view?.outcomes).toEqual(['submit'])
 
   // A principal that may read the instance but is not an assignee of the step
@@ -223,8 +228,8 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
   expect(view?.editable).toEqual([])
   expect(view?.values).toEqual({ summary: 'first', decision: 'approve' })
   expect(view?.fields).toEqual([
-    { key: 'summary', control: 'text' },
-    { key: 'decision', control: 'select', options: ['approve', 'reject'] },
+    { key: 'summary', control: 'text', label: 'Summary' },
+    { key: 'decision', control: 'select', label: 'Decision', options: ['approve', 'reject'] },
   ])
   expect(view?.outcomes).toEqual(['approve', 'reject'])
 
@@ -287,8 +292,8 @@ test('#228 a step assignee reads the fields and outcomes and completes with only
   expect(view?.visible).toEqual(['summary', 'decision'])
   expect(view?.editable, 'an assignee may edit the step field').toEqual(['decision'])
   expect(view?.fields).toEqual([
-    { key: 'summary', control: 'text' },
-    { key: 'decision', control: 'select', options: ['approve', 'reject'] },
+    { key: 'summary', control: 'text', label: 'Summary' },
+    { key: 'decision', control: 'select', label: 'Decision', options: ['approve', 'reject'] },
   ])
   expect(view?.outcomes).toEqual(['approve', 'reject'])
 

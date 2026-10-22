@@ -131,13 +131,14 @@ export interface InstanceView {
 }
 
 /**
- * One visible field of the current step, as the instance read returns it (#228, FM-1, FM-3):
- * the key, the control the form renders, and the options of a choice control. It carries no
- * hidden field.
+ * One visible field of the current step, as the instance read returns it (#228, #230, FM-1,
+ * FM-3): the key, the human label when the definition carries one, the control the form
+ * renders, and the options of a choice control. It carries no hidden field.
  */
 export interface InstanceField {
   readonly key: string
   readonly control: string
+  readonly label?: string
   readonly options?: readonly string[]
 }
 

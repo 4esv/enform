@@ -1040,8 +1040,9 @@ components:
       type: object
       description: >-
         One visible field of the current step, as the instance read returns it
-        (#228, FM-1, FM-3): the key, the control the form renders, and the
-        options of a choice control. It carries no hidden field.
+        (#228, #230, FM-1, FM-3): the key, the human label when the definition
+        carries one, the control the form renders, and the options of a choice
+        control. It carries no hidden field.
       required: [key, control]
       properties:
         key:
@@ -1067,6 +1068,11 @@ components:
             - user
             - static
             - repeating
+        label:
+          type: string
+          description: >-
+            The human label the form shows; absent means the form shows the
+            key (FM-1).
         options:
           type: array
           description: >-

@@ -52,14 +52,16 @@ export type ProjectedInstance = Instance & {
 }
 
 /**
- * One field of the current step as the read returns it (#228, FM-1, FM-3). It
- * is the part of the definition that the form needs beside the values: the
- * key, the control, and the options of a choice control. A field the step does
- * not make visible is absent, exactly as its value is (FM-3 criterion 1).
+ * One field of the current step as the read returns it (#228, #230, FM-1, FM-3).
+ * It is the part of the definition that the form needs beside the values: the
+ * key, the human label when it has one, the control, and the options of a
+ * choice control. A field the step does not make visible is absent, exactly as
+ * its value is (FM-3 criterion 1).
  */
 type InstanceViewField = {
   readonly key: string
   readonly control: ControlType
+  readonly label?: string
   readonly options?: readonly string[]
 }
 
@@ -92,8 +94,9 @@ export type InstanceView = {
   readonly values: Readonly<Record<string, JsonValue>>
   /**
    * The definitions of the visible fields, in definition order (FM-1, FM-3):
-   * the control the form renders and the options it offers. A hidden field is
-   * absent, so the read decides the form exactly as it decides the values.
+   * the label, the control the form renders and the options it offers. A
+   * hidden field is absent, so the read decides the form exactly as it decides
+   * the values.
    */
   readonly fields: readonly InstanceViewField[]
   /** The outcomes the current step offers (AC-4, WF-2); empty when it declares none. */
@@ -177,6 +180,7 @@ export function readInstance(
       .map((field) => ({
         key: field.key,
         control: field.control,
+        ...(field.label === undefined ? {} : { label: field.label }),
         ...(field.options === undefined ? {} : { options: [...field.options] }),
       }))
     outcomes = step.outcomes ?? []
