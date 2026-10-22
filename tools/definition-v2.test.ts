@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { parse, serialize } from '../engine/definition.js'
+import { CONTROL_TYPES, parse, serialize } from '../engine/definition.js'
 
 // Issue #170, DF-1, I9, MVP.md 9.3: definition schema version 2. The engine
 // reads a v1 file and migrates it forward to v2, and reads and writes a v2
@@ -184,8 +184,9 @@ test('#170 the v2 schema agrees with what the read path accepts and rejects (DF-
   expect(schema.$defs.step.additionalProperties).toBe(false)
   expect(schema.$defs.section.additionalProperties).toBe(false)
   expect(schema.$defs.section.required).toEqual(['key', 'fields'])
+  expect(schema.$defs.field.required).toEqual(['key', 'control'])
   expect(schema.$defs.field.additionalProperties).toBe(false)
-  expect(schema.$defs.field.properties.required).toEqual({ type: 'boolean' })
+  expect(schema.$defs.control.enum).toEqual([...CONTROL_TYPES])
   expect(schema.$defs.field.properties.key.not).toEqual({ const: 'context' })
   expect(schema.$defs.field.properties.label).toEqual({
     description:

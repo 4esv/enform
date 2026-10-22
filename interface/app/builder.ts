@@ -25,8 +25,36 @@ import {
 /** The event type of a grant change (AC-2, I14). */
 const GRANT_CHANGE_TYPE = 'config.grant.changed@1'
 
-/** The four controls that the builder edits (FM-1); a step's other controls stay read-only. */
-type BuilderControl = 'text' | 'long-text' | 'select' | 'checkbox'
+/**
+ * The sixteen FM-1 controls that the builder offers, in the schema's order
+ * (FM-1). The builder states the list because I12 keeps it on the public API
+ * and the generated client, which names no control set; the integration test
+ * exercises a non-default control through the real form.
+ */
+const BUILDER_CONTROLS = [
+  'text',
+  'long-text',
+  'number',
+  'money',
+  'date',
+  'select',
+  'multi-select',
+  'checkbox',
+  'radio',
+  'yes-no',
+  'email',
+  'phone',
+  'file',
+  'user',
+  'static',
+  'repeating',
+] as const
+
+/** One of the sixteen FM-1 controls the builder edits (FM-1). */
+type BuilderControl = (typeof BUILDER_CONTROLS)[number]
+
+/** The choice controls whose option list the builder edits (FM-1). */
+const CHOICE_CONTROLS: ReadonlySet<BuilderControl> = new Set(['select', 'multi-select', 'radio'])
 
 /** One field the builder edits in place. */
 type BuilderField = {
@@ -285,7 +313,7 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
   row.appendChild(label.row)
 
   const control = selectRow('Control')
-  for (const kind of ['text', 'long-text', 'select', 'checkbox'] as const) {
+  for (const kind of BUILDER_CONTROLS) {
     const option = document.createElement('option')
     option.value = kind
     option.textContent = kind
@@ -299,7 +327,7 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
   })
   row.appendChild(control.row)
 
-  if (field.control === 'select') {
+  if (CHOICE_CONTROLS.has(field.control)) {
     const options = textRow('Options (comma-separated)')
     options.input.value = field.options
     options.input.dataset.fieldOptions = ''
@@ -481,7 +509,7 @@ function definitionOf(state: BuilderState): Record<string, unknown> {
         key: field.key,
         control: field.control,
         ...(field.label.trim() === '' ? {} : { label: field.label }),
-        ...(field.control === 'select' ? { options: splitList(field.options) } : {}),
+        ...(CHOICE_CONTROLS.has(field.control) ? { options: splitList(field.options) } : {}),
         ...(field.required ? { required: true } : {}),
       })),
       // The step's assignees edit the fields the builder adds (FM-3); without
@@ -529,13 +557,17 @@ function readField(body: unknown): BuilderField | undefined {
   return {
     key: body.key,
     label: typeof body.label === 'string' ? body.label : '',
-    control:
-      control === 'long-text' || control === 'select' || control === 'checkbox' ? control : 'text',
+    control: isBuilderControl(control) ? control : 'text',
     options: Array.isArray(body.options)
       ? body.options.filter((option): option is string => typeof option === 'string').join(', ')
       : '',
     required: body.required === true,
   }
+}
+
+/** Whether a definition names one of the controls the builder offers (FM-1). */
+function isBuilderControl(value: unknown): value is BuilderControl {
+  return typeof value === 'string' && (BUILDER_CONTROLS as readonly string[]).includes(value)
 }
 
 function readTargets(value: unknown): string[] {
