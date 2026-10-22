@@ -55,6 +55,13 @@ export type Instance = {
    * the same instance (I1).
    */
   readonly instanceId?: string
+  /**
+   * The slug of the flow that the instance runs (#222, I4). A start records it
+   * on the event and on the instance, so a read names the flow without
+   * searching the log by definition hash, and two flows with identical
+   * definitions do not collide.
+   */
+  readonly flow?: string
   /** The content hash of the definition version that the instance started on (DF-2). */
   readonly definitionVersion: string
   readonly assignees: readonly Assignee[]

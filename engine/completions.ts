@@ -28,9 +28,10 @@ import type { TargetResolver } from './routing.js'
  * The client intent for a completion (ADR 0010, #191): the pieces a browser
  * honestly knows. It carries the ID the client chose (I1), the time it read
  * (I6), the principal it acts as (ID-2), the instance it acts on (DX-1), the
- * outcome the actor chose (AC-4) and the values the step captured (FM-7). It
- * names no step: the engine reads the instance's current step from the log.
- * Everything else is the engine's to resolve.
+ * version of the instance it read (I5, #222), the outcome the actor chose
+ * (AC-4) and the values the step captured (FM-7). It names no step: the engine
+ * reads the instance's current step from the log. Everything else is the
+ * engine's to resolve.
  */
 export type CompletionIntent = {
   readonly id: OperationId
@@ -39,6 +40,8 @@ export type CompletionIntent = {
   readonly actor: ActorId
   readonly payload: {
     readonly instanceId: string
+    /** The instance version that the client read (I5, #222). */
+    readonly version: number
     readonly outcome: string
     readonly values: Readonly<Record<string, JsonValue>>
   }
@@ -103,10 +106,10 @@ export function resolveCompletion(
     intent.actor,
     intent.payload.outcome,
     intent.payload.values,
-    // The version that the projection kept (I5, #191): the counter the write
-    // path advanced, never an accidental 0.
-    instance.version ?? 0,
-    { flow: published.slug, definition: published.definition, grants, resolve },
+    // The version the client read (I5, #222): a stale view is refused at once
+    // rather than overwriting a newer decision.
+    intent.payload.version,
+    { flow: instance.flow, definition: published.definition, grants, resolve },
     { clock: () => intent.at, ids: () => intent.id }
   )
   if (!result.accepted || result.operation === undefined) {
@@ -136,6 +139,9 @@ function asCompletionIntent(value: unknown): CompletionIntent | undefined {
   if (typeof change.instanceId !== 'string') {
     throw new Error('intent: the instanceId must be a string (DX-1)')
   }
+  if (typeof change.version !== 'number' || !Number.isInteger(change.version)) {
+    throw new Error('intent: the version must be an integer (I5)')
+  }
   if (typeof candidate.id !== 'string') throw new Error('intent: the id must be a string (I1)')
   if (typeof candidate.at !== 'number') throw new Error('intent: the at must be a number (I6)')
   if (typeof candidate.actor !== 'string') {
@@ -152,6 +158,7 @@ function asCompletionIntent(value: unknown): CompletionIntent | undefined {
     actor: candidate.actor,
     payload: {
       instanceId: change.instanceId,
+      version: change.version,
       outcome: change.outcome,
       values: values as Readonly<Record<string, JsonValue>>,
     },

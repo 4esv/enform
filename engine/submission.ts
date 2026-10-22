@@ -72,8 +72,9 @@ export type SubmittedInstance = {
  * to, as `grantsOf` reads them from the log. The client mints the instance id
  * that `instanceId` carries, as it mints the operation id (ADR 0004), and the
  * start records it on the instance and in the `instance.started@1` payload, so
- * the log names the instance that the event started (#187). The function routes
- * the draft to the assignees of the first step whose skip condition is false
+ * the log names the instance that the event started (#187), and records the slug
+ * of the flow it runs (#222, I4). The function routes the draft to the
+ * assignees of the first step whose skip condition is false
  * (WF-1, I10), records the steps that its route skipped with the conditions on
  * the start event, attributed to the starter (#192, S05), stamps the instance
  * with the content hash of the flow's latest published version (DF-2, I13), and
@@ -104,6 +105,10 @@ export function startInstance(
   }
   const change = {
     instanceId,
+    // The flow slug names the flow the instance runs (#222, I4). Two flows with
+    // identical definitions hash the same, so the slug is what tells their
+    // instances apart.
+    flow: flow.slug,
     definitionVersion: instance.definitionVersion,
     currentStep: route.step.key,
     assignees,
@@ -190,6 +195,9 @@ function asStartIntent(value: unknown): StartIntent | undefined {
   const payload = candidate.payload
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
   const change = payload as Record<string, unknown>
+  // A resolved start now names its flow too (#222), so the detector tells the
+  // two apart by the definition version that only the engine's operation has.
+  if ('definitionVersion' in change) return undefined
   if (typeof change.flow !== 'string') return undefined
   if (typeof change.instanceId !== 'string') {
     throw new Error('intent: the instanceId must be a string (DX-1)')

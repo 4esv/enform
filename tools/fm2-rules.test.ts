@@ -74,6 +74,7 @@ function definitionFor(step: FlowStep): FlowDefinition {
 function instanceFor(step: FlowStep, values: ConditionData): ProjectedInstance {
   return {
     instanceId: INSTANCE_ID,
+    flow: SLUG,
     definitionVersion: contentHash(definitionFor(step)),
     assignees: [{ step: step.key, target: { starter: 'starter' }, members: [SAM] }],
     connectorCalls: [],

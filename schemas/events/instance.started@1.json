@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/events/instance.started@1.json",
   "title": "enform instance.started@1 event payload",
-  "description": "The payload of an instance.started@1 event (#43, #177, #187, #192, S06, FM-7, DF-2, DX-1, I13). It names the instance that the event started, by the id that the client minted (DX-1, #187). A start routes a draft to the first step whose skip condition is false (WF-1), records the steps that its route skipped, in definition order, with the condition that skipped each (#192, WF-1, S05), stamps the instance with its definition version and resolved assignees (DF-2, I13), names the starter (AC-5), and records the values that the form holds (FM-7).",
+  "description": "The payload of an instance.started@1 event (#43, #177, #187, #192, #222, S06, FM-7, DF-2, DX-1, I4, I13). It names the instance that the event started, by the id that the client minted (DX-1, #187), and the flow slug it runs (#222, I4), so two flows with identical definitions do not collide. A start routes a draft to the first step whose skip condition is false (WF-1), records the steps that its route skipped, in definition order, with the condition that skipped each (#192, WF-1, S05), stamps the instance with its definition version and resolved assignees (DF-2, I13), names the starter (AC-5), and records the values that the form holds (FM-7).",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "instanceId",
+    "flow",
     "definitionVersion",
     "currentStep",
     "assignees",
@@ -17,6 +18,10 @@
   "properties": {
     "instanceId": {
       "description": "The id that identifies the instance, minted by the client that started it (DX-1, #187). It is not the operation id: the operation id names one change, the instance id names the instance that the change acts on.",
+      "type": "string"
+    },
+    "flow": {
+      "description": "The slug of the flow that the instance runs (#222, I4). It names the flow a read and a write authorize on, so two flows with identical definitions do not collide.",
       "type": "string"
     },
     "definitionVersion": {

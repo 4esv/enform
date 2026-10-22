@@ -149,7 +149,7 @@ function completionIntent(values: Readonly<Record<string, unknown>>): Record<str
     type: STEP_COMPLETED,
     at: 9,
     actor: SAM,
-    payload: { instanceId: INSTANCE_ID, outcome: 'submit', values },
+    payload: { instanceId: INSTANCE_ID, version: 1, outcome: 'submit', values },
   }
 }
 

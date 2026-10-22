@@ -39,7 +39,11 @@ import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withd
  * names the instance id, because `instanceOf` finds the start event by that id,
  * so a view that the read returns carries a defined id.
  */
-export type ProjectedInstance = Instance & { readonly instanceId: string }
+export type ProjectedInstance = Instance & {
+  readonly instanceId: string
+  /** The flow that the start recorded (#222, I4); it names the flow a read authorizes on. */
+  readonly flow: string
+}
 
 /**
  * The instance as one actor and one step see it (#76, FM-3, FM-7, VT-4, I8).
@@ -66,6 +70,12 @@ export type InstanceView = {
   readonly collapsed: readonly string[]
   /** The values the instance holds, restricted to the visible field keys (FM-3, FM-7). */
   readonly values: Readonly<Record<string, JsonValue>>
+  /**
+   * The version of the instance that this read reflects (I5, #222). A client
+   * sends it back with a completion or a claim, so a stale view is refused at
+   * once rather than overwriting a newer decision.
+   */
+  readonly version: number
 }
 
 /**
@@ -141,6 +151,7 @@ export function readInstance(
     required,
     collapsed,
     values: restrict(current.values, visible),
+    version: current.version ?? 0,
   }
 }
 
@@ -165,6 +176,7 @@ function started(event: Event, instanceId: string): ProjectedInstance {
   const payload = event.payload
   return {
     instanceId,
+    flow: stringField(payload, 'flow'),
     definitionVersion: stringField(payload, 'definitionVersion'),
     assignees: readAssignees(payload.assignees),
     connectorCalls: [],

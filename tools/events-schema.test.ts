@@ -102,6 +102,20 @@ test('#187 the published start schema requires the instance id (DX-1)', () => {
   )
 })
 
+// Issue #222, I4, DF-2: the published start schema carries the flow slug, so an
+// instance names the flow it runs and two flows with identical definitions do
+// not collide.
+
+test('#222 the published start schema requires the flow slug (I4)', () => {
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
+  const payload = started.operation.payload
+  const { flow: startedFlow, ...withoutFlow } = payload
+
+  expect(startedFlow, 'the start payload names the flow').toBe(SLUG)
+  expect(validateStarted(payload), 'the real start payload validates').toBe(true)
+  expect(validateStarted(withoutFlow), 'a payload without the flow is rejected').toBe(false)
+})
+
 // Issue #76, DX-1, #187, I4, FM-7: the published submit schema carries the
 // instance id, exactly as the start schema does, so a reader of an
 // instance.submitted@1 event knows which instance it acts on. The event type

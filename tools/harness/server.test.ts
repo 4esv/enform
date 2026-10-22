@@ -248,6 +248,7 @@ test('#184 a posted intent resolves to the engine operation and keeps the client
     expect(event.actor).toBe('user:sam')
     expect(event.payload).toEqual({
       instanceId: INSTANCE_ID,
+      flow: SLUG,
       definitionVersion: versionV1.contentHash,
       currentStep: 'advisor',
       assignees: [{ step: 'advisor', target: { user: 'user:okafor' }, members: ['user:okafor'] }],
@@ -336,6 +337,7 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
     expect(read.status).toBe(200)
     expect(await read.json()).toEqual({
       instanceId: INSTANCE_ID,
+      version: 0,
       status: {
         step: 2,
         totalSteps: 3,

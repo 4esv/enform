@@ -282,7 +282,7 @@ test('#77 FM-4 the engine path and the completion intent refuse the same submiss
         type: STEP_COMPLETED,
         at: 9,
         actor: SAM,
-        payload: { instanceId: INSTANCE_ID, outcome: 'submit', values },
+        payload: { instanceId: INSTANCE_ID, version: 1, outcome: 'submit', values },
       }),
     })
     expect(response.status).toBe(409)
