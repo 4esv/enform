@@ -27,6 +27,10 @@ const JOURNEY_TITLE = `Browser journey ${RUN}`
 const ADMIN_EMAIL = `browser-admin-${RUN}@test.local`
 const ADMIN_PASSWORD = 'browser-admin-password'
 const OUTSIDER_PASSWORD = 'browser-outsider-password'
+const APPROVER_EMAIL = `browser-approver-${RUN}@test.local`
+const APPROVER_NAME = `Browser Approver ${RUN}`
+const TWO_USER_SLUG = `browser-two-users-${RUN}`
+const TWO_USER_TITLE = `Two users ${RUN}`
 
 type Setup = {
   readonly config: TestConfig
@@ -95,7 +99,12 @@ function requireSetup(): Setup {
 }
 
 /** Sign in on the Keycloak page when the session is absent, then wait for the app. */
-async function signIn(page: Page, publicUrl: string): Promise<void> {
+async function signIn(
+  page: Page,
+  publicUrl: string,
+  email: string = ADMIN_EMAIL,
+  password: string = ADMIN_PASSWORD
+): Promise<void> {
   // A `signIn` on an already signed-in page must not wait for a login form
   // that never appears. The session endpoint shares the browser's cookies, so
   // it answers the question without a timeout.
@@ -103,8 +112,8 @@ async function signIn(page: Page, publicUrl: string): Promise<void> {
   await page.goto(publicUrl)
   if (session.status() === 401) {
     await page.locator('#username').waitFor({ timeout: 30_000 })
-    await page.fill('#username', ADMIN_EMAIL)
-    await page.fill('#password', ADMIN_PASSWORD)
+    await page.fill('#username', email)
+    await page.fill('#password', password)
     await page.click('#kc-login')
   }
   await page.locator('.app-header').waitFor({ timeout: 30_000 })
@@ -346,4 +355,188 @@ test('#226 a person fills, claims, approves and reads the three inbox tabs', asy
       `the outsider reads no ${tab} item`
     ).toBe(false)
   }
+}, 120_000)
+
+test('#228 an administrator creates a second user who claims and approves', async () => {
+  const { browser, config, page, publicUrl } = requireSetup()
+  await signIn(page, publicUrl)
+
+  // The administrator creates the approver in the local directory. The page
+  // shows the immutable id that a builder target names and the password once
+  // (ID-6, ID-4, ADR 0012).
+  await page.goto(`${publicUrl}/?users=1`)
+  await page.getByRole('heading', { name: 'Users' }).waitFor({ timeout: 30_000 })
+  await page.fill('[data-user-email]', APPROVER_EMAIL)
+  await page.fill('[data-user-display-name]', APPROVER_NAME)
+  await page.click('[data-create-user]')
+  const createdId = page.locator('[data-created-id]')
+  await createdId.waitFor({ timeout: 30_000 })
+  const approverId = (await createdId.textContent())?.trim() ?? ''
+  expect(approverId, 'the page shows the created user id').not.toBe('')
+  const createdPassword = page.locator('[data-created-password]')
+  const approverPassword = (await createdPassword.textContent())?.trim() ?? ''
+  expect(approverPassword, 'the page shows the one-time password').not.toBe('')
+  expect(
+    await page.locator('[data-password-once]').textContent(),
+    'the page warns that the password is shown once'
+  ).toContain('shown once')
+  const listed = page.locator('[data-user-row]', { hasText: APPROVER_EMAIL })
+  await listed.waitFor({ timeout: 30_000 })
+  expect(await listed.locator('[data-user-id]').textContent()).toBe(approverId)
+  expect(await listed.locator('[data-user-status]').textContent()).toBe('active')
+
+  // A second creation with the same email is refused and creates nothing
+  // (ID-6). The admin's bearer token is the CLI path to the same API.
+  const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
+  const duplicate = await fetch(`${publicUrl}/api/v1/admin/users`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      email: APPROVER_EMAIL,
+      displayName: APPROVER_NAME,
+      sendInvite: false,
+    }),
+  })
+  expect(duplicate.status, await duplicate.text()).toBe(409)
+
+  // The administrator builds and publishes the two-step flow: the starter
+  // fills `summary` and submits, the created user approves (DF-1, DF-4).
+  await page.goto(`${publicUrl}/?new=1`)
+  await page.getByRole('heading', { name: 'Create a flow' }).waitFor({ timeout: 30_000 })
+  await page.fill('#flow-slug', TWO_USER_SLUG)
+  await page.fill('#flow-title', TWO_USER_TITLE)
+  await page.getByRole('button', { name: 'Create flow' }).click()
+  await page.locator('[data-add-step]').waitFor({ timeout: 30_000 })
+
+  await page.fill('[data-step-index="0"] [data-step-key]', 'request')
+  await page.click('[data-step-index="0"] [data-add-field="0"]')
+  await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-key]', 'summary')
+  await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-label]', 'Summary')
+
+  // A second step makes the first one a middle step, so the request's
+  // outcome is set after the step exists (DF-1, DF-4).
+  await page.click('[data-add-step]')
+  await page.locator('[data-step-index="1"]').waitFor()
+  await page.fill('[data-step-index="0"] [data-outcomes]', 'submit')
+  await page.locator('[data-builder-title]').click()
+  await page.locator('[data-step-index="0"] [data-grant-outcome="submit"]').waitFor()
+
+  await page.fill('[data-step-index="1"] [data-step-key]', 'approve')
+  // Both spellings reach the one immutable id: `user:<id>` normalizes to the
+  // id in the definition and in the grant principal (ID-4).
+  await page.fill('[data-step-index="1"] [data-target="0"]', `user:${approverId}`)
+  await page.locator('[data-builder-title]').click()
+  await page.fill('[data-step-index="1"] [data-outcomes]', 'approve')
+  await page.locator('[data-builder-title]').click()
+  const approverGrant = page.locator('[data-step-index="1"] [data-grant-outcome="approve"]')
+  await approverGrant.waitFor({ timeout: 30_000 })
+  expect(
+    await approverGrant.getAttribute('data-grant-principal'),
+    'the grant names the created user id'
+  ).toBe(approverId)
+
+  await page.click('[data-save]')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-builder-status]')?.textContent?.startsWith('Saved')
+  )
+  await page.click('[data-publish]')
+  await page.waitForFunction(() =>
+    document.querySelector('[data-published]')?.textContent?.includes('Published version 1')
+  )
+
+  // The request submits to the starter; the approval approves to the approver
+  // (AC-4). Both grants post through the write path.
+  await grantOutcomes(page, 0)
+  await grantOutcomes(page, 1)
+
+  // The administrator fills and starts the form, then claims and submits the
+  // request step (FM-7, AS-2).
+  await page.goto(`${publicUrl}/?flow=${TWO_USER_SLUG}`)
+  const summary = page.locator('input[name="summary"]')
+  await summary.waitFor({ timeout: 30_000 })
+  await summary.fill('Please approve the two-user request')
+  await page.click('[data-start]')
+  const link = page.locator('.instance-link a')
+  await link.waitFor({ timeout: 30_000 })
+  const href = await link.getAttribute('href')
+  if (href === null) throw new Error('the start page showed no instance link')
+  const instanceId = instanceOfHref(href, publicUrl)
+  const taskUrl = new URL(href, publicUrl).toString()
+
+  await page.goto(taskUrl)
+  await page.locator('[data-claim]').waitFor({ timeout: 30_000 })
+  await page.click('[data-claim]')
+  await page.waitForFunction(() => document.querySelector('.status')?.textContent === 'Claimed')
+  await page.click('[data-outcome="submit"]')
+  await page.waitForFunction(() =>
+    document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
+  )
+
+  // The approver signs in in a browser context of their own. The approval is
+  // in Available, and following it opens the claim at the task page (VT-1,
+  // VT-2, AS-2).
+  const approverToken = await passwordToken(config, APPROVER_EMAIL, approverPassword)
+  const context = await browser.newContext()
+  const approver = await context.newPage()
+  try {
+    await signIn(approver, publicUrl, APPROVER_EMAIL, approverPassword)
+    await approver.goto(`${publicUrl}/?inbox=1&tab=available`)
+    const availableItem = approver.locator(`[data-inbox-instance="${instanceId}"]`)
+    await availableItem.waitFor({ timeout: 30_000 })
+    expect(await availableItem.getAttribute('data-inbox-state')).toBe('unopened')
+    await availableItem.click()
+    await approver.locator('[data-claim]').waitFor({ timeout: 30_000 })
+    expect(await approver.textContent('.instance-status')).toContain('Step 2 of 2')
+
+    await approver.click('[data-claim]')
+    await approver.waitForFunction(
+      () => document.querySelector('.status')?.textContent === 'Claimed'
+    )
+
+    // The version the approver read before the approval is the stale one after
+    // it, so a second approval with it is refused (I5).
+    const before = await fetch(`${publicUrl}/api/v1/instances/${instanceId}`, {
+      headers: { authorization: `Bearer ${approverToken}` },
+    })
+    const readBefore = (await before.json()) as { version: number }
+    expect(before.status, 'the approver reads the approval').toBe(200)
+
+    await approver.locator('[data-outcome="approve"]').waitFor({ timeout: 30_000 })
+    await approver.click('[data-outcome="approve"]')
+    await approver.locator('[data-done]').waitFor({ timeout: 30_000 })
+
+    const stale = await fetch(`${publicUrl}/api/v1/operations`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${approverToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: randomUUID(),
+        type: 'step.completed@1',
+        at: Date.now(),
+        actor: 'ignored',
+        payload: {
+          instanceId,
+          version: readBefore.version,
+          outcome: 'approve',
+          values: {},
+        },
+      }),
+    })
+    expect(stale.status, await stale.text()).toBe(409)
+
+    // The approver's inbox no longer holds the open task (VT-1).
+    await approver.goto(`${publicUrl}/?inbox=1&tab=my`)
+    await approver.locator('[data-inbox-tab="my"]').waitFor({ timeout: 30_000 })
+    expect(
+      await approver.locator(`[data-inbox-instance="${instanceId}"]`).count(),
+      'the approved task left the approver inbox'
+    ).toBe(0)
+  } finally {
+    await context.close()
+  }
+
+  // The administrator reads the instance as done (VT-1, FM-3).
+  await page.goto(taskUrl)
+  const done = page.locator('[data-done]')
+  await done.waitFor({ timeout: 30_000 })
+  expect(await done.textContent()).toBe('Done')
 }, 120_000)
