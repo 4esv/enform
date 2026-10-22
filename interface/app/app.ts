@@ -196,6 +196,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
             actor: options.actor,
             payload: {
               instanceId,
+              version: view.version,
               outcome,
               values: readValues(),
             },

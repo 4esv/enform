@@ -41,12 +41,15 @@ export interface StartIntent {
 /**
  * A completion intent (ADR 0010, FM-3, FM-4): the parts a client can honestly send when the
  * holder completes the current step. It carries the operation ID it chose (I1), the event type
- * `step.completed@1`, the actor, the instance it acts on (DX-1), the outcome the actor chose
- * (AC-4) and the values the step captured (FM-7). The server resolves the current step, the
- * transition, the outcome's authorization and the editability of every captured field through
- * the engine before it appends, so the client names no step. It is told apart from an already
- * resolved `step.completed@1` operation by the payload: an intent names no `step`, a resolved
- * operation carries it.
+ * `step.completed@1`, the actor, the instance it acts on (DX-1), the version of the instance it
+ * read (I5), the outcome the actor chose (AC-4) and the values the step captured (FM-7). The
+ * server resolves the current step, the transition, the outcome's authorization and the
+ * editability of every captured field through the engine before it appends, so the client names
+ * no step. It is told apart from an already resolved `step.completed@1` operation by the
+ * payload: an intent names no `step`, a resolved operation carries it. The `/operations`
+ * description also covers a claim: a `step.claimed@1` intent carries the instance and the
+ * version it read as `expectedVersion`, and the server applies it through the engine and
+ * records no `expectedVersion` on the log.
  */
 export interface CompletionIntent {
   readonly id: OperationId
@@ -114,6 +117,7 @@ export interface Status {
  */
 export interface InstanceView {
   readonly instanceId: string
+  readonly version: number
   readonly status: Status
   readonly visible: readonly string[]
   readonly editable: readonly string[]
@@ -469,9 +473,9 @@ export async function readInbox(tab?: string): Promise<readonly InboxItem[]> {
   return (await response.json()) as readonly InboxItem[]
 }
 
-export async function readInstance(instanceId: string, actor: string): Promise<InstanceView> {
+export async function readInstance(instanceId: string, actor?: string): Promise<InstanceView> {
   const query = new URLSearchParams()
-  query.set('actor', String(actor))
+  if (actor !== undefined) query.set('actor', String(actor))
   const search = query.size === 0 ? '' : `?${query}`
   const url = `${configured().baseUrl}/api/v1/instances/${instanceId}${search}`
   const response = await fetch(url, {

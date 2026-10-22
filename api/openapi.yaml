@@ -128,12 +128,13 @@ paths:
         (I4) and authorizes the read with the same rule as a write (AC-1): the
         starter, an assignee, or a principal that holds `instance.read` on the
         flow. The response holds the status line (VT-1, VT-2), the field keys
-        the current step makes visible and editable (FM-3), and the values the
+        the current step makes visible and editable (FM-3), the values the
         instance holds restricted to the visible keys, so a field the step
-        does not make visible is absent from the response (FM-3 criterion 1).
-        The actor is a required query parameter, because the harness has no
-        real authentication and the interface already carries the principal
-        that way.
+        does not make visible is absent from the response (FM-3 criterion 1),
+        and the instance `version` that a client sends with a completion or a
+        claim (I5). The session identifies the actor. `actor` stays as an
+        optional harness compatibility seam; the production route authorizes
+        with the session principal and ignores it.
       parameters:
         - name: instanceId
           in: path
@@ -143,8 +144,12 @@ paths:
             type: string
         - name: actor
           in: query
-          required: true
-          description: The principal that reads the instance (ID-4).
+          required: false
+          description: >-
+            The harness compatibility seam (ADR 0012). The production route
+            authorizes with the session principal and ignores this parameter,
+            which the interface will stop sending when it uses sessions end to
+            end.
           schema:
             type: string
       responses:
@@ -930,10 +935,18 @@ components:
         - required
         - collapsed
         - values
+        - version
       properties:
         instanceId:
           type: string
           description: The id of the instance the view describes (DX-1, #187).
+        version:
+          type: integer
+          minimum: 0
+          description: >-
+            The version of the instance that this read reflects (I5). A client
+            sends it back with a completion or a claim, so a stale view is
+            refused at once.
         status:
           $ref: '#/components/schemas/Status'
         visible:

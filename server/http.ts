@@ -32,12 +32,13 @@ import {
   createFlow,
   type Flow,
   publish,
+  publishedByHash,
   publishedFlow,
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
 import { grantsOf } from '../engine/grants.js'
-import { instanceOf } from '../engine/instances.js'
+import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
@@ -417,6 +418,50 @@ export function createApp(config: Config, pool: Pool): Hono {
       return c.json({ error: 'the body needs an operation' }, 400)
     }
     return serveOperation(c, pool, auth, body)
+  })
+
+  app.get('/api/v1/log', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    return c.json(await readLog(pool))
+  })
+
+  app.get('/api/v1/state', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const log = await readLog(pool)
+    return c.json({ applied: log.map((event) => event.operationId), log })
+  })
+
+  app.get('/api/v1/instances/:instanceId', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const log = await readLog(pool)
+    const instance = instanceOf(log, c.req.param('instanceId'))
+    if (instance === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const published = publishedByHash(log, instance.definitionVersion)
+    if (published === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    // The session identifies the actor. The optional `actor` query parameter is
+    // the harness compatibility seam and is ignored here (#222).
+    const view = readInstance(
+      auth.principal.id,
+      instance,
+      {
+        flow: instance.flow,
+        definition: published.definition,
+        log,
+        grants: grantsFor(log, auth.principal),
+      },
+      resolverFor(instance.starter, instance.values ?? {}, await teamMembersFor(pool, log))
+    )
+    if (view === undefined) {
+      return c.json({ error: 'the principal may not read the instance' }, 403)
+    }
+    return c.json(view)
   })
 
   app.all('*', (c) => c.json({ error: 'not found in this slice' }, 404))
