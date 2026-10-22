@@ -213,16 +213,20 @@ export function definitionToOperation(definition: FlowDefinition, deps: Operatio
 /**
  * Convert the operation that records a definition back to a definition (I9).
  * It is the inverse of `definitionToOperation`, so a definition survives the
- * trip to the log and back unchanged.
+ * trip to the log and back unchanged. The flow lifecycle names the changed
+ * flow on the operation (`{ flow, definition }`, flow.ts), while
+ * `definitionToOperation` writes the definition alone; both shapes read back
+ * here.
  */
 export function definitionFromOperation(operation: Operation): FlowDefinition {
   if (operation.type !== DEFINITION_CHANGED) {
     throw new Error(`flow definition: ${operation.type} is not ${DEFINITION_CHANGED}`)
   }
-  // SAFETY: the type check above admits only a definition change, and
-  // definitionToOperation is the only writer of its payload, so the payload is
-  // the FlowDefinition that the operation recorded.
-  return operation.payload as unknown as FlowDefinition
+  const payload = operation.payload
+  // SAFETY: a lifecycle push carries the definition under `definition`
+  // (flow.ts), and every other writer writes the FlowDefinition itself. A
+  // definition has no top-level `definition` key, so the two cannot collide.
+  return (isRecord(payload.definition) ? payload.definition : payload) as unknown as FlowDefinition
 }
 
 /**

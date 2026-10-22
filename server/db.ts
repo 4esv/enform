@@ -4,12 +4,20 @@
 // operational state that expires (ADR 0013). A write appends the event, updates
 // the projections its type feeds and commits in one transaction (I2); a retry
 // with the same operation id writes nothing (I1).
+//
+// Issue #220, DF-1, DF-2, DF-4: `flows` and `flow_versions` project the flow
+// lifecycle. A definition change names its flow, a publication names its slug,
+// and the title change names its flow, so a rebuild folds the draft, the list
+// and the published versions from the log alone (I4).
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Client, escapeIdentifier, Pool, type PoolClient } from 'pg'
 import type { Grant } from '../engine/authorize.js'
+import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../engine/definition.js'
+import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow } from '../engine/flow.js'
 import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
+import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 
@@ -22,6 +30,23 @@ export type Principal = {
   readonly displayName: string
   readonly email?: string
   readonly groups: readonly string[]
+}
+
+/** One flow in the list, from the `flows` projection (#220, DF-2, DF-4). */
+export type FlowSummaryRow = {
+  readonly slug: string
+  readonly title?: string
+  readonly draftVersion: number
+  readonly publishedVersion?: number
+  readonly updatedAt: number
+}
+
+/** The draft and the published versions of one flow, from the projections (#220). */
+export type StoredFlow = {
+  readonly flow: Flow
+  readonly title?: string
+  readonly draftVersion: number
+  readonly updatedAt: number
 }
 
 /** One server-side session row (ADR 0012). */
@@ -192,6 +217,108 @@ export async function rebuild(pool: Pool): Promise<number> {
     throw error
   } finally {
     client.release()
+  }
+}
+
+/** Read the append-only log, in order (I4). It is the engine's `Log`. */
+export async function readLog(pool: Pool): Promise<readonly Event[]> {
+  const result = await pool.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>('select seq, operation_id, type, at, actor, payload from events order by seq')
+  return result.rows.map((row) => ({
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }))
+}
+
+/** Whether the projection holds a flow with this slug (#220, DF-1). */
+export async function flowExists(pool: Pool, slug: string): Promise<boolean> {
+  const result = await pool.query('select 1 from flows where slug = $1', [slug])
+  return result.rowCount !== 0
+}
+
+/**
+ * The flows of the installation, newest activity first (#220, DF-1, DF-2,
+ * DF-4). The draft version is the version that the current draft would publish
+ * as: the newest published version plus one, or 1 when nothing is published.
+ * A row with no draft is not a flow that the builder can open, so the list
+ * leaves it out.
+ */
+export async function listFlowSummaries(pool: Pool): Promise<readonly FlowSummaryRow[]> {
+  const result = await pool.query<{
+    slug: string
+    title: string | null
+    draft_version: number
+    published_version: number | null
+    updated_at: string
+  }>(
+    `select f.slug, f.title, f.draft_version, f.updated_at,
+            (select max(v.version) from flow_versions v where v.slug = f.slug) as published_version
+     from flows f
+     where f.draft is not null
+     order by f.updated_at desc, f.slug asc`
+  )
+  return result.rows.map((row) => ({
+    slug: row.slug,
+    ...(row.title === null ? {} : { title: row.title }),
+    draftVersion: Number(row.draft_version),
+    ...(row.published_version === null ? {} : { publishedVersion: Number(row.published_version) }),
+    updatedAt: Number(row.updated_at),
+  }))
+}
+
+/**
+ * Read one flow's draft and published versions from the projections (#220,
+ * DF-1, DF-2). An unknown slug gives undefined. The definitions go through the
+ * engine's parser, so a corrupt row fails with the engine's error.
+ */
+export async function readFlowProjection(
+  pool: Pool,
+  slug: string
+): Promise<StoredFlow | undefined> {
+  const result = await pool.query<{
+    title: string | null
+    draft: unknown
+    draft_version: number
+    updated_at: string
+  }>('select title, draft, draft_version, updated_at from flows where slug = $1', [slug])
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  const versions = await pool.query<{
+    version: number
+    content_hash: string
+    definition: unknown
+  }>(
+    'select version, content_hash, definition from flow_versions where slug = $1 order by version',
+    [slug]
+  )
+  return {
+    flow: {
+      slug,
+      ...(row.draft === null || row.draft === undefined
+        ? {}
+        : { draft: readStoredDefinition(row.draft, `draft of ${slug}`) }),
+      versions: versions.rows.map((version) => ({
+        version: version.version,
+        contentHash: version.content_hash,
+        definition: readStoredDefinition(
+          version.definition,
+          `version ${version.version} of ${slug}`
+        ),
+      })),
+    },
+    ...(row.title === null ? {} : { title: row.title }),
+    draftVersion: Number(row.draft_version),
+    updatedAt: Number(row.updated_at),
   }
 }
 
@@ -388,6 +515,66 @@ export async function takeOidcAttempt(
 
 /** Update the projections that one event feeds. A type this slice does not read projects nothing. */
 async function projectEvent(client: PoolClient, event: Event): Promise<void> {
+  if (event.type === DEFINITION_CHANGED) {
+    const change = readDefinitionChange(event)
+    const draftVersion = await nextDraftVersion(client, change.flow)
+    await client.query(
+      `insert into flows (slug, draft, draft_hash, draft_version, updated_at, seq)
+       values ($1, $2::jsonb, $3, $4, $5, $6)
+       on conflict (slug) do update
+         set draft = excluded.draft,
+             draft_hash = excluded.draft_hash,
+             draft_version = excluded.draft_version,
+             updated_at = greatest(flows.updated_at, excluded.updated_at),
+             seq = excluded.seq`,
+      [
+        change.flow,
+        JSON.stringify(change.definition),
+        contentHash(change.definition),
+        draftVersion,
+        event.at,
+        event.seq,
+      ]
+    )
+    return
+  }
+  if (event.type === DEFINITION_PUBLISHED) {
+    const publication = readPublication(event)
+    await client.query(
+      `insert into flow_versions (slug, version, content_hash, definition, published_at, seq)
+       values ($1, $2, $3, $4::jsonb, $5, $6)
+       on conflict (slug, version) do nothing`,
+      [
+        publication.slug,
+        publication.version,
+        publication.contentHash,
+        JSON.stringify(publication.definition),
+        event.at,
+        event.seq,
+      ]
+    )
+    const draftVersion = await nextDraftVersion(client, publication.slug)
+    await client.query(
+      `insert into flows (slug, draft_version, updated_at, seq)
+       values ($1, $2, $3, $4)
+       on conflict (slug) do update
+         set draft_version = excluded.draft_version,
+             updated_at = greatest(flows.updated_at, excluded.updated_at),
+             seq = excluded.seq`,
+      [publication.slug, draftVersion, event.at, event.seq]
+    )
+    return
+  }
+  if (event.type === FLOW_TITLE) {
+    const change = readTitleChange(event)
+    await client.query(
+      `update flows
+       set title = $2, updated_at = greatest(updated_at, $3), seq = $4
+       where slug = $1`,
+      [change.flow, change.title, event.at, event.seq]
+    )
+    return
+  }
   if (event.type === GRANT_CHANGE_TYPE) {
     const grant = readGrant(event)
     await client.query(
@@ -426,6 +613,76 @@ function readGrant(event: Event): Grant {
     throw new Error(`events: malformed ${GRANT_CHANGE_TYPE} payload at seq ${event.seq}`)
   }
   return { principal, scopes, resource }
+}
+
+/** Read one definition change from a `config.definition.changed@1` event (#220). */
+function readDefinitionChange(event: Event): { flow: string; definition: FlowDefinition } {
+  const { flow, definition } = event.payload
+  if (typeof flow !== 'string' || !isRecord(definition)) {
+    throw new Error(`events: malformed ${DEFINITION_CHANGED} payload at seq ${event.seq}`)
+  }
+  return { flow, definition: readStoredDefinition(definition, `event at seq ${event.seq}`) }
+}
+
+/** Read one publication from a `config.definition.published@1` event (DF-2). */
+function readPublication(event: Event): {
+  slug: string
+  version: number
+  contentHash: string
+  definition: FlowDefinition
+} {
+  const { slug, version, contentHash: hash, definition } = event.payload
+  if (
+    typeof slug !== 'string' ||
+    typeof version !== 'number' ||
+    typeof hash !== 'string' ||
+    !isRecord(definition)
+  ) {
+    throw new Error(`events: malformed ${DEFINITION_PUBLISHED} payload at seq ${event.seq}`)
+  }
+  return {
+    slug,
+    version,
+    contentHash: hash,
+    definition: readStoredDefinition(definition, `event at seq ${event.seq}`),
+  }
+}
+
+/** Read one title change from a `config.flow.title@1` event (#220). */
+function readTitleChange(event: Event): { flow: string; title: string } {
+  const { flow, title } = event.payload
+  if (typeof flow !== 'string' || typeof title !== 'string') {
+    throw new Error(`events: malformed ${FLOW_TITLE} payload at seq ${event.seq}`)
+  }
+  return { flow, title }
+}
+
+/** Parse one stored definition through the engine, or name the row that is malformed. */
+function readStoredDefinition(value: unknown, label: string): FlowDefinition {
+  try {
+    return parse(JSON.stringify(value))
+  } catch (error) {
+    throw new Error(`db: malformed definition in ${label}: ${messageOf(error)}`)
+  }
+}
+
+/** The version that the current draft would publish as (#220, DF-2). */
+async function nextDraftVersion(client: PoolClient, slug: string): Promise<number> {
+  const result = await client.query<{ next: number }>(
+    'select coalesce(max(version), 0) + 1 as next from flow_versions where slug = $1',
+    [slug]
+  )
+  return Number(result.rows[0].next)
+}
+
+/** Whether a value is a JSON object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The message of an unknown error. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** Read one profile from an `identity.principal.updated@1` event. */

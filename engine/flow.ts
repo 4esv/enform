@@ -1,5 +1,6 @@
 // Issue #38, S01, DF-1, DF-2, DF-4, VT-6, I9, I13, I14: the flow lifecycle.
 // Issue #40, S03, DF-5, D2, AC-1: the scope guard on a push.
+// Issue #220, #218, I4, I14: the flow slug on a definition change and the title.
 //
 // A flow has one draft definition and, once published, immutable versions
 // (DF-1, DF-2). `push` replaces the draft and records one
@@ -16,7 +17,7 @@
 
 import { authorize, type Grant } from './authorize.js'
 import { configOperation } from './config.js'
-import { type FlowDefinition, parse, serialize } from './definition.js'
+import { type FlowDefinition, parse, SCHEMA_VERSION, serialize } from './definition.js'
 import { classifyChange, type DefinitionChange } from './edit.js'
 import { contentHash } from './instance.js'
 import {
@@ -29,6 +30,20 @@ import {
 
 /** The versioned event type of a publication (DF-2, VT-6). */
 export const DEFINITION_PUBLISHED = 'config.definition.published@1'
+
+/**
+ * The versioned event type of a flow title change (#220, I14). The definition
+ * format has no title, so the title that the builder shows is configuration
+ * beside the definition, attributed and on the log like every change that
+ * affects behavior.
+ */
+export const FLOW_TITLE = 'config.flow.title@1'
+
+/** The payload of a title change: the flow slug and the title (#220, I14). */
+export type FlowTitlePayload = {
+  readonly flow: string
+  readonly title: string
+}
 
 /** One immutable published version of a flow (DF-2). */
 export type FlowVersion = {
@@ -84,6 +99,33 @@ export function createFlow(slug: string): Flow {
 }
 
 /**
+ * The definition that a new flow starts from (DF-1, #220). One step assigns to
+ * the starter, so the new flow is valid and the author edits it into shape.
+ * `enform flow init` writes it and `POST /api/v1/flows` pushes it, so a flow
+ * created from the CLI and one created through the API start the same way.
+ */
+export const STARTER_DEFINITION: FlowDefinition = {
+  schemaVersion: SCHEMA_VERSION,
+  steps: [{ key: 'start', targets: [{ starter: 'starter' }] }],
+}
+
+/**
+ * Record one change to a flow's title (#220, I14). The title is not part of the
+ * definition format, so it is a configuration change beside the definition,
+ * attributed to the actor and on the log like every change that affects
+ * behavior.
+ */
+export function changeTitle(
+  flow: string,
+  title: string,
+  deps: OperationDeps,
+  actor: ActorId
+): Operation {
+  const payload: FlowTitlePayload = { flow, title }
+  return createOperation(FLOW_TITLE, payload, deps, actor)
+}
+
+/**
  * Validate a definition file (DF-1). It parses the file and returns the
  * definition; an invalid file throws with the error that names the offending
  * field. It reads no state and writes none.
@@ -94,8 +136,10 @@ export function validate(text: string): FlowDefinition {
 
 /**
  * Push a definition to the draft (DF-4, I14). One config.definition.changed@1
- * operation records the change, attributed to the actor. The draft becomes the
- * pushed definition; the published versions stay as they were.
+ * operation records the change, attributed to the actor, and names the flow
+ * that it changes so a projection can key the draft by slug (#220, I4). The
+ * draft becomes the pushed definition; the published versions stay as they
+ * were.
  *
  * `grants` are the scopes that apply to the acting principal (AC-1). When they
  * are given, the push is scope-guarded (DF-5, D2): an edit-class change needs
@@ -112,7 +156,13 @@ export function push(
   grants?: readonly Grant[]
 ): PushedFlow {
   if (grants !== undefined) assertPushAllowed(flow, definition, grants)
-  const operation = configOperation({ kind: 'definition', actor, payload: definition }, deps)
+  // The change names its flow (#220), so a projection can fold the draft by
+  // slug (I4). Before this, the payload was the bare definition and the log
+  // could not say which flow it changed.
+  const operation = configOperation(
+    { kind: 'definition', actor, payload: { flow: flow.slug, definition } },
+    deps
+  )
   return { flow: { ...flow, draft: definition }, operation }
 }
 
@@ -124,23 +174,54 @@ export function push(
  * changes (D2). The error names the structural changes and the scope they need.
  */
 function assertPushAllowed(flow: Flow, definition: FlowDefinition, grants: readonly Grant[]): void {
-  const resource = `flow:${flow.slug}`
   const changes: readonly DefinitionChange[] =
     flow.draft === undefined
       ? [{ class: 'structural', message: 'the first draft was created' }]
       : classifyChange(flow.draft, definition)
+  assertChangeAllowed('push', `flow:${flow.slug}`, changes, grants)
+}
+
+/**
+ * Authorize one publication against the acting principal's grants (DF-5, D2,
+ * AC-1, I8). The change that a publication freezes is the difference from the
+ * newest published version; the first publication is structural. A structural
+ * change needs `flow.build`, an edit-class change needs `flow.edit` or
+ * `flow.build`, and the error names the change and the scope.
+ */
+function assertPublishAllowed(
+  flow: Flow,
+  definition: FlowDefinition,
+  grants: readonly Grant[]
+): void {
+  const latest = flow.versions[flow.versions.length - 1]
+  const changes: readonly DefinitionChange[] =
+    latest === undefined
+      ? [{ class: 'structural', message: 'the first publication created the flow' }]
+      : classifyChange(latest.definition, definition)
+  assertChangeAllowed('publish', `flow:${flow.slug}`, changes, grants)
+}
+
+/** Refuse a flow change whose class the acting principal may not make (DF-5, D2). */
+function assertChangeAllowed(
+  action: 'push' | 'publish',
+  resource: string,
+  changes: readonly DefinitionChange[],
+  grants: readonly Grant[]
+): void {
   const structural = changes.filter((change) => change.class === 'structural')
   if (structural.length > 0) {
     if (!authorize(grants, 'flow.build', resource)) {
       const named = structural.map((change) => change.message).join('; ')
       throw new Error(
-        `flow: the push makes a structural change (${named}); it requires the scope flow.build`
+        `flow: the ${action} makes a structural change (${named}); it requires the scope flow.build`
       )
     }
     return
   }
   if (!authorize(grants, 'flow.edit', resource) && !authorize(grants, 'flow.build', resource)) {
-    throw new Error('flow: the push makes an edit-class change; it requires the scope flow.edit')
+    throw new Error(
+      `flow: the ${action} makes an edit-class change; it requires the scope flow.edit`
+    )
   }
 }
 
@@ -150,12 +231,24 @@ function assertPushAllowed(flow: Flow, definition: FlowDefinition, grants: reado
  * hash and the frozen definition, attributed to the actor. The frozen
  * definition is a fresh parse, so a later change to the draft cannot reach the
  * version; a later push opens a new draft.
+ *
+ * `grants` are the scopes that apply to the acting principal (AC-1). When they
+ * are given, the publication is scope-guarded (DF-5, D2): the change since the
+ * newest published version decides the scope, and a refusal names the change
+ * and the scope. When they are absent the engine publishes unchecked; the CLI
+ * and the lifecycle tests use that path.
  */
-export function publish(flow: Flow, deps: OperationDeps, actor: ActorId): PublishedFlow {
+export function publish(
+  flow: Flow,
+  deps: OperationDeps,
+  actor: ActorId,
+  grants?: readonly Grant[]
+): PublishedFlow {
   const draft = flow.draft
   if (draft === undefined) {
     throw new Error('flow: the draft is empty; push a definition before publishing')
   }
+  if (grants !== undefined) assertPublishAllowed(flow, draft, grants)
   const frozen = parse(serialize(draft))
   const version = flow.versions.length + 1
   const hash = contentHash(frozen)

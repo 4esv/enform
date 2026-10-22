@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/config.flow.title@1.json",
+  "title": "enform config.flow.title@1 event payload",
+  "description": "The payload of a config.flow.title@1 event (#220, I14). The flow definition format has no title (schemas/flow/v2.json), so the title that the builder shows is one attributed configuration change beside the definition. The event names the flow by its slug and the title that the builder shows; a projection folds the newest title into the flow list, and a rebuild reproduces it from the log (I4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["flow", "title"],
+  "properties": {
+    "flow": {
+      "description": "The slug of the flow whose title changed (ID-1).",
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "description": "The name that the builder shows for the flow (#220).",
+      "type": "string"
+    }
+  }
+}

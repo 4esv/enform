@@ -56,9 +56,17 @@ export const publishedV2 = {
 export const golden = scenario({
   slug: 'add-field-live',
   steps: [
-    { actor: 'dana', type: 'config.definition.changed@1', payload: draftV1 },
+    {
+      actor: 'dana',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: draftV1 },
+    },
     { actor: 'dana', type: 'config.definition.published@1', payload: publishedV1 },
-    { actor: 'dana', type: 'config.definition.changed@1', payload: draftV2 },
+    {
+      actor: 'dana',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: draftV2 },
+    },
     { actor: 'dana', type: 'config.definition.published@1', payload: publishedV2 },
   ],
 })

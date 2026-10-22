@@ -52,7 +52,11 @@ const fields: readonly Field[] = definition.steps.flatMap((step) => step.fields 
 const golden = scenario({
   slug: 'data-flow',
   steps: [
-    { actor: 'sam', type: 'config.definition.changed@1', payload: definition },
+    {
+      actor: 'sam',
+      type: 'config.definition.changed@1',
+      payload: { flow: 'data-flow', definition },
+    },
     { actor: 'sam', type: 'instance.submitted@1', payload: { data: {} } },
   ],
 })

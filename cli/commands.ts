@@ -13,9 +13,16 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ConditionData } from '../engine/condition.js'
-import { type FlowDefinition, parse, SCHEMA_VERSION, serialize } from '../engine/definition.js'
+import { type FlowDefinition, parse, serialize } from '../engine/definition.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
-import { type Flow, type FlowVersion, publish, push, validate } from '../engine/flow.js'
+import {
+  type Flow,
+  type FlowVersion,
+  publish,
+  push,
+  STARTER_DEFINITION,
+  validate,
+} from '../engine/flow.js'
 import type { ActorId, OperationDeps } from '../engine/operation.js'
 import type { RunSources } from '../engine/run.js'
 import { versionDiff } from '../engine/version.js'
@@ -54,16 +61,6 @@ const CLI_DEPS: OperationDeps = { clock: () => 0, ids: () => 'cli' }
  * (A6), so the run writes no event and reads neither injected source.
  */
 const DRY_SOURCES: RunSources = { clock: () => 0, ids: () => '', sink: 'dry' }
-
-/**
- * The minimal definition that `flow init` writes for a new draft (DF-1). One
- * step assigns to the starter, so the file is a valid flow the author edits
- * into shape.
- */
-const STARTER_DEFINITION: FlowDefinition = {
-  schemaVersion: SCHEMA_VERSION,
-  steps: [{ key: 'start', targets: [{ starter: 'starter' }] }],
-}
 
 /**
  * Run one `enform` command line synchronously and return its exit code. The

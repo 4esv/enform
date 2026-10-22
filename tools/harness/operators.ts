@@ -590,7 +590,7 @@ function insertVersion(
   const change: Step = {
     actor: versioning.actor,
     type: DEFINITION_CHANGED,
-    payload: versioning.definition,
+    payload: { flow: versioning.slug, definition: versioning.definition },
   }
   const publication: Step = {
     actor: versioning.actor,

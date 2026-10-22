@@ -51,6 +51,8 @@ test('#38 the lifecycle publishes an immutable version and pins an instance to v
   // without changing the flow (DF-1, DF-4).
   let flow = createFlow('course-overload')
   const first = push(flow, draftV1, stepDeps(0), 'dana')
+  // The change names its flow, so a projection can key the draft by slug (I4, #220).
+  expect(first.operation.payload).toEqual({ flow: 'course-overload', definition: draftV1 })
   flow = first.flow
   expect(flow.draft).toEqual(draftV1)
   expect(validate(serialize(draftV1))).toEqual(draftV1)

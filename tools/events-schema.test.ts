@@ -5,7 +5,7 @@ import { expect, test } from 'vitest'
 import type { Grant } from '../engine/authorize.js'
 import type { ConditionData } from '../engine/condition.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
-import type { Flow } from '../engine/flow.js'
+import { changeTitle, type Flow } from '../engine/flow.js'
 import { contentHash } from '../engine/instance.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
@@ -67,6 +67,9 @@ const validateStarted = ajv.compile(
 const validateSubmitted = ajv.compile(
   JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.submitted@1.json'), 'utf8'))
 )
+const validateTitle = ajv.compile(
+  JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'config.flow.title@1.json'), 'utf8'))
+)
 
 test('#177 FM-7 the published event schemas match the payloads the engine writes', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
@@ -117,4 +120,19 @@ test('#76 the published submit schema requires the instance id (DX-1)', () => {
     validateSubmitted(withoutInstanceId),
     'a payload without the instance id is rejected'
   ).toBe(false)
+})
+
+// Issue #220, I14, DX-1: the published title schema matches the payload the
+// engine writes. The definition format has no title, so the builder's title is
+// one attributed configuration change beside the definition, and a client
+// builds that operation from the published schema.
+
+test('#220 the published title schema matches the payload the engine writes', () => {
+  const operation = changeTitle(SLUG, 'Course overload', deps(), SAM)
+
+  expect(operation.type).toBe('config.flow.title@1')
+  expect(operation.actor, 'the title change is attributed').toBe(SAM)
+  expect(validateTitle(operation.payload), 'the real title payload validates').toBe(true)
+  expect(validateTitle({ flow: SLUG }), 'a payload without the title is rejected').toBe(false)
+  expect(validateTitle({ flow: SLUG, title: 7 }), 'a non-string title is rejected').toBe(false)
 })

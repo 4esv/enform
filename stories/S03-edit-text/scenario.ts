@@ -58,7 +58,15 @@ export const priyaGrant: Grant = { principal: 'user:priya', scopes: ['flow.edit'
 export const golden = scenario({
   slug: 'edit-text',
   steps: [
-    { actor: 'dana', type: 'config.definition.changed@1', payload: draft },
-    { actor: 'user:priya', type: 'config.definition.changed@1', payload: edited },
+    {
+      actor: 'dana',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: draft },
+    },
+    {
+      actor: 'user:priya',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: edited },
+    },
   ],
 })

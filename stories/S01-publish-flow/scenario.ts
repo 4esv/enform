@@ -10,6 +10,9 @@ import { scenario } from '../../tools/harness/scenario.js'
 // (DF-1), so it is not a step; the scenario test calls `validate` directly. The
 // path is deterministic (I6): it reads no clock and no random source.
 
+/** The flow slug of the pilot flow (ID-1). */
+const SLUG = 'course-overload'
+
 /** The first draft of the pilot flow, from its file (DF-1). */
 export const draftV1 = parse(`{
   "schemaVersion": 1,
@@ -33,7 +36,7 @@ export const draftV2 = parse(`{
 
 /** The publication of version 1: the slug, the version, the hash and the frozen definition. */
 export const publishedV1 = {
-  slug: 'course-overload',
+  slug: SLUG,
   version: 1,
   contentHash: contentHash(draftV1),
   definition: draftV1,
@@ -42,8 +45,16 @@ export const publishedV1 = {
 export const golden = scenario({
   slug: 'publish-flow',
   steps: [
-    { actor: 'dana', type: 'config.definition.changed@1', payload: draftV1 },
+    {
+      actor: 'dana',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: draftV1 },
+    },
     { actor: 'dana', type: 'config.definition.published@1', payload: publishedV1 },
-    { actor: 'dana', type: 'config.definition.changed@1', payload: draftV2 },
+    {
+      actor: 'dana',
+      type: 'config.definition.changed@1',
+      payload: { flow: SLUG, definition: draftV2 },
+    },
   ],
 })
