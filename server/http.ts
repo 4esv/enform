@@ -1,4 +1,4 @@
-// Issue #214, DE-1, DE-3, ID-4, ID-5, ID-6, ADR 0011, ADR 0012: the HTTP
+// Issue #216, DE-1, DE-3, ID-4, ID-5, ID-6, ADR 0011, ADR 0012: the HTTP
 // server. It answers the liveness, readiness and version surfaces of DE-3 and
 // the session and sign-in surfaces of ADR 0012. The browser authenticates with
 // the server-side session cookie and the CLI with a bearer token; both map to

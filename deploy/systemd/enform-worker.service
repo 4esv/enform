@@ -1,4 +1,4 @@
-# Issue #214, DE-3, ADR 0011, ADR 0013: the worker unit of a bare-metal
+# Issue #216, DE-3, ADR 0011, ADR 0013: the worker unit of a bare-metal
 # installation. It runs the same binary and reads the same configuration as the
 # server, as the same unprivileged user.
 [Unit]

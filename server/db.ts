@@ -1,4 +1,4 @@
-// Issue #214, I1, I2, I4, I5, I14, ADR 0004, ADR 0012, ADR 0013: the thin SQL
+// Issue #216, I1, I2, I4, I5, I14, ADR 0004, ADR 0012, ADR 0013: the thin SQL
 // layer over PostgreSQL. `events` is the append-only log and every other table
 // is a projection of it, except `sessions` and `oidc_attempts`, which are
 // operational state that expires (ADR 0013). A write appends the event, updates

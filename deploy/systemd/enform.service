@@ -1,4 +1,4 @@
-# Issue #214, DE-3, ADR 0011: the server unit of a bare-metal installation.
+# Issue #216, DE-3, ADR 0011: the server unit of a bare-metal installation.
 # It runs the one `enform` binary as the unprivileged `enform` user, reads the
 # configuration under /etc/enform, logs to the journal and drains on SIGTERM.
 [Unit]

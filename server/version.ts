@@ -1,4 +1,4 @@
-// Issue #214, DE-2, DE-3, ADR 0011: the product version that `enform version`
+// Issue #216, DE-2, DE-3, ADR 0011: the product version that `enform version`
 // and `GET /version` report. The build reads it from `package.json`, which is
 // the one place that a release bumps; a missing file falls back to `0.0.0` so
 // a source checkout still answers.

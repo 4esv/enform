@@ -1,4 +1,4 @@
-// Issue #214, DE-2, DE-3, ADR 0011, ADR 0013: the worker process. It polls the
+// Issue #216, DE-2, DE-3, ADR 0011, ADR 0013: the worker process. It polls the
 // outbox and the timer table of the one PostgreSQL database and never decides
 // correctness on its own (A9). This slice delivers no side effect, so a pending
 // row stays pending: the sink arrives with 0.3.0 (SE-1). The loop idles when the

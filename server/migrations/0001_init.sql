@@ -1,4 +1,4 @@
--- Issue #214, I1, I4, I5, I14, ADR 0004, ADR 0012, ADR 0013: the first
+-- Issue #216, I1, I4, I5, I14, ADR 0004, ADR 0012, ADR 0013: the first
 -- migration of the one PostgreSQL database. `events` is the append-only log;
 -- every other table is a projection that a rebuild folds out of it, except
 -- `sessions` and `oidc_attempts`, which are operational state and expire

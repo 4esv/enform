@@ -1,4 +1,4 @@
-// Issue #214, DE-1, ID-6, ADR 0011, ADR 0012: the bootstrap that `enform init`
+// Issue #216, DE-1, ID-6, ADR 0011, ADR 0012: the bootstrap that `enform init`
 // and `enform admin create` share. It creates the database when it is absent,
 // applies the migrations, creates or updates the first administrator in the
 // local directory and appends the administrator's grants. Every step is

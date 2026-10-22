@@ -1,4 +1,4 @@
-# Issue #214, DE-2, DE-3, ADR 0011: the one container image that runs the one
+# Issue #216, DE-2, DE-3, ADR 0011: the one container image that runs the one
 # `enform` binary. The build emits `dist/`; the runtime image carries the
 # emitted JavaScript, the event schemas and the migrations, and runs as the
 # unprivileged `enform` user. There is no `--experimental-strip-types` here.

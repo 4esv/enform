@@ -1,4 +1,4 @@
-// Issue #214, DE-2, DE-3, ADR 0011: the one configuration surface. Precedence
+// Issue #216, DE-2, DE-3, ADR 0011: the one configuration surface. Precedence
 // is command-line flag, `ENFORM_*` environment, TOML file, default. The file is
 // `/etc/enform/enform.toml` by default and `enform init` writes it with mode
 // 0600. Secrets live in the file or the environment, never in the repository.

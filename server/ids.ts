@@ -1,4 +1,4 @@
-// Issue #214, I1, ADR 0004: the server boundary mints the IDs that the engine
+// Issue #216, I1, ADR 0004: the server boundary mints the IDs that the engine
 // does not receive from a client. An operation ID is a UUIDv7, so the log keeps
 // one time-ordered global sequence. `crypto.randomUUID` makes a version 4 UUID,
 // which ADR 0004 forbids for an operation ID.
