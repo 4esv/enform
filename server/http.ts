@@ -184,9 +184,13 @@ export function createApp(config: Config, pool: Pool): Hono {
       return c.json({ error: 'the sign-in attempt is unknown or expired' }, 401)
     try {
       const configuration = await oidcConfiguration(config)
+      // #224: the authorization response carries parameters beyond code and
+      // state (iss, session_state). The code grant validates them, so the
+      // callback URL keeps every parameter the request arrived with.
       const currentUrl = new URL(callbackUrl(config))
-      currentUrl.searchParams.set('code', code)
-      currentUrl.searchParams.set('state', state)
+      for (const [name, value] of new URL(c.req.url).searchParams) {
+        currentUrl.searchParams.set(name, value)
+      }
       const tokens = await authorizationCodeGrant(configuration, currentUrl, {
         expectedState: state,
         pkceCodeVerifier: attempt.codeVerifier,
