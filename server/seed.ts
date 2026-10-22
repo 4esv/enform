@@ -162,7 +162,7 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     {
       principal: priya.id,
       resource: flowResource,
-      scopes: ['instance.read', 'instance.timeline'],
+      scopes: ['instance.read', 'instance.timeline', 'instance.cancel'],
     },
   ]
   const linGrants = grants.filter((grant) => grant.principal === lin.id)
@@ -172,6 +172,9 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
 
   const definition: FlowDefinition = {
     schemaVersion: 2,
+    // The demo flow lets the closer undo a withdraw or a cancel for a day, so
+    // the browser journey can undo through the real stack (S13, WF-5, #238).
+    undoHours: 24,
     steps: [
       {
         key: 'chair',

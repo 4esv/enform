@@ -162,6 +162,53 @@ test('#170 a canonical v2 file round trips byte for byte (I9)', () => {
   expect(serialize(definition)).toBe(V2_FILE)
 })
 
+/** A canonical v2 file with the flow's undo period (S13, S16, WF-5). */
+const V2_UNDO_FILE = `{
+  "schemaVersion": 2,
+  "undoHours": 24,
+  "steps": [
+    {
+      "key": "request",
+      "targets": [
+        {
+          "starter": "starter"
+        }
+      ]
+    }
+  ]
+}
+`
+
+// Issue #238, S13, S16, WF-5, DF-1, I9: the flow sets the undo period, and the
+// canonical form writes it after the anonymous setting and before the steps.
+// An absent period is not written, and the v2 schema validates a present one as
+// a positive integer.
+test('#238 the flow undo period round trips through the canonical form (DF-1, I9)', () => {
+  const once = parse(V2_UNDO_FILE)
+  expect(once.undoHours).toBe(24)
+  expect(serialize(once)).toBe(V2_UNDO_FILE)
+  expect(parse(serialize(once)).undoHours).toBe(24)
+
+  // An absent setting is absent, not 0: the server applies its own default.
+  expect(parse(V2_FILE).undoHours).toBeUndefined()
+  expect(serialize(parse(V2_FILE))).toBe(V2_FILE)
+
+  const step = (body: string): string =>
+    `{ "schemaVersion": 2, ${body} "steps": [ { "key": "s", "targets": [ { "user": "user:sam" } ] } ] }`
+  expect(() => parse(step('"undoHours": 0,'))).toThrow(/positive integer/)
+  expect(() => parse(step('"undoHours": 1.5,'))).toThrow(/positive integer/)
+  expect(() => parse(step('"undoHours": "24",'))).toThrow(/positive integer/)
+
+  const schema = JSON.parse(readFileSync(join(repo, 'schemas', 'flow', 'v2.json'), 'utf8'))
+  expect(schema.properties.undoHours).toEqual({
+    description:
+      'How long after a withdrawal or a cancellation the closer may undo it, in hours (WF-5, S13, S16). Absent means the server default of 24 hours.',
+    type: 'integer',
+    minimum: 1,
+  })
+  expect(schema.required, 'the undo period is optional').toEqual(['schemaVersion', 'steps'])
+})
+
 // Issue #230, DF-1, FM-1, I9: the field label is part of the definition
 // contract. The parser reads it, the canonical form writes it after the
 // control, and a second parse sees the same label and the same bytes.

@@ -157,6 +157,14 @@ export type FlowDefinition = {
    * the visitor to SSO (ID-2).
    */
   readonly anonymous?: boolean
+  /**
+   * How long after a withdrawal or a cancellation the closer may undo it, in
+   * hours (WF-5, S13, S16). It is optional: an absent setting means the
+   * server default of 24 hours, and a present setting is a positive integer.
+   * The engine takes the period as an injected number; the flow only supplies
+   * the value.
+   */
+  readonly undoHours?: number
   readonly steps: readonly FlowStep[]
 }
 
@@ -291,10 +299,13 @@ function readV2Definition(body: unknown): FlowDefinition {
   const definition: {
     schemaVersion: number
     anonymous?: boolean
+    undoHours?: number
     steps: readonly FlowStep[]
   } = { schemaVersion: SCHEMA_VERSION, steps: body.steps.map(readV2Step) }
   const anonymous = readAnonymous(body.anonymous)
   if (anonymous !== undefined) definition.anonymous = anonymous
+  const undoHours = readUndoHours(body.undoHours)
+  if (undoHours !== undefined) definition.undoHours = undoHours
   return definition
 }
 
@@ -306,6 +317,20 @@ function readAnonymous(body: unknown): boolean | undefined {
   if (body === undefined) return undefined
   if (typeof body !== 'boolean') {
     throw new Error('flow definition: anonymous must be a boolean (ID-3)')
+  }
+  return body
+}
+
+/**
+ * Read the optional undo period of a flow (WF-5, S13, S16). An absent setting
+ * means the server default of 24 hours. A present setting is the number of
+ * hours after a close within which the closer may undo it, so it is a positive
+ * integer.
+ */
+function readUndoHours(body: unknown): number | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'number' || !Number.isInteger(body) || body < 1) {
+    throw new Error('flow definition: undoHours must be a positive integer (WF-5)')
   }
   return body
 }
@@ -637,6 +662,7 @@ function readOutcomes(body: unknown): readonly string[] | undefined {
 function canonicalDefinition(definition: FlowDefinition): JsonValue {
   const canonical: Record<string, JsonValue> = { schemaVersion: definition.schemaVersion }
   if (definition.anonymous !== undefined) canonical.anonymous = definition.anonymous
+  if (definition.undoHours !== undefined) canonical.undoHours = definition.undoHours
   canonical.steps = definition.steps.map(canonicalStep)
   return canonical
 }
