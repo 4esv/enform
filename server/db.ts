@@ -26,6 +26,7 @@ import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
+import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 
@@ -1058,6 +1059,43 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     )
     return
   }
+  if (event.type === STEP_SENT_BACK) {
+    const sentBack = readSendBack(event)
+    // The instance returns to the named step as the next revision (WF-3). The
+    // holder is cleared, so the target step's people claim it again.
+    await client.query(
+      `update instances
+       set current_step = $2,
+           holder = null,
+           done = false,
+           status = 'waiting',
+           version = version + 1,
+           revisions = revisions || jsonb_build_object($2::text, $3::integer),
+           seq = $4
+       where id = $1`,
+      [sentBack.instanceId, sentBack.to, sentBack.revision, event.seq]
+    )
+    // The step that sent the task back keeps its history: its task is no
+    // longer open, so it leaves the inbox without deleting a row (I4).
+    await client.query(
+      `update tasks
+       set holder = null, state = 'sent-back', last_activity_at = $3, seq = $4
+       where instance_id = $1 and step = $2`,
+      [sentBack.instanceId, sentBack.from, event.at, event.seq]
+    )
+    // The target task is open again with the assignees the engine resolved for
+    // that step (AS-4, I13). That is the row the inbox and the task read use.
+    await upsertTask(client, {
+      instanceId: sentBack.instanceId,
+      step: sentBack.to,
+      assignees: sentBack.assignees,
+      holder: null,
+      state: 'available',
+      at: event.at,
+      seq: event.seq,
+    })
+    return
+  }
   if (event.type === SEED_CLEARED_TYPE) {
     // The records are already marked cleared in the same transaction (DE-4).
     // Remove their projections again, so a live append and a rebuild agree.
@@ -1254,6 +1292,32 @@ function readSubmission(event: Event): { instanceId: string; values: Record<stri
     throw new Error(`events: malformed ${INSTANCE_SUBMITTED} payload at seq ${event.seq}`)
   }
   return { instanceId, values: readJsonRecord(event.payload.values) }
+}
+
+/** Read a send-back payload that the projection folds (WF-3, I4). */
+function readSendBack(event: Event): {
+  instanceId: string
+  from: string
+  to: string
+  revision: number
+  assignees: readonly Assignee[]
+} {
+  const { instanceId, from, to, revision } = event.payload
+  if (
+    typeof instanceId !== 'string' ||
+    typeof from !== 'string' ||
+    typeof to !== 'string' ||
+    typeof revision !== 'number'
+  ) {
+    throw new Error(`events: malformed ${STEP_SENT_BACK} payload at seq ${event.seq}`)
+  }
+  return {
+    instanceId,
+    from,
+    to,
+    revision,
+    assignees: readAssignees(event.payload.assignees),
+  }
 }
 
 /** Read the assignees that an event records (I13); an absent or malformed list is empty. */

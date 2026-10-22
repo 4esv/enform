@@ -71,6 +71,24 @@ export interface CompletionIntent {
 }
 
 /**
+ * A send-back intent (S11, WF-3, AC-4): the parts a client can honestly send when the holder
+ * returns the current step to an earlier one. It carries the operation ID it chose (I1), the
+ * event type `step.sent-back@1`, the actor, the instance it acts on (DX-1), the earlier step it
+ * returns the task to, the required comment (WF-3) and the version of the instance it read
+ * (I5). The server calls the engine with the session principal and appends what the engine
+ * decided; it records no `version` on the log. It is told apart from an already resolved
+ * `step.sent-back@1` operation by the payload: a resolved operation carries `from` and
+ * `revision`, an intent names `version`.
+ */
+export interface SendBackIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * An immutable, ordered record of an occurrence. The single writer assigns `seq` (ADR 0004).
  */
 export interface Event {
@@ -139,6 +157,19 @@ export interface InstanceView {
   readonly values: Record<string, unknown>
   readonly fields: readonly InstanceField[]
   readonly outcomes: readonly string[]
+  readonly previousSteps: readonly string[]
+  readonly notes: readonly Note[]
+}
+
+/**
+ * One note on the timeline (VT-3, WF-3): the comment that an attributed event records on a
+ * step. A send back records one on the step it addresses, and a completion that carries a
+ * comment records one on the completed step.
+ */
+export interface Note {
+  readonly step: string
+  readonly actor: ActorId
+  readonly comment: string
 }
 
 /**

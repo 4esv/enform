@@ -60,6 +60,14 @@ export type SendBackContext = {
 }
 
 /**
+ * Why a send back was refused (I5, WF-3, AC-4): no step to return, a stale
+ * view, an empty comment, an actor that is not the holder, or an actor that
+ * may not choose the send back outcome. The engine names the kind so a caller
+ * maps the refusal without reading the message.
+ */
+export type SendBackRefusal = 'no-step' | 'stale' | 'comment' | 'holder' | 'outcome'
+
+/**
  * The result of a send back (I5, WF-3, AC-4, I14). `accepted` says whether the
  * engine moved the instance back. When it did not, the instance is unchanged,
  * `operation` and `outbox` are absent, and `reason` says why: no current step,
@@ -75,6 +83,8 @@ export type SendBackResult = {
   readonly outbox?: OutboxEntry
   /** Why the engine refused the send back (I5, WF-3, AC-4); absent when it accepted. */
   readonly reason?: string
+  /** The kind of refusal, so a caller maps it without reading `reason`; absent when accepted. */
+  readonly refusal?: SendBackRefusal
 }
 
 /**
@@ -103,7 +113,12 @@ export function sendBack(
 ): SendBackResult {
   const step = instance.currentStep
   if (step === undefined) {
-    return { accepted: false, instance, reason: 'the instance has no current step to send back' }
+    return {
+      accepted: false,
+      instance,
+      reason: 'the instance has no current step to send back',
+      refusal: 'no-step',
+    }
   }
   const version = currentVersion(instance)
   if (expectedVersion !== version) {
@@ -111,6 +126,7 @@ export function sendBack(
       accepted: false,
       instance,
       reason: `step ${step}: the view is stale, refresh and retry`,
+      refusal: 'stale',
     }
   }
   if (comment.trim().length === 0) {
@@ -118,10 +134,16 @@ export function sendBack(
       accepted: false,
       instance,
       reason: `step ${step}: a send back needs a comment (WF-3)`,
+      refusal: 'comment',
     }
   }
   if (instance.holder !== actor) {
-    return { accepted: false, instance, reason: `step ${step}: ${actor} does not hold the step` }
+    return {
+      accepted: false,
+      instance,
+      reason: `step ${step}: ${actor} does not hold the step`,
+      refusal: 'holder',
+    }
   }
   const resource = stepResource(context.flow, step)
   if (
@@ -132,6 +154,7 @@ export function sendBack(
       accepted: false,
       instance,
       reason: `step ${step}: ${actor} lacks step.outcome:send_back (AC-4)`,
+      refusal: 'outcome',
     }
   }
   const revision = revisionOf(instance, toStep) + 1

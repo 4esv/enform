@@ -41,6 +41,7 @@ import { addGrant, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
+import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
@@ -694,6 +695,9 @@ async function resolveOperation(
     if (body.type === GRANT_CHANGE_TYPE) {
       return grantOperation(body, principal, grants)
     }
+    if (body.type === STEP_SENT_BACK) {
+      return sendBackOperation(pool, log, principal, grants, body)
+    }
     return { status: 400, error: 'this operation is not served in this slice' }
   } catch (error) {
     if (error instanceof CompletionRefused) {
@@ -736,6 +740,87 @@ function claimOperation(
   })
   if (!result.accepted || result.operation === undefined) {
     return { status: 409, error: result.reason ?? 'the claim was refused' }
+  }
+  return { operation: result.operation }
+}
+
+/**
+ * Apply a send back through the engine (S11, WF-3, AC-4, I5, #236). The
+ * client posts the intent: the instance, the earlier step it names, the
+ * required comment and the version it read. The server loads the instance,
+ * passes the session principal as the actor, and lets the engine decide the
+ * holder, the target step, the comment, the version and the authorization.
+ * A refusal answers 409 with the engine's reason, except a blank comment,
+ * which is a 400 because the engine refused the request itself (WF-3). A raw
+ * resolved `step.sent-back@1` carries `from` or `revision` and is refused.
+ */
+async function sendBackOperation(
+  pool: Pool,
+  log: Log,
+  principal: Principal,
+  grants: readonly Grant[],
+  body: Record<string, unknown>
+): Promise<
+  { readonly operation: Operation } | { readonly status: number; readonly error: string }
+> {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  if (
+    payload !== undefined &&
+    (payload.from !== undefined || payload.revision !== undefined || payload.outbox !== undefined)
+  ) {
+    return { status: 400, error: 'a raw step.sent-back@1 is refused; post the send-back intent' }
+  }
+  const instanceId = stringValue(payload?.instanceId)
+  const to = stringValue(payload?.to)
+  const comment = typeof payload?.comment === 'string' ? payload.comment : undefined
+  const version = payload?.version
+  if (
+    instanceId === undefined ||
+    to === undefined ||
+    to === '' ||
+    comment === undefined ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return {
+      status: 400,
+      error: 'a send back needs an id, a time, an instance, a target step, a comment and a version',
+    }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) {
+    return { status: 400, error: `the log holds no published definition for ${instanceId}` }
+  }
+  const result = sendBack(
+    instance,
+    principal.id,
+    to,
+    comment,
+    version,
+    {
+      flow: instance.flow,
+      definition: published.definition,
+      grants,
+      resolve: resolverFor(
+        instance.starter,
+        instance.values ?? {},
+        await teamMembersFor(pool, log)
+      ),
+    },
+    { clock: () => body.at as number, ids: () => body.id as string }
+  )
+  if (!result.accepted || result.operation === undefined) {
+    return {
+      status: result.refusal === 'comment' ? 400 : 409,
+      error: result.reason ?? 'the send back was refused',
+    }
   }
   return { operation: result.operation }
 }
