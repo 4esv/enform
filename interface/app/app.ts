@@ -62,6 +62,15 @@ const STEP_CLAIMED = 'step.claimed@1'
 /** The versioned event type of a send back (S11, WF-3). */
 const STEP_SENT_BACK = 'step.sent-back@1'
 
+/** The versioned event type of a withdrawal (S13, WF-4). */
+const INSTANCE_WITHDRAWN = 'instance.withdrawn@1'
+
+/** The versioned event type of a cancellation (S13, WF-4). */
+const INSTANCE_CANCELLED = 'instance.cancelled@1'
+
+/** The versioned event type of the undo of a close (S13, WF-5). */
+const INSTANCE_UNDONE = 'instance.undone@1'
+
 export interface AppOptions {
   /** The element that receives the page. */
   readonly root: HTMLElement
@@ -340,7 +349,8 @@ export async function mountApp(options: AppOptions): Promise<void> {
     renderNotes(view.notes)
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
-    // status line and no form (VT-1, FM-3).
+    // status line and no form (VT-1, FM-3). A closed instance shows the
+    // closer, the reason and the undo window instead (S13, WF-4, WF-5).
     if (stepKey === undefined) {
       if (view.status.state === 'done') {
         const done = document.createElement('p')
@@ -348,6 +358,8 @@ export async function mountApp(options: AppOptions): Promise<void> {
         done.dataset.done = ''
         done.textContent = 'Done'
         main.appendChild(done)
+      } else if (view.withdrawal !== undefined) {
+        main.appendChild(renderCloseState(slug, instanceId, view))
       }
       return
     }
@@ -431,6 +443,13 @@ export async function mountApp(options: AppOptions): Promise<void> {
     form.appendChild(status)
     main.appendChild(form)
 
+    // The starter may withdraw the open instance and a principal with
+    // `instance.cancel` may cancel it (S13, WF-4, AC-5). The read says which
+    // controls the actor may see; the engine still decides the write (A9).
+    if (view.canWithdraw || view.canCancel) {
+      main.appendChild(renderClose(slug, instanceId, view))
+    }
+
     // A holder may return the current step to an earlier one with a comment
     // (S11, WF-3). The read names the steps it may choose (`previousSteps`),
     // and the engine still decides the holder, the target, the comment and the
@@ -471,6 +490,144 @@ export async function mountApp(options: AppOptions): Promise<void> {
       list.appendChild(item)
     }
     main.append(heading, list)
+  }
+
+  /**
+   * The close controls of an open instance (S13, WF-4): Withdraw for the
+   * starter, with an optional reason, and Cancel for a principal that holds
+   * `instance.cancel`, with a required reason (MVP.md 5.6). Each posts the
+   * intent and re-reads on success; a refusal that names no field is the
+   * server's reason, so the page shows the state the log now holds (I5).
+   */
+  const renderClose = (slug: string, instanceId: string, view: InstanceView): HTMLElement => {
+    const section = document.createElement('section')
+    section.className = 'close'
+    section.dataset.closeSection = ''
+
+    const control = (
+      label: string,
+      action: 'withdraw' | 'cancel',
+      type: string,
+      reasonRequired: boolean
+    ): HTMLFormElement => {
+      const form = document.createElement('form')
+      const heading = document.createElement('h2')
+      heading.textContent = action === 'withdraw' ? 'Withdraw' : 'Cancel'
+      form.appendChild(heading)
+
+      const reasonLabel = document.createElement('label')
+      reasonLabel.textContent = reasonRequired ? 'Reason (required)' : 'Reason (optional)'
+      const reason = document.createElement('textarea')
+      reason.name = 'reason'
+      reason.required = reasonRequired
+      if (action === 'withdraw') reason.dataset.withdrawReason = ''
+      else reason.dataset.cancelReason = ''
+      reasonLabel.appendChild(reason)
+      form.appendChild(reasonLabel)
+
+      const submit = document.createElement('button')
+      submit.type = 'submit'
+      submit.textContent = action === 'withdraw' ? 'Withdraw' : 'Cancel'
+      if (action === 'withdraw') submit.dataset.withdraw = ''
+      else submit.dataset.cancel = ''
+      form.appendChild(submit)
+
+      const status = document.createElement('p')
+      status.className = 'status'
+      form.appendChild(status)
+
+      form.addEventListener('submit', (event) => {
+        event.preventDefault()
+        const intent: Operation = {
+          id: ids(),
+          type,
+          at: clock(),
+          actor,
+          payload: { instanceId, reason: reason.value, version: view.version },
+        }
+        void appendOperation(intent)
+          .then(() => renderTask(slug, instanceId, label))
+          .catch(async (error: unknown) => {
+            if (
+              error instanceof RequestRefused &&
+              error.status === 409 &&
+              error.errors.length === 0
+            ) {
+              await renderTask(slug, instanceId, error.error)
+              return
+            }
+            showRefusal(status, form, error)
+          })
+      })
+      return form
+    }
+
+    if (view.canWithdraw) {
+      section.appendChild(control('Withdrawn', 'withdraw', INSTANCE_WITHDRAWN, false))
+    }
+    if (view.canCancel) {
+      section.appendChild(control('Cancelled', 'cancel', INSTANCE_CANCELLED, true))
+    }
+    return section
+  }
+
+  /**
+   * The close state of a closed instance (S13, WF-4, WF-5): what closed it,
+   * who closed it and why, and Undo for the closer while the flow's period is
+   * open. The undo posts the compensating intent and re-reads, so the task
+   * returns at the previous step and holder.
+   */
+  const renderCloseState = (slug: string, instanceId: string, view: InstanceView): HTMLElement => {
+    const section = document.createElement('section')
+    section.className = 'close'
+    section.dataset.close = ''
+    const kind = view.withdrawal === 'cancelled' ? 'cancelled' : 'withdrawn'
+    section.dataset.withdrawal = kind
+
+    const heading = document.createElement('h2')
+    heading.textContent = kind === 'cancelled' ? 'Cancelled' : 'Withdrawn'
+    section.appendChild(heading)
+
+    if (view.closedBy !== undefined) {
+      const closer = document.createElement('p')
+      closer.className = 'close-by'
+      closer.dataset.closeBy = view.closedBy
+      closer.textContent = `Closed by ${view.closedBy}`
+      section.appendChild(closer)
+    }
+    if (view.closeReason !== undefined && view.closeReason !== '') {
+      const reason = document.createElement('p')
+      reason.className = 'close-reason'
+      reason.dataset.closeReason = ''
+      reason.textContent = `Reason: ${view.closeReason}`
+      section.appendChild(reason)
+    }
+
+    const status = document.createElement('p')
+    status.className = 'status'
+    if (view.closedBy === actor && view.undoUntil !== undefined && view.undoUntil > clock()) {
+      const undo = document.createElement('button')
+      undo.type = 'button'
+      undo.textContent = 'Undo'
+      undo.dataset.undo = ''
+      undo.addEventListener('click', () => {
+        const intent: Operation = {
+          id: ids(),
+          type: INSTANCE_UNDONE,
+          at: clock(),
+          actor,
+          payload: { instanceId, version: view.version },
+        }
+        void appendOperation(intent)
+          .then(() => renderTask(slug, instanceId, 'Undone'))
+          .catch((error: unknown) => {
+            showRefusal(status, section, error)
+          })
+      })
+      section.appendChild(undo)
+    }
+    section.appendChild(status)
+    return section
   }
 
   /**
