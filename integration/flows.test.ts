@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
+import type { Grant } from '../engine/authorize.js'
 import type { FlowDefinition } from '../engine/definition.js'
 import { STARTER_DEFINITION } from '../engine/flow.js'
 import { contentHash } from '../engine/instance.js'
@@ -249,6 +250,46 @@ test('#220 the published read returns the frozen definition and an unknown slug 
 
   const missing = await adminFetch(`/api/v1/flows/${UNKNOWN}`)
   expect(missing.status, await missing.text()).toBe(404)
+})
+
+test('#232 an administrator reads the flow grants and a non-admin may not', async () => {
+  const { config, publicUrl } = requireSetup()
+  const principal = `starter-${RUN}`
+  const granted = [
+    { principal, scopes: ['instance.start'], resource: `flow:${SLUG}` },
+    { principal, scopes: ['step.outcome:submit'], resource: `flow:${SLUG}/step:request` },
+  ] as const
+  for (const grant of granted) {
+    await adminJson('/api/v1/operations', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: randomUUID(),
+        type: 'config.grant.changed@1',
+        at: Date.now(),
+        actor: 'ignored',
+        payload: grant,
+      }),
+    })
+  }
+
+  const grants = await adminJson<readonly Grant[]>(`/api/v1/flows/${SLUG}/grants`)
+  expect(grants, 'the flow and its step grants answer in log order').toEqual(granted)
+
+  const adminToken = await keycloakAdminToken(config)
+  const username = `grants-outsider-${RUN}`
+  const user = {
+    username,
+    email: `${username}@test.local`,
+    firstName: 'Grants',
+    lastName: 'Outsider',
+    password: 'grants-outsider-password',
+  }
+  await createUser(config, adminToken, user)
+  const token = await passwordToken(config, user.username, user.password)
+  const denied = await fetch(`${publicUrl}/api/v1/flows/${SLUG}/grants`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  expect(denied.status, await denied.text()).toBe(403)
 })
 
 test('#220 enform admin rebuild reproduces the list and the draft from the log (I4)', async () => {

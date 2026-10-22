@@ -132,6 +132,41 @@ paths:
                 $ref: '#/components/schemas/PublishedFlow'
         '404':
           description: No flow has this slug
+  /api/v1/flows/{slug}/grants:
+    get:
+      operationId: readFlowGrants
+      summary: Read a flow's grants
+      description: >-
+        The grants on the flow and its steps, in log order (AC-1, AC-2, I8,
+        `MVP.md` 5.6): the flow-level grants and the step-level grants under
+        the flow. This is the administrator's view that the builder reads to
+        show and add starters, so the read requires `flow.grant` on the flow
+        or `org.grants` on the organization. A flow with no grants answers an
+        empty array.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The grants on the flow and its steps, in log order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Grant'
+        '403':
+          description: >-
+            The principal does not hold `flow.grant` on the flow or
+            `org.grants` on the organization (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/instances/{instanceId}:
     get:
       operationId: readInstance
@@ -705,6 +740,30 @@ components:
       description: >-
         An immutable directory ID that identifies a person or a group (ID-4).
         A name or an email address never identifies a principal.
+    Grant:
+      type: object
+      description: >-
+        One grant (`MVP.md` 5.6, AC-1): a principal, the scopes it holds and
+        the resource they apply to. The principal is a user, a group or a team
+        (ID-4); the resource is `org`, `flow:<slug>` or
+        `flow:<slug>/step:<key>`, and a grant on a flow covers all of its
+        steps.
+      required: [principal, scopes, resource]
+      properties:
+        principal:
+          $ref: '#/components/schemas/ActorId'
+        scopes:
+          type: array
+          items:
+            type: string
+          description: >-
+            The scopes the principal holds, for example `instance.start` or
+            `step.outcome:approve` (AC-4).
+        resource:
+          type: string
+          description: >-
+            What the grant applies to: `org`, `flow:<slug>` or
+            `flow:<slug>/step:<key>` (`MVP.md` 5.6).
     OperationId:
       type: string
       description: The client-created ID of one operation (UUIDv7).

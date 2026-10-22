@@ -52,6 +52,7 @@ import {
   createOidcAttempt,
   createPool,
   flowExists,
+  grantsOfFlow,
   grantsOfPrincipal,
   type InboxTab,
   listFlowSummaries,
@@ -476,6 +477,28 @@ export function createApp(config: Config, pool: Pool): Hono {
       contentHash: published.contentHash,
       definition: published.definition,
     })
+  })
+
+  // Issue #232, AC-1, AC-2, I8: the grants on one flow and its steps. This is
+  // the administrator's view that the builder reads to show and add starters,
+  // so a principal without `flow.grant` on the flow or `org.grants` on the
+  // organization reads nothing. The grants are a projection of the log (I4)
+  // and answer in log order.
+  app.get('/api/v1/flows/:slug/grants', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const slug = c.req.param('slug')
+    const resource = `flow:${slug}`
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!authorize(grants, 'org.grants', 'org') && !authorize(grants, 'flow.grant', resource)) {
+      return c.json(
+        {
+          error: `reading the grants requires the scope org.grants on org or flow.grant on ${resource}`,
+        },
+        403
+      )
+    }
+    return c.json(await grantsOfFlow(pool, slug))
   })
 
   app.post('/api/v1/operations', async (c) => {

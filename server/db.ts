@@ -487,6 +487,27 @@ export async function grantsOfPrincipal(pool: Pool, principal: string): Promise<
   }))
 }
 
+/**
+ * The grants on one flow and its steps, in log order (#232, AC-1, AC-2): the
+ * flow-level grants and the grants whose resource is a step under the flow.
+ * The prefix match is exact, so a slug with a wildcard character reads only
+ * its own grants. The read is a projection of the log (I4).
+ */
+export async function grantsOfFlow(pool: Pool, slug: string): Promise<readonly Grant[]> {
+  const resource = `flow:${slug}`
+  const result = await pool.query<{ principal: string; resource: string; scopes: string[] }>(
+    `select principal, resource, scopes from grants
+     where resource = $1 or left(resource, length($1) + 6) = $1 || '/step:'
+     order by seq`,
+    [resource]
+  )
+  return result.rows.map((row) => ({
+    principal: row.principal,
+    resource: row.resource,
+    scopes: row.scopes,
+  }))
+}
+
 /** Whether the projection already holds one grant, so `init` stays idempotent. */
 export async function hasGrant(pool: Pool, grant: Grant): Promise<boolean> {
   const result = await pool.query(

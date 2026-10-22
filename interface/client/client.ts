@@ -8,6 +8,17 @@
 export type ActorId = string
 
 /**
+ * One grant (`MVP.md` 5.6, AC-1): a principal, the scopes it holds and the resource they apply
+ * to. The principal is a user, a group or a team (ID-4); the resource is `org`, `flow:<slug>`
+ * or `flow:<slug>/step:<key>`, and a grant on a flow covers all of its steps.
+ */
+export interface Grant {
+  readonly principal: ActorId
+  readonly scopes: readonly string[]
+  readonly resource: string
+}
+
+/**
  * The client-created ID of one operation (UUIDv7).
  */
 export type OperationId = string
@@ -490,6 +501,16 @@ export async function readFlow(slug: string): Promise<PublishedFlow> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as PublishedFlow
+}
+
+export async function readFlowGrants(slug: string): Promise<readonly Grant[]> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/grants`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly Grant[]
 }
 
 export async function readInbox(tab?: string): Promise<readonly InboxItem[]> {
