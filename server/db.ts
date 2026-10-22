@@ -13,12 +13,20 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Client, escapeIdentifier, Pool, type PoolClient } from 'pg'
+import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import type { Grant } from '../engine/authorize.js'
-import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../engine/definition.js'
+import {
+  DEFINITION_CHANGED,
+  type FlowDefinition,
+  type FlowStep,
+  parse,
+} from '../engine/definition.js'
 import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow } from '../engine/flow.js'
 import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
+import type { Assignee } from '../engine/instance.js'
 import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
+import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 
 /** The event that records a change to the profile cache (ID-4, ADR 0012). */
@@ -180,6 +188,33 @@ export async function appendOperation(pool: Pool, operation: Operation): Promise
   }
 }
 
+/** Read one event by the client-created operation id (I1), or undefined when it is absent. */
+export async function readEventByOperation(
+  pool: Pool,
+  operationId: string
+): Promise<Event | undefined> {
+  const result = await pool.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>('select seq, operation_id, type, at, actor, payload from events where operation_id = $1', [
+    operationId,
+  ])
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  return {
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }
+}
+
 /**
  * Rebuild every projection from the log (I4, ADR 0013). Sessions and OIDC
  * attempts are operational state, so they survive; every derived row is
@@ -320,6 +355,24 @@ export async function readFlowProjection(
     draftVersion: Number(row.draft_version),
     updatedAt: Number(row.updated_at),
   }
+}
+
+/**
+ * The members of every team, from the `team_members` projection (AS-6, AS-4).
+ * A team that the projection does not hold resolves to nobody, so the engine
+ * routes its task to Unroutable (I10).
+ */
+export async function readTeamMembers(pool: Pool): Promise<ReadonlyMap<string, readonly string[]>> {
+  const result = await pool.query<{ team_slug: string; principal: string }>(
+    'select team_slug, principal from team_members order by team_slug, principal'
+  )
+  const members = new Map<string, string[]>()
+  for (const row of result.rows) {
+    const held = members.get(row.team_slug)
+    if (held === undefined) members.set(row.team_slug, [row.principal])
+    else held.push(row.principal)
+  }
+  return members
 }
 
 /** The grants that one principal holds (AC-1, I8). */
@@ -603,7 +656,230 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         event.seq,
       ]
     )
+    return
   }
+  if (event.type === INSTANCE_STARTED) {
+    const start = readStart(event)
+    await client.query(
+      `insert into instances
+         (id, flow_slug, definition_version, current_step, status, starter, values, version, holder, submitted, done, seq)
+       values ($1, $2, $3, $4, 'waiting', $5, $6::jsonb, 0, null, false, false, $7)
+       on conflict (id) do update
+         set flow_slug = excluded.flow_slug,
+             definition_version = excluded.definition_version,
+             current_step = excluded.current_step,
+             status = excluded.status,
+             starter = excluded.starter,
+             values = excluded.values,
+             version = excluded.version,
+             holder = excluded.holder,
+             submitted = excluded.submitted,
+             done = excluded.done,
+             seq = excluded.seq`,
+      [
+        start.instanceId,
+        start.flow,
+        start.definitionVersion,
+        start.currentStep,
+        start.starter,
+        JSON.stringify(start.values),
+        event.seq,
+      ]
+    )
+    if (start.currentStep !== undefined) {
+      await upsertTask(client, {
+        instanceId: start.instanceId,
+        step: start.currentStep,
+        assignees: start.assignees,
+        holder: null,
+        state: 'available',
+        at: event.at,
+        seq: event.seq,
+      })
+    }
+    return
+  }
+  if (event.type === STEP_CLAIMED) {
+    const claim = readClaim(event)
+    await client.query(
+      `update instances set holder = $2, status = 'in-progress', version = version + 1, seq = $3
+       where id = $1`,
+      [claim.instanceId, claim.holder, event.seq]
+    )
+    await client.query(
+      `update tasks set holder = $3, state = 'opened', last_activity_at = $4, seq = $5
+       where instance_id = $1 and step = $2`,
+      [claim.instanceId, claim.step, claim.holder, event.at, event.seq]
+    )
+    return
+  }
+  if (event.type === STEP_COMPLETED) {
+    const completion = readCompletion(event)
+    const next = await nextStepOf(client, completion.instanceId, completion.step)
+    await client.query(
+      `update instances
+       set current_step = $2, holder = null, done = $3, status = $4,
+           version = version + 1, seq = $5
+       where id = $1`,
+      [
+        completion.instanceId,
+        next?.key ?? null,
+        next === undefined,
+        next === undefined ? 'done' : 'waiting',
+        event.seq,
+      ]
+    )
+    await client.query(
+      `update tasks set state = 'completed', last_activity_at = $3, seq = $4
+       where instance_id = $1 and step = $2`,
+      [completion.instanceId, completion.step, event.at, event.seq]
+    )
+    if (next !== undefined) {
+      await upsertTask(client, {
+        instanceId: completion.instanceId,
+        step: next.key,
+        assignees: readAssignees(event.payload.assignees),
+        holder: null,
+        state: 'available',
+        at: event.at,
+        seq: event.seq,
+      })
+    }
+    return
+  }
+  if (event.type === INSTANCE_SUBMITTED) {
+    const submitted = readSubmission(event)
+    await client.query(
+      `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
+      [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
+    )
+  }
+}
+
+/** One resolved task row, folded from an instance event (I4, I13). */
+type TaskRow = {
+  readonly instanceId: string
+  readonly step: string
+  readonly assignees: readonly Assignee[]
+  readonly holder: string | null
+  readonly state: string
+  readonly at: number
+  readonly seq: number
+}
+
+/** Insert or replace one task row, so a rebuild reproduces the same projection (I4). */
+async function upsertTask(client: PoolClient, task: TaskRow): Promise<void> {
+  await client.query(
+    `insert into tasks
+       (id, instance_id, step, holder, state, assignees, last_activity_at, seq)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+     on conflict (id) do update
+       set holder = excluded.holder,
+           state = excluded.state,
+           assignees = excluded.assignees,
+           last_activity_at = excluded.last_activity_at,
+           seq = excluded.seq`,
+    [
+      taskId(task.instanceId, task.step),
+      task.instanceId,
+      task.step,
+      task.holder,
+      task.state,
+      JSON.stringify(task.assignees),
+      task.at,
+      task.seq,
+    ]
+  )
+}
+
+/** The stable id of one step's task on one instance (I4). */
+function taskId(instanceId: string, step: string): string {
+  return `${instanceId}:${step}`
+}
+
+/** The step that follows one key in the definition that the instance pins (WF-1, DF-2). */
+async function nextStepOf(
+  client: PoolClient,
+  instanceId: string,
+  step: string
+): Promise<FlowStep | undefined> {
+  const result = await client.query<{ definition: unknown }>(
+    `select v.definition
+     from instances i
+     join flow_versions v on v.content_hash = i.definition_version
+     where i.id = $1`,
+    [instanceId]
+  )
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  return nextStep(readStoredDefinition(row.definition, `instance ${instanceId}`), step)
+}
+
+/** Read the start payload that the projection folds (I4, I13, #222). */
+function readStart(event: Event): {
+  instanceId: string
+  flow: string
+  definitionVersion: string
+  currentStep: string
+  assignees: readonly Assignee[]
+  starter: string | null
+  values: Record<string, unknown>
+} {
+  const { instanceId, flow, definitionVersion, currentStep, starter } = event.payload
+  if (
+    typeof instanceId !== 'string' ||
+    typeof flow !== 'string' ||
+    typeof definitionVersion !== 'string' ||
+    typeof currentStep !== 'string'
+  ) {
+    throw new Error(`events: malformed ${INSTANCE_STARTED} payload at seq ${event.seq}`)
+  }
+  return {
+    instanceId,
+    flow,
+    definitionVersion,
+    currentStep,
+    assignees: readAssignees(event.payload.assignees),
+    starter: typeof starter === 'string' ? starter : null,
+    values: readJsonRecord(event.payload.values),
+  }
+}
+
+/** Read a claim payload that the projection folds (I4). */
+function readClaim(event: Event): { instanceId: string; step: string; holder: string } {
+  const { instanceId, step, holder } = event.payload
+  if (typeof instanceId !== 'string' || typeof step !== 'string' || typeof holder !== 'string') {
+    throw new Error(`events: malformed ${STEP_CLAIMED} payload at seq ${event.seq}`)
+  }
+  return { instanceId, step, holder }
+}
+
+/** Read a completion payload that the projection folds (I4). */
+function readCompletion(event: Event): { instanceId: string; step: string } {
+  const { instanceId, step } = event.payload
+  if (typeof instanceId !== 'string' || typeof step !== 'string') {
+    throw new Error(`events: malformed ${STEP_COMPLETED} payload at seq ${event.seq}`)
+  }
+  return { instanceId, step }
+}
+
+/** Read a submit payload that the projection folds (I4, FM-7). */
+function readSubmission(event: Event): { instanceId: string; values: Record<string, unknown> } {
+  const { instanceId } = event.payload
+  if (typeof instanceId !== 'string') {
+    throw new Error(`events: malformed ${INSTANCE_SUBMITTED} payload at seq ${event.seq}`)
+  }
+  return { instanceId, values: readJsonRecord(event.payload.values) }
+}
+
+/** Read the assignees that an event records (I13); an absent or malformed list is empty. */
+function readAssignees(value: unknown): readonly Assignee[] {
+  return Array.isArray(value) ? (value as readonly Assignee[]) : []
+}
+
+/** Read a JSON object payload; an absent or malformed value is an empty record. */
+function readJsonRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
 }
 
 /** Read one grant from a `config.grant.changed@1` event. */

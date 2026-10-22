@@ -22,7 +22,9 @@ import {
   randomState,
 } from 'openid-client'
 import type { Pool } from 'pg'
+import { claim, STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
+import { CompletionRefused, resolveCompletion } from '../engine/completions.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
 import {
@@ -34,7 +36,12 @@ import {
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
-import type { OperationDeps } from '../engine/operation.js'
+import { grantsOf } from '../engine/grants.js'
+import { instanceOf } from '../engine/instances.js'
+import type { Log, Operation, OperationDeps } from '../engine/operation.js'
+import type { TargetResolver } from '../engine/routing.js'
+import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
+import { teamsOf } from '../engine/teams.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
 import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
@@ -47,8 +54,10 @@ import {
   listFlowSummaries,
   type Principal,
   principalById,
+  readEventByOperation,
   readFlowProjection,
   readLog,
+  readTeamMembers,
   revokeSession,
   type SessionRow,
   sessionById,
@@ -399,9 +408,222 @@ export function createApp(config: Config, pool: Pool): Hono {
     })
   })
 
+  app.post('/api/v1/operations', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const body = await readJsonObject(c)
+    if (body === undefined || typeof body.type !== 'string') {
+      return c.json({ error: 'the body needs an operation' }, 400)
+    }
+    return serveOperation(c, pool, auth, body)
+  })
+
   app.all('*', (c) => c.json({ error: 'not found in this slice' }, 404))
 
   return app
+}
+
+/**
+ * Append one resolved operation or answer the engine's refusal (#222). A start
+ * or a completion is resolved before it is appended; a claim carries the
+ * version it read and the engine checks it (I5).
+ */
+async function serveOperation(c: Context, pool: Pool, auth: Auth, body: Record<string, unknown>) {
+  const log = await readLog(pool)
+  const resolved = await resolveOperation(pool, log, auth.principal, body)
+  if ('error' in resolved) {
+    return c.json(
+      { error: resolved.error, ...('errors' in resolved ? { errors: resolved.errors } : {}) },
+      resolved.status as 400 | 409
+    )
+  }
+  return appendAndAnswer(c, pool, resolved.operation)
+}
+
+/**
+ * Resolve a start intent, a completion intent or a claim through the engine and
+ * append what the engine decided (ADR 0010, #222, A9). The session principal is
+ * the actor, so a client-supplied actor is ignored for authorization (I8). A
+ * raw start or completion is refused: the client posts the intent. Anything
+ * else is out of this slice.
+ */
+async function resolveOperation(
+  pool: Pool,
+  log: Log,
+  principal: Principal,
+  body: Record<string, unknown>
+): Promise<
+  | { readonly operation: Operation }
+  | { readonly status: number; readonly error: string; readonly errors?: readonly unknown[] }
+> {
+  const actor = principal.id
+  const grants = grantsFor(log, principal)
+  try {
+    if (body.type === INSTANCE_STARTED) {
+      const payload = isRecord(body.payload) ? body.payload : {}
+      const values = isRecord(payload.values) ? payload.values : {}
+      const resolver = resolverFor(actor, values, await teamMembersFor(pool, log))
+      const operation = resolveIntent(log, { ...body, actor }, resolver, grants)
+      if (operation === undefined) {
+        return {
+          status: 400,
+          error: 'a raw instance.started@1 is refused; post the start intent (ADR 0010)',
+        }
+      }
+      return { operation }
+    }
+    if (body.type === STEP_COMPLETED) {
+      const payload = isRecord(body.payload) ? body.payload : {}
+      const instanceId = stringValue(payload.instanceId)
+      const instance = instanceId === undefined ? undefined : instanceOf(log, instanceId)
+      const resolver = resolverFor(
+        instance?.starter,
+        instance?.values ?? {},
+        await teamMembersFor(pool, log)
+      )
+      const operation = resolveCompletion(log, { ...body, actor }, resolver, grants)
+      if (operation === undefined) {
+        return {
+          status: 400,
+          error: 'a raw step.completed@1 is refused; post the completion intent (ADR 0010)',
+        }
+      }
+      return { operation }
+    }
+    if (body.type === STEP_CLAIMED) {
+      return claimOperation(log, principal, body)
+    }
+    return { status: 400, error: 'this operation is not served in this slice' }
+  } catch (error) {
+    if (error instanceof CompletionRefused) {
+      return { status: 409, error: error.message, errors: error.errors }
+    }
+    return { status: 400, error: messageOf(error) }
+  }
+}
+
+/**
+ * Apply a claim through the engine (S09, AS-2, I5, #222). The request carries
+ * the instance version it read as `expectedVersion`; the engine checks it and
+ * records the claim, so the field never reaches the log. The session principal
+ * is the actor, and a refusal answers 409 with the reason.
+ */
+function claimOperation(
+  log: Log,
+  principal: Principal,
+  body: Record<string, unknown>
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const instanceId = stringValue(payload?.instanceId)
+  const expectedVersion = payload?.expectedVersion
+  if (
+    instanceId === undefined ||
+    typeof expectedVersion !== 'number' ||
+    !Number.isInteger(expectedVersion) ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return { status: 400, error: 'a claim needs an id, a time, an instance and expectedVersion' }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const result = claim(instance, principal.id, expectedVersion, {
+    clock: () => body.at as number,
+    ids: () => body.id as string,
+  })
+  if (!result.accepted || result.operation === undefined) {
+    return { status: 409, error: result.reason ?? 'the claim was refused' }
+  }
+  return { operation: result.operation }
+}
+
+/** Append one resolved operation and answer the event that the log holds (I1, I4). */
+async function appendAndAnswer(c: Context, pool: Pool, operation: Operation) {
+  await appendOperation(pool, operation)
+  const event = await readEventByOperation(pool, operation.id)
+  if (event === undefined) throw new Error('the appended event is missing from the log (I4)')
+  return c.json(event, 201)
+}
+
+/**
+ * The grants that apply to one principal (AC-1, I8, #222): its own grants, the
+ * grants of the groups the session lists, and the grants of the teams that hold
+ * it. The log is the source of truth, so a rebuild reproduces the set.
+ */
+function grantsFor(log: Log, principal: Principal): readonly Grant[] {
+  const held = new Set<string>([principal.id])
+  for (const group of principal.groups) {
+    held.add(group)
+    held.add(`group:${group}`)
+  }
+  for (const team of teamsOf(log)) {
+    if (!teamHolds(team.members, principal)) continue
+    held.add(team.name)
+    held.add(`team:${team.name}`)
+  }
+  return grantsOf(log).filter((grant) => held.has(grant.principal))
+}
+
+/** Whether a team's members name the principal, directly or through one of its groups (AS-6). */
+function teamHolds(members: readonly string[], principal: Principal): boolean {
+  for (const member of members) {
+    if (member === principal.id) return true
+    const group = member.startsWith('group:') ? member.slice('group:'.length) : member
+    if (principal.groups.includes(group)) return true
+  }
+  return false
+}
+
+/**
+ * The team membership that a target resolves through (AS-4, #222): the
+ * `team_members` projection, with the engine's own team projection as the
+ * fallback that a store without the rows still answers. A team that neither
+ * holds resolves to nobody, so the engine routes to the Unroutable queue (I10).
+ */
+async function teamMembersFor(
+  pool: Pool,
+  log: Log
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const members = new Map<string, string[]>()
+  for (const team of teamsOf(log)) members.set(team.name, [...team.members])
+  for (const [team, principals] of await readTeamMembers(pool)) {
+    const held = members.get(team) ?? []
+    members.set(team, [...new Set([...held, ...principals])])
+  }
+  return members
+}
+
+/**
+ * Build the target resolver of one request (AS-1, AS-4, I10, #222). `starter`
+ * resolves to the principal that started the instance, `user` to itself,
+ * `field` to the principal in the data or the instance values, and `team` to
+ * the team membership. A group needs a directory read that this lane does not
+ * have, so it resolves to nobody and the engine routes to Unroutable (I10);
+ * `manager-of` has no directory source either.
+ */
+function resolverFor(
+  starter: string | undefined,
+  data: Readonly<Record<string, unknown>>,
+  teamMembers: ReadonlyMap<string, readonly string[]>
+): TargetResolver {
+  return (target) => {
+    if ('user' in target) return [target.user]
+    if ('starter' in target) return starter === undefined ? [] : [starter]
+    if ('field' in target) {
+      const value = data[target.field]
+      return typeof value === 'string' && value !== '' ? [value] : []
+    }
+    if ('team' in target) return teamMembers.get(target.team) ?? []
+    return []
+  }
+}
+
+/** A string payload value, or undefined when it is another type. */
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 /** Start the HTTP server on the configured address and return a drain handle. */
