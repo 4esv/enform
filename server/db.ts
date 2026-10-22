@@ -57,6 +57,25 @@ export type StoredFlow = {
   readonly updatedAt: number
 }
 
+/** One inbox tab (VT-1). */
+export type InboxTab = 'my' | 'available' | 'started'
+
+/**
+ * One row of the inbox, from the `instances` and `tasks` projections (VT-1,
+ * VT-2, S14). `taskState` is the projection's task state; `instanceStatus` is
+ * the instance's status, which the API maps to an inbox state when a current
+ * step has no task row. `lastActivityAt` is the newest event on the instance.
+ */
+export type InboxRow = {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly taskState: string | null
+  readonly instanceStatus: string
+  readonly holder: string | null
+  readonly lastActivityAt: number
+}
+
 /** One server-side session row (ADR 0012). */
 export type SessionRow = {
   readonly id: string
@@ -373,6 +392,86 @@ export async function readTeamMembers(pool: Pool): Promise<ReadonlyMap<string, r
     else held.push(row.principal)
   }
   return members
+}
+
+/**
+ * Read the candidate rows of one inbox tab (VT-1, VT-2, S14, AS-2, AC-5). The
+ * filter is the authorization of the tab: `my` reads the tasks the principal
+ * holds, `available` reads the unclaimed tasks whose current step names the
+ * principal as an assignee, and `started` reads the open instances the
+ * principal started. All three read the current step of an open instance, so a
+ * completed, withdrawn or cancelled instance is absent. The API authorizes
+ * each row through the engine again (I8).
+ */
+export async function readInboxRows(
+  pool: Pool,
+  tab: InboxTab,
+  actor: string
+): Promise<readonly InboxRow[]> {
+  const lastActivity = `coalesce(
+    (select max(e.at) from events e where e.payload->>'instanceId' = i.id),
+    0
+  )`
+  const open = `i.current_step is not null and i.done = false
+    and i.status in ('waiting', 'in-progress')`
+  let query: string
+  let values: string[]
+  if (tab === 'available') {
+    query = `select t.instance_id, i.flow_slug, t.step, t.state as task_state,
+                    i.status as instance_status, t.holder,
+                    ${lastActivity} as last_activity_at
+             from tasks t
+             join instances i on i.id = t.instance_id
+             where t.state = 'available'
+               and t.holder is null
+               and i.current_step = t.step
+               and ${open}
+               and exists (
+                 select 1 from jsonb_array_elements(t.assignees) as a
+                 where a->>'step' = t.step and a->'members' ? $1
+               )
+             order by last_activity_at desc, t.instance_id asc`
+    values = [actor]
+  } else if (tab === 'started') {
+    query = `select i.id as instance_id, i.flow_slug, i.current_step as step,
+                    t.state as task_state, i.status as instance_status, t.holder,
+                    ${lastActivity} as last_activity_at
+             from instances i
+             left join tasks t on t.instance_id = i.id and t.step = i.current_step
+             where i.starter = $1
+               and ${open}
+             order by last_activity_at desc, i.id asc`
+    values = [actor]
+  } else {
+    query = `select t.instance_id, i.flow_slug, t.step, t.state as task_state,
+                    i.status as instance_status, t.holder,
+                    ${lastActivity} as last_activity_at
+             from tasks t
+             join instances i on i.id = t.instance_id
+             where t.holder = $1
+               and i.current_step = t.step
+               and ${open}
+             order by last_activity_at desc, t.instance_id asc`
+    values = [actor]
+  }
+  const result = await pool.query<{
+    instance_id: string
+    flow_slug: string
+    step: string
+    task_state: string | null
+    instance_status: string
+    holder: string | null
+    last_activity_at: string
+  }>(query, values)
+  return result.rows.map((row) => ({
+    instanceId: row.instance_id,
+    flowSlug: row.flow_slug,
+    step: row.step,
+    taskState: row.task_state,
+    instanceStatus: row.instance_status,
+    holder: row.holder,
+    lastActivityAt: Number(row.last_activity_at),
+  }))
 }
 
 /** The grants that one principal holds (AC-1, I8). */

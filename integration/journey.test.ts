@@ -84,6 +84,17 @@ type PublishedFlow = {
   readonly definition: FlowDefinition
 }
 
+/** One inbox item as the API returns it (VT-1, VT-2, S14). */
+type InboxItem = {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly state: string
+  readonly holder?: string
+  readonly dueAt?: number
+  readonly lastActivityAt?: number
+}
+
 type Setup = {
   readonly config: TestConfig
   readonly dir: string
@@ -239,6 +250,11 @@ async function postOperation(body: Record<string, unknown>): Promise<Event> {
   })
 }
 
+/** Read one inbox tab as the administrator (VT-1). */
+async function inbox(tab: 'my' | 'available' | 'started'): Promise<readonly InboxItem[]> {
+  return adminJson<readonly InboxItem[]>(`/api/v1/inbox?tab=${tab}`)
+}
+
 /** The number of events the log holds, read from PostgreSQL. */
 function eventCount(): number {
   const { databaseUrl } = requireSetup()
@@ -319,6 +335,28 @@ test('#222 DX-1 I8 a start intent records the session principal, the flow and th
   expect(event.payload.assignees).toEqual([
     { step: 'request', target: { starter: 'starter' }, members: [adminId] },
   ])
+
+  // The start puts the request in the starter's inbox before anybody claims
+  // it: `started` tracks the instance, `available` offers the unclaimed task,
+  // and `my` stays empty (VT-1, VT-2, AS-2).
+  const started = await inbox('started')
+  const startedItem = started.find((item) => item.instanceId === INSTANCE_ID)
+  expect(startedItem, 'the started tab holds the new instance').toMatchObject({
+    flowSlug: SLUG,
+    step: 'request',
+    state: 'unopened',
+  })
+  expect(startedItem?.holder, 'nobody holds the task yet').toBeUndefined()
+  expect(startedItem?.dueAt, 'the step sets no deadline').toBeUndefined()
+  expect(startedItem?.lastActivityAt, 'the start is the last activity').toBeGreaterThan(0)
+  expect(
+    (await inbox('available')).find((item) => item.instanceId === INSTANCE_ID),
+    'the unclaimed request is available to its assignee'
+  ).toMatchObject({ step: 'request', state: 'unopened' })
+  expect(
+    (await inbox('my')).some((item) => item.instanceId === INSTANCE_ID),
+    'my tasks is empty before a claim'
+  ).toBe(false)
 })
 
 test('#222 FM-7 the instance read shows the request step, the values and the version', async () => {
@@ -360,6 +398,16 @@ test('#222 AS-2 AC-4 I5 claim and complete the request step', async () => {
   expect(afterClaim.status.state).toBe('in-progress')
   expect(afterClaim.status.holder).toBe(adminId)
 
+  // A claimed task moves from `available` to `my` (VT-1, AS-2).
+  expect(
+    (await inbox('my')).find((item) => item.instanceId === INSTANCE_ID),
+    'the holder sees the request in my tasks'
+  ).toMatchObject({ step: 'request', state: 'opened', holder: adminId })
+  expect(
+    (await inbox('available')).some((item) => item.instanceId === INSTANCE_ID),
+    'a claimed task is not available'
+  ).toBe(false)
+
   ids.completeRequestId = randomUUID()
   const completed = await postOperation({
     id: ids.completeRequestId,
@@ -383,6 +431,20 @@ test('#222 AS-2 AC-4 I5 claim and complete the request step', async () => {
   expect(afterComplete.version, 'the completion advanced the version').toBe(2)
   expect(afterComplete.status.currentStep).toBe('approve')
   expect(afterComplete.status.state).toBe('waiting')
+
+  // The request completed, so the approval step is the one in the inbox: it is
+  // available to its assignee and no longer in my tasks (VT-1, VT-2).
+  const available = await inbox('available')
+  const approval = available.find((item) => item.instanceId === INSTANCE_ID)
+  expect(approval, 'the approval step is available').toMatchObject({
+    step: 'approve',
+    state: 'unopened',
+  })
+  expect(approval?.holder).toBeUndefined()
+  expect(
+    (await inbox('my')).some((item) => item.instanceId === INSTANCE_ID),
+    'the completed request left my tasks'
+  ).toBe(false)
 })
 
 test('#222 I5 a stale completion answers 409 and appends nothing', async () => {
@@ -424,6 +486,17 @@ test('#222 AS-2 I5 claim and complete the approval step', async () => {
   })
   expect(claimed.payload).toEqual({ instanceId: INSTANCE_ID, step: 'approve', holder: adminId })
 
+  // A claimed approval moves from `available` to my tasks, with its holder
+  // (VT-1, AS-2, VT-2).
+  expect(
+    (await inbox('my')).find((item) => item.instanceId === INSTANCE_ID),
+    'the holder sees the approval in my tasks'
+  ).toMatchObject({ step: 'approve', state: 'opened', holder: adminId })
+  expect(
+    (await inbox('available')).some((item) => item.instanceId === INSTANCE_ID),
+    'a claimed approval is not available'
+  ).toBe(false)
+
   // A second claim of the same task with the version it read before the first
   // claim is refused, so exactly one claim wins (AS-2, I5).
   ids.staleClaimId = randomUUID()
@@ -462,6 +535,14 @@ test('#222 AS-2 I5 claim and complete the approval step', async () => {
   expect(done.version, 'the final completion advanced the version').toBe(4)
   expect(done.status.state, 'the last step completes the instance').toBe('done')
   expect(done.status.currentStep, 'a done instance has no current step').toBeUndefined()
+
+  // A done instance is gone from every open tab (VT-1, VT-2).
+  for (const tab of ['my', 'available', 'started'] as const) {
+    expect(
+      (await inbox(tab)).some((item) => item.instanceId === INSTANCE_ID),
+      `the done instance is absent from ${tab}`
+    ).toBe(false)
+  }
 })
 
 test('#222 I4 the log and the state hold the journey in sequence order', async () => {
@@ -504,6 +585,12 @@ test('#222 I4 a second instance never appears in the first instance read', async
   expect(second.instanceId).toBe(SECOND_INSTANCE_ID)
   expect(second.status.currentStep).toBe('request')
   expect(second.values).toEqual({ summary: 'second' })
+
+  // The second instance is the one the started tab now shows; the first is
+  // done and absent (VT-1).
+  const started = await inbox('started')
+  expect(started.some((item) => item.instanceId === SECOND_INSTANCE_ID)).toBe(true)
+  expect(started.some((item) => item.instanceId === INSTANCE_ID)).toBe(false)
 })
 
 test('#222 I4 enform admin rebuild reproduces the instance projections', async () => {
@@ -569,4 +656,14 @@ test('#222 I8 a principal that may not read the instance answers 403', async () 
     headers: { authorization: `Bearer ${token}` },
   })
   expect(response.status, await response.text()).toBe(403)
+
+  // The inbox never shows another principal's task, even the instance the
+  // administrator's started tab holds (I8, VT-1).
+  for (const tab of ['my', 'available', 'started'] as const) {
+    const inboxResponse = await fetch(`${publicUrl}/api/v1/inbox?tab=${tab}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(inboxResponse.status, `GET /api/v1/inbox?tab=${tab}`).toBe(200)
+    expect(await inboxResponse.json(), `the outsider reads no ${tab} item`).toEqual([])
+  }
 })

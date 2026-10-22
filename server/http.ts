@@ -41,6 +41,7 @@ import { addGrant, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
+import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
@@ -52,11 +53,13 @@ import {
   createPool,
   flowExists,
   grantsOfPrincipal,
+  type InboxTab,
   listFlowSummaries,
   type Principal,
   principalById,
   readEventByOperation,
   readFlowProjection,
+  readInboxRows,
   readLog,
   readTeamMembers,
   revokeSession,
@@ -474,6 +477,48 @@ export function createApp(config: Config, pool: Pool): Hono {
     return c.json(view)
   })
 
+  // Issue #226, VT-1, VT-2, S14, AS-2, AC-5, I8: the inbox. The three tabs
+  // read the instance and task projections, and the engine authorizes every
+  // row before it leaves the server, so the inbox never shows another
+  // principal's task. The state comes from the task projection; the instance
+  // status answers for a current step that has no task row yet.
+  app.get('/api/v1/inbox', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const tab = readInboxTab(c.req.query('tab'))
+    if (tab === undefined) {
+      return c.json({ error: 'the inbox tab is my, available or started' }, 400)
+    }
+    const log = await readLog(pool)
+    const grants = grantsFor(log, auth.principal)
+    const items: InboxItem[] = []
+    for (const row of await readInboxRows(pool, tab, auth.principal.id)) {
+      const instance = instanceOf(log, row.instanceId)
+      if (instance === undefined) continue
+      const published = publishedByHash(log, instance.definitionVersion)
+      if (published === undefined) continue
+      if (
+        !mayRead(auth.principal.id, instance, {
+          flow: instance.flow,
+          definition: published.definition,
+          log,
+          grants,
+        })
+      ) {
+        continue
+      }
+      items.push({
+        instanceId: row.instanceId,
+        flowSlug: row.flowSlug,
+        step: row.step,
+        state: inboxState(row.taskState, row.instanceStatus),
+        ...(row.holder === null ? {} : { holder: row.holder }),
+        lastActivityAt: row.lastActivityAt,
+      })
+    }
+    return c.json(items)
+  })
+
   app.all('*', (c) => c.json({ error: 'not found in this slice' }, 404))
 
   return app
@@ -729,6 +774,49 @@ function resolverFor(
 /** A string payload value, or undefined when it is another type. */
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+/** One inbox item as the API returns it (VT-1, VT-2, S14). */
+type InboxItem = {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly state: string
+  readonly holder?: string
+  readonly lastActivityAt: number
+}
+
+/**
+ * Read the tab that a request names (VT-1). An absent tab is `my`, as the
+ * contract declares; any other value is refused rather than guessed.
+ */
+function readInboxTab(value: string | undefined): InboxTab | undefined {
+  if (value === undefined || value === '') return 'my'
+  return value === 'my' || value === 'available' || value === 'started' ? value : undefined
+}
+
+/**
+ * Map a task row and the instance status to the contract's inbox state
+ * (VT-2, AS-2). The task projection records `available`, `opened` and
+ * `completed`; the instance status answers when the current step has no task
+ * row yet. A projection that records `skipped` or `sent-back` keeps that state
+ * for the API even though this lane writes neither.
+ */
+function inboxState(taskState: string | null, instanceStatus: string): string {
+  switch (taskState) {
+    case 'available':
+      return 'unopened'
+    case 'opened':
+      return 'opened'
+    case 'completed':
+      return 'completed'
+    case 'skipped':
+      return 'skipped'
+    case 'sent-back':
+      return 'sent-back'
+    default:
+      return instanceStatus === 'in-progress' ? 'opened' : 'unopened'
+  }
 }
 
 /** Start the HTTP server on the configured address and return a drain handle. */
