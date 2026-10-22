@@ -39,7 +39,7 @@ test('DE-2 the enform binary exposes serve, worker, migrate, admin, seed, doctor
   }
 })
 
-test.fails('DE-3 the repository ships a systemd unit and a container image with the service surface', () => {
+test('DE-3 the repository ships a systemd unit and a container image with the service surface', () => {
   const unit = readFileSync(join(repo, 'deploy', 'systemd', 'enform.service'), 'utf8')
   expect(unit, 'the unit runs enform serve').toMatch(/^ExecStart=.*\benform(?:\.exe)?\s+serve\b/m)
   expect(unit, 'the unit runs as an unprivileged user').toMatch(/^User=enform$/m)

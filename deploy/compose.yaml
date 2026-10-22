@@ -76,7 +76,7 @@ services:
     # The enform engine. It answers under /api/v1 (MVP.md 9.1).
     image: ${ENFORM_SERVER_IMAGE:-ghcr.io/enform/enform-server:0.1.0}
     restart: unless-stopped
-    command: ["serve"]
+    command: ["serve", "--auto-migrate"]
     environment:
       ENFORM_HTTP_ADDR: ${ENFORM_HTTP_ADDR:-0.0.0.0:8080}
       ENFORM_API_BASE_PATH: /api/v1
@@ -84,7 +84,7 @@ services:
       ENFORM_DATABASE_URL: >-
         ${ENFORM_DATABASE_URL:-postgres://enform:enform@postgres:5432/enform}
       ENFORM_OIDC_ISSUER_URL: >-
-        ${ENFORM_OIDC_ISSUER_URL:-http://keycloak:8080/realms/enform-ad}
+        ${ENFORM_OIDC_ISSUER_URL:-http://keycloak:8080/realms/enform-local}
       ENFORM_OIDC_CLIENT_ID: ${ENFORM_OIDC_CLIENT_ID:-enform}
       ENFORM_OIDC_CLIENT_SECRET: ${ENFORM_OIDC_CLIENT_SECRET:-enform-dev-secret}
       ENFORM_LOG_LEVEL: ${ENFORM_LOG_LEVEL:-info}
@@ -102,7 +102,7 @@ services:
       start_period: 20s
       test:
         - CMD-SHELL
-        - wget -q -O - http://127.0.0.1:8080/api/v1/health
+        - wget -q -O - http://127.0.0.1:8080/healthz
     networks:
       - enform
 
@@ -111,7 +111,7 @@ services:
     # and never decides correctness on its own (MVP.md axiom A9).
     image: ${ENFORM_WORKER_IMAGE:-ghcr.io/enform/enform-worker:0.1.0}
     restart: unless-stopped
-    command: ["work"]
+    command: ["worker"]
     environment:
       ENFORM_DATABASE_URL: >-
         ${ENFORM_DATABASE_URL:-postgres://enform:enform@postgres:5432/enform}

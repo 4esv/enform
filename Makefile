@@ -1,5 +1,5 @@
 # The commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack integration
+.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack integration init
 
 setup:
 	pnpm install --frozen-lockfile
@@ -58,3 +58,22 @@ integration:
 
 stack:
 	docker compose -f deploy/compose.yaml up --wait
+
+# The documented one-command bootstrap of DE-1. It starts the store and the
+# directory when they are not reachable, then `enform init` writes the
+# configuration, creates the database, migrates it, creates the first
+# administrator and serves. A bare-metal install uses the systemd units and
+# `/etc/enform/enform.toml` instead (deploy/README.md).
+init:
+	docker compose -f deploy/compose.yaml up -d --wait postgres keycloak
+	pnpm exec node --experimental-strip-types cli/main.ts init \
+		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}" \
+		--database-url "$${ENFORM_DATABASE_URL:-postgres://enform:enform@127.0.0.1:5432/enform}" \
+		--public-url "$${ENFORM_PUBLIC_URL:-http://localhost:8080}" \
+		--keycloak-url "$${ENFORM_KEYCLOAK_URL:-http://localhost:8081}" \
+		--keycloak-realm "$${ENFORM_KEYCLOAK_REALM:-enform-local}" \
+		--keycloak-admin-user "$${ENFORM_KEYCLOAK_ADMIN_USER:-admin}" \
+		--keycloak-admin-password "$${ENFORM_KEYCLOAK_ADMIN_PASSWORD:-admin}" \
+		--admin-email "$${ENFORM_ADMIN_EMAIL:-admin@example.com}" \
+		--admin-password "$${ENFORM_ADMIN_PASSWORD:-admin-dev-password}" \
+		--no-open

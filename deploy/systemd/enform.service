@@ -1,0 +1,32 @@
+# Issue #214, DE-3, ADR 0011: the server unit of a bare-metal installation.
+# It runs the one `enform` binary as the unprivileged `enform` user, reads the
+# configuration under /etc/enform, logs to the journal and drains on SIGTERM.
+[Unit]
+Description=enform server
+Documentation=https://github.com/4esv/enform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=enform
+Group=enform
+ExecStart=/usr/local/bin/enform serve --config /etc/enform/enform.toml
+EnvironmentFile=-/etc/enform/enform.env
+Restart=on-failure
+RestartSec=5s
+StopSignal=SIGTERM
+TimeoutStopSec=30s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

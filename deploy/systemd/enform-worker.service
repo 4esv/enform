@@ -1,0 +1,32 @@
+# Issue #214, DE-3, ADR 0011, ADR 0013: the worker unit of a bare-metal
+# installation. It runs the same binary and reads the same configuration as the
+# server, as the same unprivileged user.
+[Unit]
+Description=enform worker
+Documentation=https://github.com/4esv/enform
+After=network-online.target enform.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=enform
+Group=enform
+ExecStart=/usr/local/bin/enform worker --config /etc/enform/enform.toml
+EnvironmentFile=-/etc/enform/enform.env
+Restart=on-failure
+RestartSec=5s
+StopSignal=SIGTERM
+TimeoutStopSec=30s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
