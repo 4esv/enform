@@ -412,6 +412,24 @@ test('#228 an administrator creates a second user who claims and approves', asyn
   await page.click('[data-step-index="0"] [data-add-field="0"]')
   await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-key]', 'summary')
   await page.fill('[data-step-index="0"] [data-field-index="0"] [data-field-label]', 'Summary')
+  const controls = page.locator(
+    '[data-step-index="0"] [data-field-index="0"] [data-field-control] option'
+  )
+  expect(await controls.count(), 'the builder offers all sixteen controls').toBe(16)
+  await page.selectOption(
+    '[data-step-index="0"] [data-field-index="0"] [data-field-control]',
+    'email'
+  )
+
+  // A second field with another non-default control shows that the builder
+  // writes any of the sixteen, not one special case (FM-1).
+  await page.click('[data-step-index="0"] [data-add-field="0"]')
+  await page.fill('[data-step-index="0"] [data-field-index="1"] [data-field-key]', 'credits')
+  await page.fill('[data-step-index="0"] [data-field-index="1"] [data-field-label]', 'Credits')
+  await page.selectOption(
+    '[data-step-index="0"] [data-field-index="1"] [data-field-control]',
+    'number'
+  )
 
   // A second step makes the first one a middle step, so the request's
   // outcome is set after the step exists (DF-1, DF-4).
@@ -450,11 +468,19 @@ test('#228 an administrator creates a second user who claims and approves', asyn
   await grantOutcomes(page, 1)
 
   // The administrator fills and starts the form, then claims and submits the
-  // request step (FM-7, AS-2).
+  // request step (FM-7, AS-2). The published definition keeps the labels and
+  // the non-default controls: the start page shows `Summary` as an email
+  // input and `Credits` as a number input (FM-1).
   await page.goto(`${publicUrl}/?flow=${TWO_USER_SLUG}`)
   const summary = page.locator('input[name="summary"]')
   await summary.waitFor({ timeout: 30_000 })
-  await summary.fill('Please approve the two-user request')
+  const summaryField = page.locator('.field', { hasText: 'Summary' })
+  expect(await summaryField.count(), 'the form shows the field label, not the key').toBe(1)
+  expect(await summary.getAttribute('type'), 'the email control renders').toBe('email')
+  const credits = page.locator('input[name="credits"]')
+  expect(await credits.getAttribute('type'), 'the number control renders').toBe('number')
+  await summary.fill(`browser-${RUN}@test.local`)
+  await credits.fill('3')
   await page.click('[data-start]')
   const link = page.locator('.instance-link a')
   await link.waitFor({ timeout: 30_000 })
@@ -465,6 +491,11 @@ test('#228 an administrator creates a second user who claims and approves', asyn
 
   await page.goto(taskUrl)
   await page.locator('[data-claim]').waitFor({ timeout: 30_000 })
+  // The task page renders from the instance read, so the label and the control
+  // that the read carries are the ones the holder sees (FM-1, FM-3).
+  const heldSummary = page.locator('.field', { hasText: 'Summary' })
+  expect(await heldSummary.count(), 'the task page shows the field label').toBe(1)
+  expect(await heldSummary.locator('input[name="summary"]').getAttribute('type')).toBe('email')
   await page.click('[data-claim]')
   await page.waitForFunction(() => document.querySelector('.status')?.textContent === 'Claimed')
   await page.click('[data-outcome="submit"]')
