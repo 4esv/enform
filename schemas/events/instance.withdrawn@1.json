@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/instance.withdrawn@1.json",
+  "title": "enform instance.withdrawn@1 event payload",
+  "description": "The payload of an instance.withdrawn@1 event (S13, WF-4, AC-5, I2, I4, I14). The starter withdraws their own instance, so the event names the instance, the step that the close ended, the holder it notified when it had one, the reason the starter gave, and the notification to that holder in the same operation (I2, SE-5). The event is a marker on the append-only log; the undo is a separate instance.undone@1 event and never rewrites this one (I4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "step", "reason", "outbox"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance that the withdrawal acts on (DX-1).",
+      "type": "string"
+    },
+    "step": {
+      "description": "The step whose open task the withdrawal closed (WF-4).",
+      "type": "string"
+    },
+    "holder": {
+      "description": "The principal that held the closed task (AS-2); absent when nobody had claimed it.",
+      "type": "string"
+    },
+    "reason": {
+      "description": "The reason the starter gave for the withdrawal (S13); empty when the starter gave none.",
+      "type": "string"
+    },
+    "outbox": {
+      "description": "The side effects that the withdrawal causes, committed with the state change (I2, SE-5).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/outboxEntry" }
+    }
+  },
+  "$defs": {
+    "outboxEntry": {
+      "description": "One side effect (SE-1): the connector operation, the connector, and its payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "target", "payload"],
+      "properties": {
+        "operation": { "type": "string" },
+        "target": { "type": "string" },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

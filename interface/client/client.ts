@@ -89,6 +89,60 @@ export interface SendBackIntent {
 }
 
 /**
+ * A withdraw intent (S13, WF-4, AC-5): the parts a client can honestly send when the starter
+ * withdraws their own instance. It carries the operation ID it chose (I1), the event type
+ * `instance.withdrawn@1`, the actor, the instance it acts on (DX-1), the reason (which may be
+ * empty) and the version it read (I5). The server calls the engine with the session principal
+ * and appends what the engine decided; it records no `version` on the log. It is told apart
+ * from an already resolved `instance.withdrawn@1` operation by the payload: a resolved
+ * operation carries the engine's `step`, `holder` and `outbox` fields, an intent names
+ * `version`.
+ */
+export interface WithdrawIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A cancel intent (S13, WF-4, AC-1, AC-5): the parts a client can honestly send when a
+ * principal with `instance.cancel` cancels an instance. It carries the operation ID it chose
+ * (I1), the event type `instance.cancelled@1`, the actor, the instance it acts on (DX-1), the
+ * required reason and the version it read (I5). The server calls the engine with the session
+ * principal and grants and appends what the engine decided; it records no `version` on the log.
+ * It is told apart from an already resolved `instance.cancelled@1` operation by the payload: a
+ * resolved operation carries the engine's `step`, `holder` and `outbox` fields, an intent names
+ * `version`.
+ */
+export interface CancelIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * An undo intent (S13, WF-5, I4): the parts a client can honestly send when the actor who
+ * withdrew or cancelled an instance undoes it. It carries the operation ID it chose (I1), the
+ * event type `instance.undone@1`, the actor, the instance it acts on (DX-1) and the version it
+ * read (I5). The server calls the engine with the session principal and the flow's undo period;
+ * the engine accepts only the closer and only within the period, and appends a compensating
+ * event that never rewrites the close. It is told apart from an already resolved
+ * `instance.undone@1` operation by the payload: a resolved operation carries the engine's
+ * `undoOf`, `step` and `holder` fields, an intent names `version`.
+ */
+export interface UndoIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * An immutable, ordered record of an occurrence. The single writer assigns `seq` (ADR 0004).
  */
 export interface Event {
@@ -159,6 +213,13 @@ export interface InstanceView {
   readonly outcomes: readonly string[]
   readonly previousSteps: readonly string[]
   readonly notes: readonly Note[]
+  readonly withdrawal?: string
+  readonly closeReason?: string
+  readonly closedAt?: number
+  readonly closedBy?: ActorId
+  readonly undoUntil?: number
+  readonly canWithdraw: boolean
+  readonly canCancel: boolean
 }
 
 /**

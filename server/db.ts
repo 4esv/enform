@@ -28,6 +28,7 @@ import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
+import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 
 /** The event that records a change to the profile cache (ID-4, ADR 0012). */
@@ -1096,6 +1097,71 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     })
     return
   }
+  if (event.type === INSTANCE_WITHDRAWN || event.type === INSTANCE_CANCELLED) {
+    const close = readStepAndHolder(event)
+    const kind = event.type === INSTANCE_WITHDRAWN ? 'withdrawn' : 'cancelled'
+    // The close marker is derived state (WF-4, S13): the open task ends, the
+    // previous step and holder stay for the undo, and the version advances as
+    // the engine advanced it (I5). The close event itself stays on the log
+    // (I4); the undo is a separate event that clears the marker.
+    await client.query(
+      `update instances
+       set current_step = null,
+           holder = null,
+           done = false,
+           status = $2,
+           withdrawal = $2,
+           previous_step = $3,
+           previous_holder = $4,
+           closed_at = $5,
+           closed_by = $6,
+           version = version + 1,
+           seq = $7
+       where id = $1`,
+      [close.instanceId, kind, close.step, close.holder, event.at, event.actor ?? null, event.seq]
+    )
+    // The closed task leaves the open set; the inbox reads the instance's
+    // open state too, so a closed instance is absent from every tab (VT-1).
+    await client.query(
+      `update tasks
+       set holder = null, state = $3, last_activity_at = $4, seq = $5
+       where instance_id = $1 and step = $2`,
+      [close.instanceId, close.step, kind, event.at, event.seq]
+    )
+    return
+  }
+  if (event.type === INSTANCE_UNDONE) {
+    const restore = readStepAndHolder(event)
+    // The undo restores the step and holder the close recorded and clears the
+    // close marker (WF-5, I4). The close event stays on the log; this event is
+    // the compensation that the task page reads back.
+    await client.query(
+      `update instances
+       set current_step = $2,
+           holder = $3,
+           done = false,
+           status = case when $3::text is null then 'waiting' else 'in-progress' end,
+           withdrawal = null,
+           previous_step = null,
+           previous_holder = null,
+           closed_at = null,
+           closed_by = null,
+           version = version + 1,
+           seq = $4
+       where id = $1`,
+      [restore.instanceId, restore.step, restore.holder, event.seq]
+    )
+    await client.query(
+      `update tasks
+       set holder = $3,
+           state = case when $3::text is null then 'available' else 'opened' end,
+           last_activity_at = $4,
+           seq = $5
+       where instance_id = $1 and step = $2`,
+      [restore.instanceId, restore.step, restore.holder, event.at, event.seq]
+    )
+    return
+  }
   if (event.type === SEED_CLEARED_TYPE) {
     // The records are already marked cleared in the same transaction (DE-4).
     // Remove their projections again, so a live append and a rebuild agree.
@@ -1318,6 +1384,19 @@ function readSendBack(event: Event): {
     revision,
     assignees: readAssignees(event.payload.assignees),
   }
+}
+
+/** Read the step and holder that a close records and an undo restores (WF-4, WF-5, I4). */
+function readStepAndHolder(event: Event): {
+  instanceId: string
+  step: string
+  holder: string | null
+} {
+  const { instanceId, step, holder } = event.payload
+  if (typeof instanceId !== 'string' || typeof step !== 'string') {
+    throw new Error(`events: malformed ${event.type} payload at seq ${event.seq}`)
+  }
+  return { instanceId, step, holder: typeof holder === 'string' ? holder : null }
 }
 
 /** Read the assignees that an event records (I13); an absent or malformed list is empty. */

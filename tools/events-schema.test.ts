@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { expect, test } from 'vitest'
+import { claim } from '../engine/action.js'
 import type { Grant } from '../engine/authorize.js'
 import type { ConditionData } from '../engine/condition.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
@@ -9,7 +10,13 @@ import { changeTitle, type Flow } from '../engine/flow.js'
 import { contentHash } from '../engine/instance.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
-import { startInstance, submitInstance } from '../engine/submission.js'
+import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../engine/submission.js'
+import {
+  cancel,
+  undoWithdrawOrCancel,
+  WITHDRAW_CANCEL_NOTIFICATION,
+  withdraw,
+} from '../engine/withdraw.js'
 
 // Issue #177, FM-7, DF-1, I2: the published event schemas match the payloads
 // that the engine writes. The schemas are the contract (MVP.md 9.1, ADR 0004):
@@ -66,6 +73,15 @@ const validateStarted = ajv.compile(
 )
 const validateSubmitted = ajv.compile(
   JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.submitted@1.json'), 'utf8'))
+)
+const validateWithdrawn = ajv.compile(
+  JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.withdrawn@1.json'), 'utf8'))
+)
+const validateCancelled = ajv.compile(
+  JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.cancelled@1.json'), 'utf8'))
+)
+const validateUndone = ajv.compile(
+  JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'instance.undone@1.json'), 'utf8'))
 )
 const validateTitle = ajv.compile(
   JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'config.flow.title@1.json'), 'utf8'))
@@ -149,4 +165,81 @@ test('#220 the published title schema matches the payload the engine writes', ()
   expect(validateTitle(operation.payload), 'the real title payload validates').toBe(true)
   expect(validateTitle({ flow: SLUG }), 'a payload without the title is rejected').toBe(false)
   expect(validateTitle({ flow: SLUG, title: 7 }), 'a non-string title is rejected').toBe(false)
+})
+
+// Issue #238, S13, WF-4, WF-5, I2, I4, I14: the published close and undo
+// schemas match the payloads that the engine writes. A withdraw carries the
+// notification to the closed task's holder in the same operation (I2), a
+// cancel carries the required reason, and the undo names the close it
+// compensates and the step and holder it restores (WF-5).
+
+/** Priya, who holds `instance.cancel` on the flow (S13, AC-5). */
+const CANCELER = 'user:priya'
+const cancelGrants: readonly Grant[] = [
+  ...grants,
+  { principal: CANCELER, scopes: ['instance.cancel'], resource: `flow:${SLUG}` },
+]
+
+test('#238 S13 the published close and undo schemas match the engine payloads', () => {
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
+  const claimed = claim(started.instance, SAM, started.instance.version ?? 0, deps())
+  if (!claimed.accepted) throw new Error(claimed.reason)
+  const held = claimed.instance
+
+  const withdrawn = withdraw(held, SAM, 'Dropped a class', deps())
+  expect(withdrawn.accepted).toBe(true)
+  if (withdrawn.operation === undefined) throw new Error(withdrawn.reason)
+  expect(withdrawn.operation.payload.outbox, 'the holder is notified in the same event').toEqual([
+    {
+      operation: WITHDRAW_CANCEL_NOTIFICATION,
+      target: EMAIL_CONNECTOR,
+      payload: { to: SAM, step: 'request', actor: SAM, reason: 'Dropped a class' },
+    },
+  ])
+  expect(validateWithdrawn(withdrawn.operation.payload), 'the withdraw payload validates').toBe(
+    true
+  )
+  expect(
+    validateWithdrawn({ ...withdrawn.operation.payload, reason: 7 }),
+    'a non-string reason is rejected'
+  ).toBe(false)
+  expect(
+    validateWithdrawn({ ...withdrawn.operation.payload, outbox: 'none' }),
+    'a malformed outbox is rejected'
+  ).toBe(false)
+
+  const cancelled = cancel(
+    held,
+    CANCELER,
+    'Duplicate of #4411',
+    { flow: SLUG, grants: cancelGrants },
+    deps()
+  )
+  expect(cancelled.accepted).toBe(true)
+  if (cancelled.operation === undefined) throw new Error(cancelled.reason)
+  expect(validateCancelled(cancelled.operation.payload), 'the cancel payload validates').toBe(true)
+  expect(
+    validateCancelled({ ...cancelled.operation.payload, reason: '' }),
+    'a cancel without a reason is rejected'
+  ).toBe(false)
+
+  const undone = undoWithdrawOrCancel(
+    withdrawn.instance,
+    SAM,
+    withdrawn.instance.version ?? 0,
+    24 * 3_600_000,
+    1_700_000_100_000,
+    deps()
+  )
+  expect(undone.accepted).toBe(true)
+  if (undone.operation === undefined) throw new Error(undone.reason)
+  expect(validateUndone(undone.operation.payload), 'the undo payload validates').toBe(true)
+  expect(
+    validateUndone({ ...undone.operation.payload, undoOf: 'deleted' }),
+    'an undo of anything but a close is rejected'
+  ).toBe(false)
+  expect(
+    validateUndone({ ...undone.operation.payload, step: 3 }),
+    'an undo without a step is rejected'
+  ).toBe(false)
 })

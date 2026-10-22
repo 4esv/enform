@@ -20,6 +20,7 @@
 // pure and deterministic (I6): it reads no clock, no random source and no I/O.
 
 import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
+import { authorize } from './authorize.js'
 import {
   type ControlType,
   type FlowDefinition,
@@ -128,6 +129,30 @@ export type InstanceView = {
    * outcome scope the actor does not hold and did not write, is absent.
    */
   readonly notes: readonly Note[]
+  /**
+   * Whether the instance is withdrawn or cancelled (S13, WF-4). It is absent
+   * while the instance is live, and it carries the close reason beside the
+   * closer and the close time so the page can show all three (MVP.md 5.4).
+   */
+  readonly withdrawal?: 'withdrawn' | 'cancelled'
+  /** The reason that the closer gave for the close (S13, WF-4). */
+  readonly closeReason?: string
+  /** When the instance was closed, from the injected clock (S13, I6). */
+  readonly closedAt?: number
+  /** Who withdrew or cancelled the instance (S13, I14); only this actor may undo it (WF-5). */
+  readonly closedBy?: ActorId
+  /**
+   * Whether the actor may withdraw the open instance (S13, WF-4, AC-5): only
+   * its starter, and only while a task is open. The page uses it to show the
+   * control; the engine still authorizes the write (A9, I8).
+   */
+  readonly canWithdraw: boolean
+  /**
+   * Whether the actor may cancel the open instance (S13, WF-4, AC-5, AC-1):
+   * it holds `instance.cancel` on the flow, and a task is open. The page uses
+   * it to show the control; the engine still authorizes the write (A9, I8).
+   */
+  readonly canCancel: boolean
 }
 
 /**
@@ -219,6 +244,12 @@ export function readInstance(
     version: current.version ?? 0,
     previousSteps: stepsBefore(context.definition, current.currentStep),
     notes: visibleNotes(actor, instanceNotes(context.log, current.instanceId), context),
+    ...(current.withdrawal === undefined ? {} : { withdrawal: current.withdrawal }),
+    ...(current.closeReason === undefined ? {} : { closeReason: current.closeReason }),
+    ...(current.closedAt === undefined ? {} : { closedAt: current.closedAt }),
+    ...(current.closedBy === undefined ? {} : { closedBy: current.closedBy }),
+    canWithdraw: canWithdraw(actor, current),
+    canCancel: canCancel(current, context),
   }
 }
 
@@ -337,6 +368,7 @@ function closed(
     previousHolder: optionalString(event.payload.holder),
     closedAt: event.at,
     closedBy: event.actor,
+    closeReason: optionalString(event.payload.reason),
   }
 }
 
@@ -351,7 +383,32 @@ function reopened(instance: ProjectedInstance, event: Event): ProjectedInstance 
     previousHolder: undefined,
     closedAt: undefined,
     closedBy: undefined,
+    closeReason: undefined,
   }
+}
+
+/**
+ * Whether an actor may withdraw the open instance (S13, WF-4, AC-5): only its
+ * starter, and only while a task is open. The engine still authorizes the
+ * write; this answer only lets the page show the control (A9, I8).
+ */
+function canWithdraw(actor: ActorId, instance: ProjectedInstance): boolean {
+  return open(instance) && instance.starter === actor
+}
+
+/**
+ * Whether an actor may cancel the open instance (S13, WF-4, AC-5, AC-1): it
+ * holds `instance.cancel` on the flow, and a task is open. The engine still
+ * authorizes the write; this answer only lets the page show the control (A9,
+ * I8).
+ */
+function canCancel(instance: ProjectedInstance, context: StatusContext): boolean {
+  return open(instance) && authorize(context.grants, 'instance.cancel', `flow:${context.flow}`)
+}
+
+/** Whether a task is open on the instance: no close marker and a current step (WF-4). */
+function open(instance: ProjectedInstance): boolean {
+  return instance.withdrawal === undefined && instance.currentStep !== undefined
 }
 
 /**

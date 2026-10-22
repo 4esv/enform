@@ -135,6 +135,13 @@ export type Instance = {
    */
   readonly closedBy?: ActorId
   /**
+   * The reason that the closer gave for the withdrawal or the cancellation
+   * (S13, WF-4). It is present while `withdrawal` is set; the task page shows
+   * it to everyone who may read the instance, and the undo clears it with the
+   * rest of the close marker (WF-5, I4).
+   */
+  readonly closeReason?: string
+  /**
    * The revision of each step that a send back has revisited (WF-3, S11). It
    * maps a step key to the revision that the instance is on for that step: the
    * first time the engine enters a step is revision 1, and each send back to

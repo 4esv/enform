@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/instance.undone@1.json",
+  "title": "enform instance.undone@1 event payload",
+  "description": "The payload of an instance.undone@1 event (S13, WF-5, I4, I14): the compensating event that undoes a withdrawal or a cancellation within the flow's undo period. It names the instance, which close it undoes, and the step and holder it restores. The close event stays on the log unchanged (I4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "undoOf", "step"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance that the undo acts on (DX-1).",
+      "type": "string"
+    },
+    "undoOf": {
+      "description": "The close that this event undoes (WF-5).",
+      "type": "string",
+      "enum": ["withdrawn", "cancelled"]
+    },
+    "step": {
+      "description": "The step that the undo restores as the current step (WF-5).",
+      "type": "string"
+    },
+    "holder": {
+      "description": "The holder that the undo restores (AS-2); absent when the closed task had nobody.",
+      "type": "string"
+    }
+  }
+}

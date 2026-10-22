@@ -33,17 +33,26 @@ paths:
         (`SendBackIntent`, `step.sent-back@1`) names the instance, the earlier
         step it returns the task to, the required comment (WF-3) and the
         version it read; the server resolves it through the engine and
-        records the revision on the log. The server resolves the
+        records the revision on the log. A withdraw intent
+        (`WithdrawIntent`, `instance.withdrawn@1`) names the instance, the
+        reason and the version the starter read (S13, WF-4); a cancel intent
+        (`CancelIntent`, `instance.cancelled@1`) does the same for a principal
+        with `instance.cancel`, and its reason is required (S13, WF-4, AC-5);
+        an undo intent (`UndoIntent`, `instance.undone@1`) names the instance
+        and the version the closer read (S13, WF-5). The server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
-        told apart by `type` and by their payload shape. A
+        told apart by `type` and by their payload shape. The server refuses a
+        stale close view before it calls the engine, because a withdraw or a
+        cancel closes a task that is open now (I5). A
         `config.grant.changed@1` operation is the one configuration event this
         path serves: its payload names `principal`, `scopes` and `resource`,
         and the server authorizes `org.grants` on `org` or `flow.grant` on the
         resource before it appends the grant with the client's ID and time, so
         a retry with the same ID appends nothing. A raw start, a raw completion,
-        a raw send back, any other configuration event or any other operation
-        is refused. The appended event keeps the client's ID and time.
+        a raw send back, a raw close or undo, any other configuration event or
+        any other operation is refused. The appended event keeps the client's
+        ID and time.
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
       requestBody:
@@ -62,11 +71,13 @@ paths:
         '400':
           description: >-
             The operation is invalid, a raw `instance.started@1`,
-            `step.completed@1` or `step.sent-back@1` was posted instead of its
-            intent, an intent cannot be resolved (an intent that lacks the
-            instance id, the version, the target step or the comment, or that
-            names an unknown instance), the engine refused a send back for an
-            empty comment (WF-3), or a `config.grant.changed@1` lacks its id,
+            `step.completed@1`, `step.sent-back@1`, `instance.withdrawn@1`,
+            `instance.cancelled@1` or `instance.undone@1` was posted instead
+            of its intent, an intent cannot be resolved (an intent that lacks
+            the instance id, the version, the reason, the target step or the
+            comment, or that names an unknown instance), the engine refused a
+            send back for an empty comment (WF-3) or a cancel for a missing
+            reason (MVP.md 5.6), or a `config.grant.changed@1` lacks its id,
             time, principal, scopes or resource. Nothing is appended. A
             configuration event other than a grant is not served in this
             slice.
@@ -74,18 +85,22 @@ paths:
           description: >-
             The principal may not make this change, or a state-changing cookie
             request carries no valid CSRF token. A grant requires `org.grants`
-            on `org` or `flow.grant` on the resource. Nothing is appended.
+            on `org` or `flow.grant` on the resource. A withdraw requires the
+            starter (AC-5) and a cancel requires `instance.cancel` on the
+            flow (S13, AC-5). Nothing is appended.
         '409':
           description: >-
-            The engine refused the completion, the claim or the send back and
-            appended nothing (I1, I5), because the version the client read is
-            stale, the actor does not hold the step (AS-2), does not hold the
-            outcome's scope (AC-4), is not the holder a send back needs (S11),
-            captured a field the current step does not make editable (FM-3),
-            or captured a value that fails its control or leaves a required
-            field empty (FM-4). The `error` names the reason, and `errors`
-            lists every validation error by field path; it is empty when the
-            reason alone names the refusal.
+            The engine refused the completion, the claim, the send back, the
+            withdraw, the cancel or the undo and appended nothing (I1, I5),
+            because the version the client read is stale, the actor does not
+            hold the step (AS-2), does not hold the outcome's scope (AC-4), is
+            not the holder a send back needs (S11), is not the starter or the
+            closer a close or an undo needs (S13, WF-4, WF-5), the undo period
+            has passed (WF-5), captured a field the current step does not make
+            editable (FM-3), or captured a value that fails its control or
+            leaves a required field empty (FM-4). The `error` names the reason,
+            and `errors` lists every validation error by field path; it is
+            empty when the reason alone names the refusal.
           content:
             application/json:
               schema:
@@ -193,7 +208,11 @@ paths:
         with the session principal and ignores it. The view also carries
         `previousSteps`, the earlier definition keys that a send back may name
         (S11, WF-3), and `notes`, the notes on this instance that the actor
-        may read (VT-3, I8).
+        may read (VT-3, I8). A closed instance carries `withdrawal`,
+        `closeReason`, `closedAt`, `closedBy` and `undoUntil`, the end of the
+        flow's undo period (S13, WF-4, WF-5); `canWithdraw` and `canCancel`
+        tell the page whether to offer the close controls, and the engine
+        still authorizes the write (A9, I8).
       parameters:
         - name: instanceId
           in: path
@@ -965,6 +984,147 @@ components:
               description: >-
                 The instance version that the client read (I5). The engine
                 refuses a send back from a stale view and appends nothing.
+    WithdrawIntent:
+      type: object
+      description: >-
+        A withdraw intent (S13, WF-4, AC-5): the parts a client can honestly
+        send when the starter withdraws their own instance. It carries the
+        operation ID it chose (I1), the event type `instance.withdrawn@1`,
+        the actor, the instance it acts on (DX-1), the reason (which may be
+        empty) and the version it read (I5). The server calls the engine with
+        the session principal and appends what the engine decided; it records
+        no `version` on the log. It is told apart from an already resolved
+        `instance.withdrawn@1` operation by the payload: a resolved operation
+        carries the engine's `step`, `holder` and `outbox` fields, an intent
+        names `version`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.withdrawn@1`.
+          examples:
+            - instance.withdrawn@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: >-
+            The instance, the reason and the version the client read (DX-1,
+            S13).
+          required: [instanceId, reason, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance to withdraw (DX-1).
+            reason:
+              type: string
+              description: >-
+                The reason the starter gives, which may be empty (S13).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version that the client read (I5). The server
+                refuses a stale close and appends nothing.
+    CancelIntent:
+      type: object
+      description: >-
+        A cancel intent (S13, WF-4, AC-1, AC-5): the parts a client can
+        honestly send when a principal with `instance.cancel` cancels an
+        instance. It carries the operation ID it chose (I1), the event type
+        `instance.cancelled@1`, the actor, the instance it acts on (DX-1), the
+        required reason and the version it read (I5). The server calls the
+        engine with the session principal and grants and appends what the
+        engine decided; it records no `version` on the log. It is told apart
+        from an already resolved `instance.cancelled@1` operation by the
+        payload: a resolved operation carries the engine's `step`, `holder`
+        and `outbox` fields, an intent names `version`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.cancelled@1`.
+          examples:
+            - instance.cancelled@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: >-
+            The instance, the reason and the version the client read (DX-1,
+            S13).
+          required: [instanceId, reason, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance to cancel (DX-1).
+            reason:
+              type: string
+              minLength: 1
+              description: >-
+                The reason the cancelling principal gives, which is required
+                (MVP.md 5.6, S13).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version that the client read (I5). The server
+                refuses a stale close and appends nothing.
+    UndoIntent:
+      type: object
+      description: >-
+        An undo intent (S13, WF-5, I4): the parts a client can honestly send
+        when the actor who withdrew or cancelled an instance undoes it. It
+        carries the operation ID it chose (I1), the event type
+        `instance.undone@1`, the actor, the instance it acts on (DX-1) and the
+        version it read (I5). The server calls the engine with the session
+        principal and the flow's undo period; the engine accepts only the
+        closer and only within the period, and appends a compensating event
+        that never rewrites the close. It is told apart from an already
+        resolved `instance.undone@1` operation by the payload: a resolved
+        operation carries the engine's `undoOf`, `step` and `holder` fields,
+        an intent names `version`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.undone@1`.
+          examples:
+            - instance.undone@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The instance and the version the client read (DX-1, S13).
+          required: [instanceId, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance to reopen (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version that the client read (I5). The engine
+                refuses a stale undo and appends nothing.
     Event:
       type: object
       description: >-
@@ -1097,6 +1257,8 @@ components:
         - version
         - previousSteps
         - notes
+        - canWithdraw
+        - canCancel
       properties:
         instanceId:
           type: string
@@ -1179,6 +1341,46 @@ components:
             whose outcome scope the actor does not hold, is absent.
           items:
             $ref: '#/components/schemas/Note'
+        withdrawal:
+          type: string
+          enum: [withdrawn, cancelled]
+          description: >-
+            How the instance was closed (S13, WF-4); absent while it is live.
+            A withdrawal is the starter's own (AC-5) and a cancellation needs
+            `instance.cancel` on the flow (AC-1).
+        closeReason:
+          type: string
+          description: >-
+            The reason that the closer gave (S13, WF-4); absent while the
+            instance is live and after an undo.
+        closedAt:
+          type: integer
+          description: >-
+            When the instance was closed, in milliseconds since the epoch
+            (S13, I6); absent while it is live.
+        closedBy:
+          $ref: '#/components/schemas/ActorId'
+        undoUntil:
+          type: integer
+          description: >-
+            The end of the flow's undo period: `closedAt` plus the flow's
+            `undoHours`, or the server default of 24 hours when the flow does
+            not set one (WF-5, S13). The closer sees the Undo control before
+            this time; absent while the instance is live.
+        canWithdraw:
+          type: boolean
+          description: >-
+            Whether the actor may withdraw the open instance (S13, WF-4, AC-5):
+            only its starter, and only while a task is open. The page uses it
+            to show the control; the engine still authorizes the write (A9,
+            I8).
+        canCancel:
+          type: boolean
+          description: >-
+            Whether the actor may cancel the open instance (S13, WF-4, AC-5,
+            AC-1): it holds `instance.cancel` on the flow, and a task is open.
+            The page uses it to show the control; the engine still authorizes
+            the write (A9, I8).
     Note:
       type: object
       description: >-

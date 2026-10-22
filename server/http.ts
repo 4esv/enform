@@ -9,6 +9,13 @@
 // creates, edits and publishes a flow through the engine. The server resolves
 // the request, calls the engine, appends the operation and projects it; the
 // engine decides authorization, classification and publication (A9).
+//
+// Issue #238, S13, WF-4, WF-5, AC-5, I5, I8, I14: a starter withdraws their
+// own instance, a principal with `instance.cancel` cancels any instance with a
+// reason, and the actor who closed it undoes the close within the flow's undo
+// period. The server loads the instance, refuses a stale close view, calls the
+// engine and appends the operation the engine decided; the session is the
+// actor.
 
 import { createHash } from 'node:crypto'
 import { serve } from '@hono/node-server'
@@ -45,6 +52,14 @@ import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
+import {
+  cancel,
+  INSTANCE_CANCELLED,
+  INSTANCE_UNDONE,
+  INSTANCE_WITHDRAWN,
+  undoWithdrawOrCancel,
+  withdraw,
+} from '../engine/withdraw.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
 import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
@@ -90,6 +105,15 @@ import { versionLine } from './version.js'
 
 /** The injected sources of a server-created operation (I6, ADR 0004). */
 const operationDeps: OperationDeps = { clock: () => Date.now(), ids: () => newOperationId() }
+
+/**
+ * The undo period of a flow that does not set one (WF-5, S13, S16): 24 hours,
+ * the server default that `undoHours` overrides.
+ */
+const DEFAULT_UNDO_HOURS = 24
+
+/** One hour in milliseconds, the unit that the engine's undo period takes. */
+const HOUR_MS = 3_600_000
 
 /**
  * The scopes that let a principal read a flow (#220). `flow.read` reads the
@@ -570,7 +594,16 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (view === undefined) {
       return c.json({ error: 'the principal may not read the instance' }, 403)
     }
-    return c.json(view)
+    // The undo window is the close time plus the flow's period; an absent
+    // setting uses the server default (WF-5, S13). The engine read carries the
+    // close marker and the closer, and the server adds the window so the page
+    // knows when the Undo control stops being offered.
+    const undoHours = published.definition.undoHours ?? DEFAULT_UNDO_HOURS
+    return c.json(
+      view.closedAt === undefined
+        ? view
+        : { ...view, undoUntil: view.closedAt + undoHours * HOUR_MS }
+    )
   })
 
   // Issue #226, VT-1, VT-2, S14, AS-2, AC-5, I8: the inbox. The three tabs
@@ -625,7 +658,8 @@ export function createApp(config: Config, pool: Pool): Hono {
 /**
  * Append one resolved operation or answer the engine's refusal (#222). A start
  * or a completion is resolved before it is appended; a claim carries the
- * version it read and the engine checks it (I5).
+ * version it read and the engine checks it (I5). A withdraw, a cancel and an
+ * undo are close intents that the engine resolves (S13, WF-4, WF-5).
  */
 async function serveOperation(c: Context, pool: Pool, auth: Auth, body: Record<string, unknown>) {
   const log = await readLog(pool)
@@ -697,6 +731,15 @@ async function resolveOperation(
     }
     if (body.type === STEP_SENT_BACK) {
       return sendBackOperation(pool, log, principal, grants, body)
+    }
+    if (body.type === INSTANCE_WITHDRAWN) {
+      return withdrawOperation(log, principal, body)
+    }
+    if (body.type === INSTANCE_CANCELLED) {
+      return cancelOperation(log, principal, grants, body)
+    }
+    if (body.type === INSTANCE_UNDONE) {
+      return undoOperation(log, principal, body)
     }
     return { status: 400, error: 'this operation is not served in this slice' }
   } catch (error) {
@@ -823,6 +866,195 @@ async function sendBackOperation(
     }
   }
   return { operation: result.operation }
+}
+
+/** One close intent (S13, WF-4): the instance, the reason and the version the client read. */
+type CloseIntent = {
+  readonly instanceId: string
+  readonly reason: string
+  readonly version: number
+  readonly id: string
+  readonly at: number
+}
+
+/**
+ * Read a withdraw or cancel intent (S13, WF-4). The client posts the intent,
+ * not the resolved event: a raw close carries the engine's `step`, `holder`,
+ * `previousStep` or `outbox` field and is refused (A9, ADR 0010).
+ */
+function readCloseIntent(body: Record<string, unknown>): CloseIntent | undefined {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  if (payload !== undefined && hasEngineCloseField(payload)) return undefined
+  const instanceId = stringValue(payload?.instanceId)
+  const reason = typeof payload?.reason === 'string' ? payload.reason : undefined
+  const version = payload?.version
+  if (
+    instanceId === undefined ||
+    reason === undefined ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return undefined
+  }
+  return { instanceId, reason, version, id: body.id, at: body.at }
+}
+
+/**
+ * Apply a withdrawal through the engine (S13, WF-4, AC-5, I5, #238). The
+ * client posts the intent; the server loads the instance, passes the session
+ * principal as the actor, and lets the engine decide the state, the previous
+ * step and holder and the notification. The engine decides the close; the
+ * server decides whether the view the client acted on is still current. A
+ * withdrawn instance closes a task that is open now, so a stale `version` is
+ * refused here before the engine runs (I5). Only the starter may withdraw
+ * (AC-5), so any other actor answers 403 with the engine's reason.
+ */
+function withdrawOperation(
+  log: Log,
+  principal: Principal,
+  body: Record<string, unknown>
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const intent = readCloseIntent(body)
+  if (intent === undefined) {
+    return {
+      status: 400,
+      error: 'a withdraw needs an id, a time, an instance, a reason and a version',
+    }
+  }
+  const instance = instanceOf(log, intent.instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${intent.instanceId} (DX-1)` }
+  }
+  if (intent.version !== (instance.version ?? 0)) {
+    return { status: 409, error: 'the view is stale, refresh and retry' }
+  }
+  const result = withdraw(instance, principal.id, intent.reason, {
+    clock: () => intent.at,
+    ids: () => intent.id,
+  })
+  if (!result.accepted || result.operation === undefined) {
+    return {
+      status: closeStatus(result.reason),
+      error: result.reason ?? 'the withdraw was refused',
+    }
+  }
+  return { operation: result.operation }
+}
+
+/**
+ * Apply a cancellation through the engine (S13, WF-4, AC-5, AC-1, I5, #238).
+ * The engine authorizes `instance.cancel` on the flow, refuses an empty reason
+ * (MVP.md 5.6), closes the open task and returns the notification in the same
+ * operation (I2). The server refuses a stale view before the engine runs, and
+ * maps the engine's refusals to 400, 403 and 409.
+ */
+function cancelOperation(
+  log: Log,
+  principal: Principal,
+  grants: readonly Grant[],
+  body: Record<string, unknown>
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const intent = readCloseIntent(body)
+  if (intent === undefined) {
+    return {
+      status: 400,
+      error: 'a cancel needs an id, a time, an instance, a reason and a version',
+    }
+  }
+  const instance = instanceOf(log, intent.instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${intent.instanceId} (DX-1)` }
+  }
+  if (intent.version !== (instance.version ?? 0)) {
+    return { status: 409, error: 'the view is stale, refresh and retry' }
+  }
+  const result = cancel(
+    instance,
+    principal.id,
+    intent.reason,
+    { flow: instance.flow, grants },
+    { clock: () => intent.at, ids: () => intent.id }
+  )
+  if (!result.accepted || result.operation === undefined) {
+    const reason = result.reason ?? 'the cancel was refused'
+    return { status: cancelStatus(reason), error: reason }
+  }
+  return { operation: result.operation }
+}
+
+/**
+ * Apply the undo of a withdrawal or a cancellation through the engine (S13,
+ * WF-5, I4, #238). The client posts the instance and the version it read. The
+ * flow's `undoHours` sets the period; an absent setting uses the server
+ * default. The engine accepts only the closer and only within the period, and
+ * appends a compensating event that restores the previous step and holder; a
+ * wrong actor, a stale view or a late undo answers 409 (WF-5).
+ */
+function undoOperation(
+  log: Log,
+  principal: Principal,
+  body: Record<string, unknown>
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const instanceId = stringValue(payload?.instanceId)
+  const version = payload?.version
+  if (
+    payload === undefined ||
+    hasEngineUndoField(payload) ||
+    instanceId === undefined ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return { status: 400, error: 'an undo needs an id, a time, an instance and a version' }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) {
+    return { status: 400, error: `the log holds no published definition for ${instanceId}` }
+  }
+  const undoPeriod = (published.definition.undoHours ?? DEFAULT_UNDO_HOURS) * HOUR_MS
+  const result = undoWithdrawOrCancel(instance, principal.id, version, undoPeriod, body.at, {
+    clock: () => body.at as number,
+    ids: () => body.id as string,
+  })
+  if (!result.accepted || result.operation === undefined) {
+    return { status: 409, error: result.reason ?? 'the undo was refused' }
+  }
+  return { operation: result.operation }
+}
+
+/** The engine fields that only a resolved close carries (S13, WF-4, ADR 0010). */
+function hasEngineCloseField(payload: Record<string, unknown>): boolean {
+  return ['step', 'holder', 'previousStep', 'outbox'].some((key) => payload[key] !== undefined)
+}
+
+/** The engine fields that only a resolved undo carries (WF-5, ADR 0010). */
+function hasEngineUndoField(payload: Record<string, unknown>): boolean {
+  return ['undoOf', 'step', 'holder', 'previousStep'].some((key) => payload[key] !== undefined)
+}
+
+/** The HTTP status of a close refusal: authorization is 403, everything else 409. */
+function closeStatus(reason: string | undefined): 403 | 409 {
+  if (reason === undefined) return 409
+  if (reason.includes('is not the starter') || reason.includes('lacks instance.cancel')) {
+    return 403
+  }
+  return 409
+}
+
+/** The HTTP status of a cancel refusal: a missing reason is the request, not the state (MVP.md 5.6). */
+function cancelStatus(reason: string): 400 | 403 | 409 {
+  if (reason.includes('needs a reason')) return 400
+  return closeStatus(reason)
 }
 
 /**

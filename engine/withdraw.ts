@@ -213,6 +213,7 @@ export function undoWithdrawOrCancel(
     previousHolder: undefined,
     closedAt: undefined,
     closedBy: undefined,
+    closeReason: undefined,
     version: version + 1,
   }
   const change = {
@@ -254,6 +255,7 @@ function close(
     previousHolder: instance.holder,
     closedAt: operation.at,
     closedBy: actor,
+    closeReason: reason,
     version: currentVersion(instance) + 1,
   }
   return { accepted: true, instance: closed, operation, outbox }
