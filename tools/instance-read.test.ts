@@ -26,6 +26,7 @@ import { startInstance, submitInstance } from '../engine/submission.js'
 const SLUG = 'course-overload'
 const SAM = 'user:sam'
 const PRISCILLA = 'user:priscilla'
+const OKAFOR = 'user:okafor'
 const OUTSIDER = 'user:outsider'
 
 /** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
@@ -141,6 +142,11 @@ test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', (
   expect(Object.hasOwn(view?.values ?? {}, 'detail'), 'a hidden field is absent, not null').toBe(
     false
   )
+  // The read carries the visible field definitions and the step's outcomes, so
+  // a task page renders without the whole definition (#228, AC-4). The hidden
+  // field is absent from `fields` exactly as it is absent from `values`.
+  expect(view?.fields).toEqual([{ key: 'summary', control: 'text' }])
+  expect(view?.outcomes).toEqual(['submit'])
 
   // A principal that may read the instance but is not an assignee of the step
   // gets the visible fields and no editable field (FM-3, I8).
@@ -216,6 +222,11 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
   expect(view?.visible).toEqual(['summary', 'decision'])
   expect(view?.editable).toEqual([])
   expect(view?.values).toEqual({ summary: 'first', decision: 'approve' })
+  expect(view?.fields).toEqual([
+    { key: 'summary', control: 'text' },
+    { key: 'decision', control: 'select', options: ['approve', 'reject'] },
+  ])
+  expect(view?.outcomes).toEqual(['approve', 'reject'])
 
   // The second instance never saw the first instance's events (I4, I6).
   const other = projected(state, OTHER_ID)
@@ -226,6 +237,78 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
 
   // The log holds no instance with an unknown id.
   expect(instanceOf(state.log, 'missing')).toBeUndefined()
+})
+
+// Issue #228, AC-4, I8: a step assignee holds the task, not the flow. The
+// instance read carries the current step's visible fields and outcomes, and a
+// principal whose only grant is that step's outcome renders the form, claims
+// the task and completes it without any flow-level scope.
+test('#228 a step assignee reads the fields and outcomes and completes with only the step grant', () => {
+  const sources = deps()
+  let state = seeded(sources)
+  const started = startInstance(
+    flow,
+    INSTANCE_ID,
+    { summary: 'hello', detail: 'private' },
+    SAM,
+    sources,
+    resolve,
+    samGrants
+  )
+  state = apply(started.operation, state)
+  const claimRequest = claim(started.instance, SAM, started.instance.version ?? 0, sources)
+  expect(claimRequest.accepted).toBe(true)
+  if (claimRequest.operation === undefined) throw new Error(claimRequest.reason)
+  state = apply(claimRequest.operation, state)
+  const completeRequest = complete(
+    claimRequest.instance,
+    SAM,
+    'submit',
+    {},
+    claimRequest.instance.version ?? 0,
+    { flow: SLUG, definition, grants: samGrants, resolve },
+    sources
+  )
+  expect(completeRequest.accepted).toBe(true)
+  if (completeRequest.operation === undefined) throw new Error(completeRequest.reason)
+  state = apply(completeRequest.operation, state)
+
+  // The approver's only grant names the review step's approve outcome. It holds
+  // no flow.read, flow.edit, flow.build or instance.start on the flow.
+  const okaforGrants: readonly Grant[] = [
+    {
+      principal: OKAFOR,
+      scopes: ['step.outcome:approve'],
+      resource: `flow:${SLUG}/step:review`,
+    },
+  ]
+  const view = readInstance(OKAFOR, projected(state), context(state, okaforGrants))
+  expect(view, 'the assignee reads the instance').toBeDefined()
+  expect(view?.visible).toEqual(['summary', 'decision'])
+  expect(view?.editable, 'an assignee may edit the step field').toEqual(['decision'])
+  expect(view?.fields).toEqual([
+    { key: 'summary', control: 'text' },
+    { key: 'decision', control: 'select', options: ['approve', 'reject'] },
+  ])
+  expect(view?.outcomes).toEqual(['approve', 'reject'])
+
+  const claimed = claim(projected(state), OKAFOR, view?.version ?? 0, sources)
+  expect(claimed.accepted, 'the target of the step may claim it').toBe(true)
+  if (claimed.operation === undefined) throw new Error(claimed.reason)
+  state = apply(claimed.operation, state)
+  const held = readInstance(OKAFOR, projected(state), context(state, okaforGrants))
+  expect(held?.editable, 'the holder may edit the step field').toEqual(['decision'])
+
+  const approved = complete(
+    claimed.instance,
+    OKAFOR,
+    'approve',
+    { decision: 'approve' },
+    claimed.instance.version ?? 0,
+    { flow: SLUG, definition, grants: okaforGrants, resolve },
+    sources
+  )
+  expect(approved.accepted, 'the step grant authorizes the outcome').toBe(true)
 })
 
 // A read that the API serves as 404: the log holds the instance but not the

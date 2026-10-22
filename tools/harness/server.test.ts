@@ -350,6 +350,8 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
       required: [],
       collapsed: [],
       values: {},
+      fields: [],
+      outcomes: ['approve', 'send_back'],
     })
 
     // An actor that may not read the instance is refused (I8).

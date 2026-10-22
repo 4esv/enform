@@ -77,12 +77,30 @@ export interface StepForm {
 }
 
 /**
+ * One field of the current step, as the instance read returns it (#228, FM-1,
+ * FM-3). The key and the control are required; a choice control adds its
+ * options. It is the definition the task page needs beside the values, so the
+ * page never reads the whole published flow for a step it holds.
+ */
+interface ViewField {
+  readonly key: string
+  readonly control: string
+  readonly label?: string
+  readonly options?: readonly string[]
+}
+
+/**
  * The part of an instance view that decides the form (FM-2, FM-3). It is the
  * `visible`, `editable` and `required` lists of the step read (#76), and each
  * list, when given, replaces the definition's static setting: visible filters
  * the fields, editable decides who may change them, and required marks them.
+ * `fields`, when given, is the step's visible field definitions (#228), so the
+ * form needs no whole definition; `outcomes` is the step's outcome list
+ * (AC-4).
  */
 export interface FormView {
+  readonly fields?: readonly ViewField[]
+  readonly outcomes?: readonly string[]
   readonly visible?: readonly string[]
   readonly editable?: readonly string[]
   readonly required?: readonly string[]
@@ -197,16 +215,31 @@ function readStepOf(definition: Record<string, unknown>, stepKey: string): Step 
  * the actor may edit and is absent when no field is editable; `required` names
  * the fields the step requires. When `view` is given, its lists replace the
  * definition's static setting, so the form shows exactly what the engine read
- * says (FM-2, FM-3). The current value of each field comes from `values`, and
- * is absent when the values hold no entry for the key.
+ * says (FM-2, FM-3). When `view.fields` is given (#228), the form is built from
+ * the visible field definitions that the instance read returned, and
+ * `definition` and `stepKey` are not read; this is the path a step assignee
+ * takes, because holding the task is enough to render it (AC-4, I8). The
+ * current value of each field comes from `values`, and is absent when the
+ * values hold no entry for the key.
  */
 export function formModel(
-  definition: Record<string, unknown>,
-  stepKey: string,
+  definition: Record<string, unknown> | undefined,
+  stepKey: string | undefined,
   values: Readonly<Record<string, JsonValue>> = {},
   view?: FormView
 ): StepForm {
-  const step = readStepOf(definition, stepKey)
+  let step: Step
+  if (view?.fields !== undefined) {
+    // The read already flattened sections into the visible fields and decided
+    // the order, so the model reuses the one field reader and duplicates no
+    // control (FM-1, FM-3).
+    step = { key: stepKey ?? '', fields: view.fields.map(readField) }
+  } else {
+    if (definition === undefined || stepKey === undefined) {
+      throw new Error('flow form model: a definition and a step key are needed')
+    }
+    step = readStepOf(definition, stepKey)
+  }
 
   // The view that the engine read decides what the form shows and who may
   // change it (FM-2, FM-3); without one, the definition's static lists do.

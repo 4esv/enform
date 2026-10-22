@@ -47,7 +47,6 @@ import {
   type JsonValue,
   type StepForm,
   stepKeys,
-  stepOutcomes,
 } from './form.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
@@ -307,17 +306,20 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   /**
-   * Render one instance's current step for the actor (FM-3, FM-4, FM-7). The
-   * engine's read decides what shows and who may edit; the page adds a claim
-   * control when the current step has no holder, and one control per outcome
-   * for the holder. An accepted claim or completion re-reads the instance, so
-   * the page never shows the version it just left (I5).
+   * Render one instance's current step for the actor (FM-3, FM-4, FM-7, #228).
+   * The engine's read decides what shows and who may edit, and it carries the
+   * visible field definitions and the step's outcomes, so an assignee who
+   * holds only the step's outcome grant renders and completes the task without
+   * reading the whole published flow (AC-4, I8). The page adds a claim control
+   * when the current step has no holder, and one control per outcome for the
+   * holder. An accepted claim or completion re-reads the instance, so the page
+   * never shows the version it just left (I5).
    */
   const renderTask = async (slug: string, instanceId: string, flash?: string): Promise<void> => {
     // A claim or a completion re-enters this function, so it clears the page
     // itself; a nested read must not leave the old version above the new one.
     clearPage()
-    const [flow, view] = await Promise.all([readFlow(slug), readInstance(instanceId, actor)])
+    const view = await readInstance(instanceId, actor)
     const heading = document.createElement('h1')
     heading.textContent = slug
     main.appendChild(heading)
@@ -348,10 +350,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     // The read serves JSON values (FM-7). The generated type widens them to
     // unknown, so the form narrows them at this seam and checks nothing.
     const values = view.values as Readonly<Record<string, JsonValue>>
-    const form = buildForm(
-      formModel(flow.definition, stepKey, values, view),
-      (field) => field.editable
-    )
+    const form = buildForm(formModel(undefined, stepKey, values, view), (field) => field.editable)
     const status = document.createElement('p')
     status.className = 'status'
 
@@ -387,11 +386,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
       form.appendChild(claimControl)
     }
 
-    // The published definition names the outcomes the step offers (AC-4); the
-    // engine authorizes the one the holder chooses and re-runs the rules (A9).
-    // Only the holder may choose one, so the controls wait for the claim.
+    // The instance read names the outcomes the step offers (AC-4); the engine
+    // authorizes the one the holder chooses and re-runs the rules (A9). Only
+    // the holder may choose one, so the controls wait for the claim.
     if (view.status.holder === actor) {
-      for (const outcome of stepOutcomes(flow.definition, stepKey)) {
+      for (const outcome of view.outcomes) {
         const control = document.createElement('button')
         control.type = 'button'
         control.textContent = outcome

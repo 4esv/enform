@@ -110,10 +110,12 @@ export interface Status {
 }
 
 /**
- * The instance as one actor and the current step see it (#76, FM-2, FM-3, FM-7, VT-4). The
- * rules of the step decide `visible`, `editable`, `required` and `collapsed`; the values hold
- * only the field keys the current step makes visible, so a field the step hides is absent (FM-3
- * criterion 1).
+ * The instance as one actor and the current step see it (#76, FM-2, FM-3, FM-7, VT-4, #228).
+ * The rules of the step decide `visible`, `editable`, `required` and `collapsed`; the values
+ * hold only the field keys the current step makes visible, so a field the step hides is absent
+ * (FM-3 criterion 1). `fields` and `outcomes` carry the visible field definitions and the
+ * outcomes of the current step, so an assignee who holds only a `step.outcome` grant renders
+ * and completes the task without reading the whole published definition (AC-4, I8).
  */
 export interface InstanceView {
   readonly instanceId: string
@@ -124,6 +126,19 @@ export interface InstanceView {
   readonly required: readonly string[]
   readonly collapsed: readonly string[]
   readonly values: Record<string, unknown>
+  readonly fields: readonly InstanceField[]
+  readonly outcomes: readonly string[]
+}
+
+/**
+ * One visible field of the current step, as the instance read returns it (#228, FM-1, FM-3):
+ * the key, the control the form renders, and the options of a choice control. It carries no
+ * hidden field.
+ */
+export interface InstanceField {
+  readonly key: string
+  readonly control: string
+  readonly options?: readonly string[]
 }
 
 /**

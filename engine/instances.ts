@@ -20,7 +20,13 @@
 // pure and deterministic (I6): it reads no clock, no random source and no I/O.
 
 import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
-import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
+import {
+  type ControlType,
+  type FlowDefinition,
+  type FlowStep,
+  fieldsOf,
+  type JsonValue,
+} from './definition.js'
 import { editableKeys } from './editable.js'
 import { publishedByHash } from './flow.js'
 import { type Assignee, type Instance, recordAssignees } from './instance.js'
@@ -46,6 +52,18 @@ export type ProjectedInstance = Instance & {
 }
 
 /**
+ * One field of the current step as the read returns it (#228, FM-1, FM-3). It
+ * is the part of the definition that the form needs beside the values: the
+ * key, the control, and the options of a choice control. A field the step does
+ * not make visible is absent, exactly as its value is (FM-3 criterion 1).
+ */
+type InstanceViewField = {
+  readonly key: string
+  readonly control: ControlType
+  readonly options?: readonly string[]
+}
+
+/**
  * The instance as one actor and one step see it (#76, FM-3, FM-7, VT-4, I8).
  * `visible` is the field keys the current step shows, in definition order,
  * `editable` is the field keys the actor may change (empty for one that may
@@ -53,7 +71,9 @@ export type ProjectedInstance = Instance & {
  * keys the step makes visible, so a field the step hides is absent from the
  * response (FM-3 criterion 1). The rules of the step (FM-2) decide all of it,
  * and the view carries the two states it did not before: `required` and
- * `collapsed`.
+ * `collapsed`. `fields` and `outcomes` carry the visible field definitions and
+ * the outcomes of the current step, so a step assignee renders and completes
+ * the task without reading the whole published definition (#228, AC-4).
  */
 export type InstanceView = {
   /** The id of the instance the view describes (DX-1, #187). */
@@ -70,6 +90,14 @@ export type InstanceView = {
   readonly collapsed: readonly string[]
   /** The values the instance holds, restricted to the visible field keys (FM-3, FM-7). */
   readonly values: Readonly<Record<string, JsonValue>>
+  /**
+   * The definitions of the visible fields, in definition order (FM-1, FM-3):
+   * the control the form renders and the options it offers. A hidden field is
+   * absent, so the read decides the form exactly as it decides the values.
+   */
+  readonly fields: readonly InstanceViewField[]
+  /** The outcomes the current step offers (AC-4, WF-2); empty when it declares none. */
+  readonly outcomes: readonly string[]
   /**
    * The version of the instance that this read reflects (I5, #222). A client
    * sends it back with a completion or a claim, so a stale view is refused at
@@ -132,6 +160,8 @@ export function readInstance(
   let editable: readonly string[] = []
   let required: readonly string[] = []
   let collapsed: readonly string[] = []
+  let fields: readonly InstanceViewField[] = []
+  let outcomes: readonly string[] = []
   if (step !== undefined) {
     const state = evaluateRules(step, current.values ?? {}, actor)
     visible = fieldKeys(step).filter(
@@ -142,6 +172,14 @@ export function readInstance(
     collapsed = (step.sections ?? [])
       .filter((section) => state.sections[section.key].collapsed)
       .map((section) => section.key)
+    fields = fieldsOf(step)
+      .filter((field) => visible.includes(field.key))
+      .map((field) => ({
+        key: field.key,
+        control: field.control,
+        ...(field.options === undefined ? {} : { options: [...field.options] }),
+      }))
+    outcomes = step.outcomes ?? []
   }
   return {
     instanceId: current.instanceId,
@@ -151,6 +189,8 @@ export function readInstance(
     required,
     collapsed,
     values: restrict(current.values, visible),
+    fields,
+    outcomes,
     version: current.version ?? 0,
   }
 }

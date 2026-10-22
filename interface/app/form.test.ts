@@ -202,3 +202,45 @@ test('#106 the form model takes the lists that the engine read returns (FM-2, FM
   // authorizes (AC-4, WF-2).
   expect(stepOutcomes(definition, 'request')).toEqual(['approve', 'send_back'])
 })
+
+test('#228 the form model builds from the step the instance read returns', () => {
+  // A step assignee holds the task, not the flow definition: the instance read
+  // carries the visible fields and the outcomes, so the form needs neither the
+  // published definition nor a flow read (AC-4, I8). The hidden field is
+  // absent, exactly as its value is.
+  const model = formModel(
+    undefined,
+    'approve',
+    { summary: 'three extra credits' },
+    {
+      fields: [
+        { key: 'summary', control: 'text' },
+        { key: 'note', control: 'select', options: ['ok', 'no'] },
+        { key: 'secret', control: 'text' },
+      ],
+      visible: ['summary', 'note'],
+      editable: ['note'],
+      required: ['note'],
+      outcomes: ['approve', 'send_back'],
+    }
+  )
+
+  expect(model.stepKey).toBe('approve')
+  expect(model.fields.map((field) => field.key)).toEqual(['summary', 'note'])
+  const byKey = Object.fromEntries(model.fields.map((field) => [field.key, field]))
+  expect(byKey.summary).toEqual({
+    key: 'summary',
+    control: 'text',
+    options: [],
+    required: false,
+    editable: false,
+    value: 'three extra credits',
+  })
+  expect(byKey.note).toEqual({
+    key: 'note',
+    control: 'select',
+    options: ['ok', 'no'],
+    required: true,
+    editable: true,
+  })
+})
