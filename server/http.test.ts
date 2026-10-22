@@ -9,7 +9,7 @@ import { createApp } from './http.js'
 // the cookie instead of failing as a bad bearer credential.
 
 /** A pool that answers the three reads of one valid cookie session. */
-function sessionPool(): Pool {
+function sessionPool(grants: readonly Record<string, unknown>[] = []): Pool {
   const now = Date.now()
   return {
     query: (text: string) => {
@@ -34,6 +34,7 @@ function sessionPool(): Pool {
           rows: [{ id: 'user-1', display_name: 'Ana', email: null, groups: [] }],
         })
       }
+      if (text.includes('from grants')) return Promise.resolve({ rows: grants })
       return Promise.resolve({ rows: [] })
     },
   } as unknown as Pool
@@ -109,6 +110,72 @@ test('#224 a grant without a grant scope answers 403', async () => {
         scopes: ['step.outcome:approve'],
         resource: 'flow:demo/step:request',
       },
+    }),
+  })
+  expect(response.status, await response.text()).toBe(403)
+})
+
+/** The org grant that an administrator holds on the organization (ID-6). */
+const administratorGrants = [{ principal: 'user-1', resource: 'org', scopes: ['org.grants'] }]
+
+/** Post one body to `POST /api/v1/admin/users` as the cookie session. */
+async function createUserRequest(
+  app: ReturnType<typeof createApp>,
+  body: unknown
+): Promise<Response> {
+  return app.request('/api/v1/admin/users', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer ',
+      cookie,
+      'content-type': 'application/json',
+      'x-csrf-token': 'csrf-1',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+test('#228 a malformed create-user body answers 400 and creates nothing', async () => {
+  const app = createApp(defaultConfig, sessionPool(administratorGrants))
+  const response = await createUserRequest(app, {
+    email: 'not-an-email',
+    displayName: 'Ada',
+    sendInvite: false,
+  })
+  expect(response.status, await response.text()).toBe(400)
+})
+
+test('#228 a create-user request without org.grants answers 403', async () => {
+  const app = createApp(defaultConfig, sessionPool())
+  const response = await createUserRequest(app, {
+    email: 'ada@test.local',
+    displayName: 'Ada Lovelace',
+    sendInvite: false,
+  })
+  expect(response.status, await response.text()).toBe(403)
+})
+
+test('#228 an invite without a mail transport answers 409 mail-not-configured', async () => {
+  const app = createApp(defaultConfig, sessionPool(administratorGrants))
+  const response = await createUserRequest(app, {
+    email: 'ada@test.local',
+    displayName: 'Ada Lovelace',
+    sendInvite: true,
+  })
+  const body = await response.text()
+  expect(response.status, body).toBe(409)
+  expect(JSON.parse(body)).toMatchObject({ code: 'mail-not-configured' })
+})
+
+test('#228 a create-user request without the CSRF token answers 403', async () => {
+  const app = createApp(defaultConfig, sessionPool(administratorGrants))
+  const response = await app.request('/api/v1/admin/users', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ', cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      email: 'ada@test.local',
+      displayName: 'Ada Lovelace',
+      sendInvite: false,
     }),
   })
   expect(response.status, await response.text()).toBe(403)

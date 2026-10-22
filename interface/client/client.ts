@@ -196,6 +196,21 @@ export interface DirectoryUser {
 }
 
 /**
+ * The user that `createUser` created, with the one-time credential (ID-6, ADR 0012). It carries
+ * the `DirectoryUser` fields plus `temporaryPassword`, which the server returns once and logs
+ * never. The user is enabled and email-verified with no required action, so the password signs
+ * the user in immediately; enform stores no credential.
+ */
+export interface CreatedUser {
+  readonly id: ActorId
+  readonly displayName: string
+  readonly email: string
+  readonly status: string
+  readonly groups: readonly ActorId[]
+  readonly temporaryPassword: string
+}
+
+/**
  * One user to create in the local directory (ID-6, ADR 0012). enform creates the user through
  * the identity provider's admin API with its service account, because it stores no credentials;
  * there is no self-signup (ID-6).
@@ -380,7 +395,7 @@ export async function createFlow(createFlow: CreateFlow): Promise<DraftFlow> {
   return (await response.json()) as DraftFlow
 }
 
-export async function createUser(createUser: CreateUser): Promise<DirectoryUser> {
+export async function createUser(createUser: CreateUser): Promise<CreatedUser> {
   const url = `${configured().baseUrl}/api/v1/admin/users`
   const response = await fetch(url, {
     method: 'POST',
@@ -388,7 +403,7 @@ export async function createUser(createUser: CreateUser): Promise<DirectoryUser>
     body: JSON.stringify(createUser),
   })
   if (!response.ok) throw await refusal(response)
-  return (await response.json()) as DirectoryUser
+  return (await response.json()) as CreatedUser
 }
 
 export async function listFlows(): Promise<readonly FlowSummary[]> {

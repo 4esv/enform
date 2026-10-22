@@ -4,6 +4,7 @@
 // (`sub`), never a name or an email address. enform stores no credentials; the
 // administrator path calls the Keycloak Admin API with a dedicated credential.
 
+import { randomInt } from 'node:crypto'
 import {
   allowInsecureRequests,
   ClientSecretPost,
@@ -14,6 +15,29 @@ import {
 } from 'openid-client'
 import { type Config, issuerUrl } from './config.js'
 import type { Principal } from './db.js'
+
+/** One user to create in the local directory (ID-6, DE-1, ADR 0012). */
+export type CreateDirectoryUserInput = {
+  readonly email: string
+  readonly displayName: string
+}
+
+/** The immutable id of a created user and its one-time password (ID-6). */
+export type CreatedDirectoryUser = {
+  readonly id: string
+  readonly temporaryPassword: string
+}
+
+/** The directory already holds the email address, so no second user is created (ID-6). */
+export class DirectoryUserExistsError extends Error {
+  readonly email: string
+
+  constructor(email: string) {
+    super(`the directory already holds ${email}`)
+    this.name = 'DirectoryUserExistsError'
+    this.email = email
+  }
+}
 
 /** One user of the built-in directory, as the admin API lists it (ID-6). */
 export type DirectoryUser = {
@@ -128,6 +152,37 @@ export async function adminToken(config: Config): Promise<string> {
 }
 
 /**
+ * The first and last name of a display name (ID-4): the first token is the
+ * first name and the rest is the last name, or the whole display name is the
+ * first name when it holds one token.
+ */
+function nameParts(displayName: string): { firstName: string; lastName?: string } {
+  const parts = displayName
+    .trim()
+    .split(/\s+/)
+    .filter((part) => part !== '')
+  const firstName = parts[0] ?? displayName.trim()
+  const rest = parts.slice(1)
+  return rest.length === 0 ? { firstName } : { firstName, lastName: rest.join(' ') }
+}
+
+/** The alphabet of a generated password, without look-alike characters (ID-6). */
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+
+/**
+ * A generated strong password (ID-6): 24 characters with an upper case letter,
+ * a lower case letter, a digit and a symbol, so a realm's default password
+ * policy accepts it. The administrator sees it once; the server logs it never.
+ */
+function temporaryPasswordOf(): string {
+  const body = Array.from(
+    { length: 20 },
+    () => PASSWORD_ALPHABET[randomInt(PASSWORD_ALPHABET.length)]
+  ).join('')
+  return `Aa2!${body}`
+}
+
+/**
  * Create or update the first administrator and set the password (DE-1, ID-6).
  * A second run finds the same user by username or email, so it creates no
  * duplicate.
@@ -159,6 +214,37 @@ export async function ensureAdministrator(
     await resetPassword(config, token, id, input.password)
   }
   return id
+}
+
+/**
+ * Create one user in the local realm with a generated temporary password
+ * (ID-6, DE-1, ADR 0012). The user is enabled and email-verified with no
+ * required action, so the password signs the user in immediately. The
+ * password is returned once to the caller and enform stores it never. A
+ * directory that already holds the email address throws
+ * `DirectoryUserExistsError`. An invite email is not sent: the mail transport
+ * arrives with SE-1 and SE-2.
+ */
+export async function createDirectoryUser(
+  config: Config,
+  input: CreateDirectoryUserInput
+): Promise<CreatedDirectoryUser> {
+  const token = await adminToken(config)
+  if ((await findUser(config, token, input.email)) !== undefined) {
+    throw new DirectoryUserExistsError(input.email)
+  }
+  const temporaryPassword = temporaryPasswordOf()
+  const name = nameParts(input.displayName)
+  const id = await createUser(config, token, {
+    username: input.email,
+    email: input.email,
+    ...name,
+    enabled: true,
+    emailVerified: true,
+    requiredActions: [],
+    credentials: [{ type: 'password', value: temporaryPassword, temporary: false }],
+  })
+  return { id, temporaryPassword }
 }
 
 /** Every user of the configured realm, for the administrator surface (ID-6). */
@@ -250,8 +336,12 @@ async function createUser(
     body: JSON.stringify(representation),
   })
   const body = await response.text()
+  if (response.status === 409) {
+    const email = typeof representation.email === 'string' ? representation.email : ''
+    throw new DirectoryUserExistsError(email)
+  }
   if (response.status !== 201) {
-    throw new Error(`keycloak: creating the administrator failed: ${response.status} ${body}`)
+    throw new Error(`keycloak: creating the user failed: ${response.status} ${body}`)
   }
   const location = response.headers.get('location')
   const id = location?.split('/').pop()

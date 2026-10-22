@@ -357,9 +357,13 @@ paths:
       description: >-
         Creates the user in the local directory through the identity provider's
         admin API with the dedicated service account, because enform stores no
-        credentials (ID-6, ADR 0012). With `sendInvite` the user receives a
-        one-time invite or a temporary credential and sets a password on the
-        first sign-in; there is no self-signup (ID-6, DE-1). The request
+        credentials (ID-6, ADR 0012). With `sendInvite: false` the user is
+        enabled and email-verified with a generated strong temporary password
+        and no required action, so the password signs the user in immediately;
+        the password appears once in the `CreatedUser` response, and the server
+        logs it never. `sendInvite: true` answers 409 `mail-not-configured`
+        because the mail transport is not configured in this slice, and then
+        nothing is created. There is no self-signup (ID-6, DE-1). The request
         requires `org.grants` on `org` (I8, `MVP.md` 5.6).
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
@@ -371,11 +375,22 @@ paths:
               $ref: '#/components/schemas/CreateUser'
       responses:
         '201':
-          description: The user exists in the directory.
+          description: >-
+            The user exists in the directory. `temporaryPassword` is the
+            generated credential, returned once.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DirectoryUser'
+                $ref: '#/components/schemas/CreatedUser'
+        '400':
+          description: >-
+            The body is malformed: it needs an email address, a display name
+            and `sendInvite`, and the groups must be strings. Nothing is
+            created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
         '403':
           description: >-
             The principal does not hold `org.grants` on the organization (I8).
@@ -386,7 +401,9 @@ paths:
         '409':
           description: >-
             The directory already holds this email address, and a second user
-            is not created (ID-4, ID-6).
+            is not created (ID-4, ID-6); or `sendInvite` asks for a mail that
+            this installation cannot send, with the code
+            `mail-not-configured`, and nothing is created.
           content:
             application/json:
               schema:
@@ -1139,6 +1156,44 @@ components:
             The immutable ids of the groups that the user belongs to (ID-4).
           items:
             $ref: '#/components/schemas/ActorId'
+    CreatedUser:
+      type: object
+      description: >-
+        The user that `createUser` created, with the one-time credential (ID-6,
+        ADR 0012). It carries the `DirectoryUser` fields plus
+        `temporaryPassword`, which the server returns once and logs never. The
+        user is enabled and email-verified with no required action, so the
+        password signs the user in immediately; enform stores no credential.
+      required: [id, displayName, email, status, groups, temporaryPassword]
+      properties:
+        id:
+          $ref: '#/components/schemas/ActorId'
+        displayName:
+          type: string
+          description: >-
+            The display name that the directory holds (ID-4). It is for
+            display only.
+        email:
+          type: string
+          description: The email address that the user signs in with (ID-6).
+        status:
+          type: string
+          description: >-
+            Whether the user is invited, active, or disabled (ID-6). A user
+            created with a temporary password is active at once.
+          enum: [invited, active, disabled]
+        groups:
+          type: array
+          description: >-
+            The immutable ids of the groups that the user belongs to (ID-4).
+          items:
+            $ref: '#/components/schemas/ActorId'
+        temporaryPassword:
+          type: string
+          description: >-
+            The generated password that signs the user in (ID-6, ADR 0012).
+            The server returns it once, in this response, and logs it never;
+            the administrator copies it and hands it to the user.
     CreateUser:
       type: object
       description: >-
@@ -1159,15 +1214,19 @@ components:
         groups:
           type: array
           description: >-
-            The immutable ids of the groups that the user joins (ID-4); a
-            group grant then reaches the user at the next sign-in (ID-5).
+            The immutable ids of the groups that the user joins (ID-4). The
+            create path of this slice creates the user without group
+            membership; the ids are reserved for the group synchronization of
+            ID-5.
           items:
             $ref: '#/components/schemas/ActorId'
         sendInvite:
           type: boolean
           description: >-
-            Whether the user receives a one-time invite and sets a password on
-            the first sign-in, instead of a temporary credential (ID-6).
+            Whether the user receives a one-time invite (ID-6). The mail
+            transport is not configured in this slice, so `true` answers 409
+            `mail-not-configured`; `false` creates the user with a generated
+            temporary password.
     CreateFlow:
       type: object
       description: >-

@@ -72,6 +72,8 @@ import {
 } from './db.js'
 import { newOperationId } from './ids.js'
 import {
+  createDirectoryUser,
+  DirectoryUserExistsError,
   endIdpSession,
   groupIds,
   listDirectoryUsers,
@@ -252,6 +254,60 @@ export function createApp(config: Config, pool: Pool): Hono {
       return c.json({ error: 'the principal may not read the directory' }, 403)
     }
     return c.json(await listDirectoryUsers(config))
+  })
+
+  // Issue #228, ID-6, DE-1, ADR 0012: an administrator creates a local user
+  // with a generated temporary password. Keycloak owns the credential; enform
+  // returns the password once and stores and logs it never. An invite needs a
+  // mail transport that this slice does not configure (SE-1, SE-2), so it
+  // answers 409 and creates nothing.
+  app.post('/api/v1/admin/users', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const body = await readJsonObject(c)
+    const input = body === undefined ? undefined : readCreateUser(body)
+    if (input === undefined) {
+      return c.json(
+        { error: 'the body needs an email, a display name and sendInvite', code: 'invalid-user' },
+        400
+      )
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!authorize(grants, 'org.grants', 'org')) {
+      return c.json({ error: 'the principal may not create a directory user' }, 403)
+    }
+    if (input.sendInvite) {
+      return c.json(
+        { error: 'the mail transport is not configured', code: 'mail-not-configured' },
+        409
+      )
+    }
+    try {
+      const created = await createDirectoryUser(config, {
+        email: input.email,
+        displayName: input.displayName,
+      })
+      return c.json(
+        {
+          id: created.id,
+          displayName: input.displayName,
+          email: input.email,
+          status: 'active',
+          groups: [],
+          temporaryPassword: created.temporaryPassword,
+        },
+        201
+      )
+    } catch (error) {
+      if (error instanceof DirectoryUserExistsError) {
+        return c.json(
+          { error: `the directory already holds ${input.email}`, code: 'email-exists' },
+          409
+        )
+      }
+      throw error
+    }
   })
 
   app.get('/api/v1/flows', async (c) => {
@@ -1015,6 +1071,23 @@ async function readJsonObject(c: Context): Promise<Record<string, unknown> | und
   } catch {
     return undefined
   }
+}
+
+/** Read the body of `POST /api/v1/admin/users` (#228, ID-6). */
+function readCreateUser(
+  body: Record<string, unknown>
+): { email: string; displayName: string; sendInvite: boolean } | undefined {
+  const { email, displayName, sendInvite, groups } = body
+  if (typeof email !== 'string' || !email.includes('@')) return undefined
+  if (typeof displayName !== 'string' || displayName.trim() === '') return undefined
+  if (typeof sendInvite !== 'boolean') return undefined
+  if (
+    groups !== undefined &&
+    (!Array.isArray(groups) || !groups.every((group) => typeof group === 'string' && group !== ''))
+  ) {
+    return undefined
+  }
+  return { email: email.trim(), displayName: displayName.trim(), sendInvite }
 }
 
 /** Read the body of `POST /api/v1/flows` (#220). */
