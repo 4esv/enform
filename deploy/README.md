@@ -24,6 +24,36 @@ public URL. It reads `.env` and the `ENFORM_*` variables of the environment.
 | `ENFORM_ADMIN_EMAIL` | `admin@example.com` |
 | `ENFORM_ADMIN_PASSWORD` | `admin-dev-password` |
 
+## Demo seed
+
+DE-4 gives a fresh installation a test organization that can be used end to
+end and removed again:
+
+```sh
+make seed        # enform seed demo
+make seed-clear  # enform seed clear --yes
+```
+
+`make seed` creates six demo users in the configured Keycloak realm, the
+`registrar-office-<run>` and `chairs-<run>` teams, their grants, a published
+`demo-course-overload-<run>` flow and four in-flight instances at the request,
+advisor and registrar steps plus one done instance. It prints each demo email,
+its generated password and its immutable id once, with the flow URL. enform
+stores no password.
+
+The records carry the profile `demo` in the operational `seed_records` table.
+`enform seed clear --config <path> --yes` deletes those Keycloak users and the
+seeded projection rows, appends one `seed.cleared@1` event and marks the
+records cleared. It touches no other record. The append-only log keeps the
+events as the audit record, and `enform admin rebuild` re-applies every cleared
+record, so a rebuild never resurrects the demo. The flow list, the draft, the
+instance read and the inbox exclude a cleared demo; `GET /api/v1/log` and
+`/api/v1/state` still show the events.
+
+`enform seed demo --config <path> --json` prints the same credentials as one
+JSON object. A second run reports the live profile and changes nothing; after a
+clear it starts a new run with fresh ids, emails, team names and flow slug.
+
 ## Bare metal
 
 The `enform.service` and `enform-worker.service` units in `systemd/` run the

@@ -33,6 +33,7 @@ import { newEncryptionKey, validEncryptionKey } from '../server/crypto.js'
 import { createPool, migrationStatus, rebuild, runMigrations } from '../server/db.js'
 import { serveHttp } from '../server/http.js'
 import { oidcConfiguration } from '../server/keycloak.js'
+import { clearDemo, seedDemo } from '../server/seed.js'
 import { versionLine } from '../server/version.js'
 import { startWorker } from '../server/worker.js'
 import { readFlow, writeFlow } from './store.js'
@@ -331,7 +332,7 @@ function slugOf(file: string): string {
 }
 
 /** The flags that take no value, so the next argument is a positional. */
-const BOOLEAN_FLAGS = new Set(['--no-open', '--no-serve', '--status', '--auto-migrate'])
+const BOOLEAN_FLAGS = new Set(['--no-open', '--no-serve', '--status', '--auto-migrate', '--yes'])
 
 /** One parsed command line: the positionals and the flag values, in order. */
 type Args = {
@@ -403,7 +404,7 @@ function printHelp(): void {
       '  migrate   apply the schema migrations; --status reports them',
       '  worker    run the outbox and timer loop',
       '  admin     create the first administrator, or rebuild the projections (admin rebuild)',
-      '  seed      load a demo seed (DE-4 is not implemented in this release)',
+      '  seed      load a demo seed (seed demo) or remove only its records (seed clear)',
       '  doctor    check the configuration, the database and the identity provider',
       '  version   print the version',
       '  help      print this help',
@@ -427,7 +428,7 @@ function runServiceCommand(
   if (group === 'migrate') return commandMigrate(args, json)
   if (group === 'worker') return commandWorker(args)
   if (group === 'admin') return commandAdmin(action, args, json)
-  if (group === 'seed') return commandSeed(action, json)
+  if (group === 'seed') return commandSeed(action, args, json)
   if (group === 'doctor') return commandDoctor(args, json)
   throw new Error(`unknown command: ${group}`)
 }
@@ -538,14 +539,82 @@ async function commandAdmin(
   throw new Error(`unknown admin command: ${action ?? ''}`.trim())
 }
 
-/** `enform seed`: DE-4 profiles are not implemented in this release, and no seed is faked. */
-function commandSeed(action: string | undefined, json: boolean): number {
-  const text =
-    action === undefined
-      ? 'enform seed: DE-4 profiles are not implemented in this release'
-      : `enform seed ${action}: DE-4 profiles are not implemented in this release`
-  report(json, { ok: true, implemented: false, text }, text)
-  return 0
+/** `enform seed demo|clear`: load or clear the demo organization (DE-4). */
+async function commandSeed(action: string | undefined, args: Args, json: boolean): Promise<number> {
+  if (action !== 'demo' && action !== 'clear') {
+    throw new Error(`unknown seed command: ${action ?? ''}`.trim())
+  }
+  const config = loadConfig(args.flags)
+  const pool = createPool(config.databaseUrl)
+  try {
+    const status = await migrationStatus(pool)
+    if (status.pending.length > 0) {
+      throw new Error(`pending migrations: ${status.pending.join(', ')}; run enform migrate`)
+    }
+    if (action === 'demo') {
+      const result = await seedDemo(config, pool)
+      report(json, { ok: true, ...result }, demoText(result))
+      return 0
+    }
+    if (!has(args, '--yes') && !(await confirmSeedClear())) {
+      report(json, { ok: true, cleared: false, profile: 'demo' }, 'demo seed not cleared')
+      return 0
+    }
+    const result = await clearDemo(config, pool)
+    report(json, { ok: true, ...result }, clearText(result))
+    return 0
+  } finally {
+    await pool.end()
+  }
+}
+
+/** Ask before a clear that did not pass `--yes`. A non-interactive run is refused. */
+async function confirmSeedClear(): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error('refusing to clear the demo seed without --yes')
+  }
+  const readline = await import('node:readline/promises')
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await prompt.question('Remove the demo seed records? [y/N] ')
+    return /^y(es)?$/i.test(answer.trim())
+  } finally {
+    prompt.close()
+  }
+}
+
+/** The text of `seed demo`: the credentials once and the flow URL (DE-4). */
+function demoText(result: Awaited<ReturnType<typeof seedDemo>>): string {
+  if (result.alreadySeeded) {
+    return `demo seed: profile demo is already loaded (${result.records} record(s)); run enform seed clear first`
+  }
+  const lines = [
+    `demo seed: profile demo run ${result.run ?? ''}`,
+    `flow: ${result.flow?.title ?? ''} ${result.flow?.url ?? ''}`,
+    'users (the password is shown once):',
+  ]
+  for (const user of result.users ?? []) {
+    lines.push(`  ${user.email} ${user.password} ${user.id} (${user.displayName}, ${user.role})`)
+  }
+  lines.push('instances:')
+  for (const instance of result.instances ?? []) {
+    lines.push(`  ${instance.id} ${instance.done ? 'done' : instance.step}`)
+  }
+  return lines.join('\n')
+}
+
+/** The text of `seed clear`: exactly the records that the clear removed (DE-4). */
+function clearText(result: Awaited<ReturnType<typeof clearDemo>>): string {
+  const { cleared, operationId } = result
+  if (operationId === '') return 'demo seed: no live records to clear'
+  const lines = [
+    `cleared demo seed: ${cleared.users.length} user(s), ${cleared.teams.length} team(s), ${cleared.flows.length} flow(s), ${cleared.instances.length} instance(s), ${cleared.grants.length} grant(s)`,
+    `seed.cleared@1 ${operationId}`,
+  ]
+  for (const kind of ['users', 'teams', 'flows', 'instances', 'grants'] as const) {
+    for (const record of cleared[kind]) lines.push(`  ${record.kind} ${record.id}`)
+  }
+  return lines.join('\n')
 }
 
 /** `enform doctor`: check the configuration, the database and the identity provider (DE-5). */

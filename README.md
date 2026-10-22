@@ -12,6 +12,23 @@ enform is a self-hosted system for forms with steps, approvals and routing. Peop
 - No work is lost, also on a bad network.
 - No mysteries. All changes are visible, attributed and in order.
 
+## Quick start
+
+```sh
+make setup      # Node 26 and pnpm 10; installs the pinned dependencies
+make stack      # the local PostgreSQL and Keycloak of deploy/compose.yaml
+make init       # writes the configuration, migrates, creates the administrator and serves
+make seed       # loads the DE-4 demo organization and prints its credentials once
+make seed-clear # removes only the records that the seed created
+```
+
+`make init` serves `http://localhost:8080` until you stop it, so run `make seed`
+and `make seed-clear` from a second terminal. The configuration path, the
+database URL and the administrator values are the `ENFORM_*` variables in
+[`deploy/README.md`](deploy/README.md). The demo seed creates six users, two
+teams, their grants, a published course-overload flow and four in-flight
+instances; its passwords are printed once and enform stores none of them.
+
 ## Status
 
 Version `0.0.0`. This version contains the specification only. There is no product code yet.

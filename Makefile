@@ -1,5 +1,5 @@
 # The commands of enform. CONTRIBUTING.md describes them.
-.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack integration init
+.PHONY: setup browsers check lint typecheck test browser rules client invariants stories stack integration init seed seed-clear
 
 setup:
 	pnpm install --frozen-lockfile
@@ -77,3 +77,16 @@ init:
 		--admin-email "$${ENFORM_ADMIN_EMAIL:-admin@example.com}" \
 		--admin-password "$${ENFORM_ADMIN_PASSWORD:-admin-dev-password}" \
 		--no-open
+
+# The demo organization of DE-4: six users, two teams, their grants, a
+# published flow and four in-flight instances. The passwords are printed once.
+seed:
+	pnpm exec node --experimental-strip-types cli/main.ts seed demo \
+		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}"
+
+# Remove only the records that `make seed` marked. The log keeps its events
+# (I4), and a rebuild reproduces the cleared state.
+seed-clear:
+	pnpm exec node --experimental-strip-types cli/main.ts seed clear \
+		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}" \
+		--yes
