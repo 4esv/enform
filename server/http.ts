@@ -706,7 +706,11 @@ async function authenticate(c: Context, pool: Pool, config: Config): Promise<Aut
   const authorization = c.req.header('authorization')
   if (authorization?.toLowerCase().startsWith('bearer ') === true) {
     const token = authorization.slice('bearer '.length).trim()
-    if (token === '') return undefined
+    // #224: an empty bearer header is not a credential. The browser sends the
+    // session cookie, and the generated client omits the header when it has no
+    // token; a request that still carries an empty one falls through to the
+    // cookie instead of failing before it reaches it.
+    if (token === '') return authenticateCookie(c, pool, config)
     let principal: Principal
     try {
       principal = await principalFromToken(config, token)
@@ -729,6 +733,15 @@ async function authenticate(c: Context, pool: Pool, config: Config): Promise<Aut
     return { kind: 'bearer', principal, session }
   }
 
+  return authenticateCookie(c, pool, config)
+}
+
+/** Resolve the session cookie to one principal and one session row (ADR 0012, #224). */
+async function authenticateCookie(
+  c: Context,
+  pool: Pool,
+  config: Config
+): Promise<Auth | undefined> {
   const sessionId = getCookie(c, config.session.cookieName)
   if (sessionId === undefined) return undefined
   const session = await sessionById(pool, sessionId)

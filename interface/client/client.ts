@@ -313,7 +313,8 @@ function configured(): ClientConfig {
 }
 
 function headers(): Record<string, string> {
-  const base = { authorization: `Bearer ${configured().token}` }
+  const token = configured().token
+  const base: Record<string, string> = token === '' ? {} : { authorization: `Bearer ${token}` }
   const csrfToken = configured().csrfToken
   return csrfToken === undefined || csrfToken === '' ? base : { ...base, 'x-csrf-token': csrfToken }
 }

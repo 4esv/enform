@@ -165,6 +165,36 @@ test('#211 a status that the operation does not declare is a failure (DX-1, ADR 
   await expect(logout(), 'the declared 204 resolves').resolves.toBeUndefined()
 })
 
+// Issue #224, ADR 0012, I12: the browser uses the session cookie, and a
+// same-origin request must not carry an empty bearer header, because the server
+// treats a bearer header as the credential. A configured bearer token still
+// wins, and the CSRF header is unchanged.
+test('#224 an empty token sends no Authorization header and a non-empty token sends it', async () => {
+  const seen: Array<Record<string, string>> = []
+  vi.stubGlobal('fetch', (_url: string, init: { headers?: Record<string, string> }) => {
+    seen.push(init.headers ?? {})
+    return Promise.resolve(new Response('[]', { status: 200 }))
+  })
+
+  setClient({ baseUrl: 'http://api.test', token: '' })
+  await readLog()
+  expect(seen[0], 'a cookie request carries no Authorization header').not.toHaveProperty(
+    'authorization'
+  )
+
+  setClient({ baseUrl: 'http://api.test', token: '', csrfToken: 'csrf-1' })
+  await readLog()
+  expect(seen[1], 'the cookie request still carries no Authorization header').not.toHaveProperty(
+    'authorization'
+  )
+  expect(seen[1]['x-csrf-token'], 'the CSRF token is unchanged').toBe('csrf-1')
+
+  setClient({ baseUrl: 'http://api.test', token: 'token' })
+  await readLog()
+  expect(seen[2].authorization, 'a configured token is still sent').toBe('Bearer token')
+  expect(seen[2], 'no CSRF header without a CSRF token').not.toHaveProperty('x-csrf-token')
+})
+
 test('#218 the client sends the CSRF token on every request when it is configured (ADR 0012)', async () => {
   const seen: Array<Record<string, string>> = []
   vi.stubGlobal('fetch', (_url: string, init: { headers?: Record<string, string> }) => {

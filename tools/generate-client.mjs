@@ -116,8 +116,9 @@ function clientSection() {
     '}',
     '',
     'function headers(): Record<string, string> {',
+    '  const token = configured().token',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: this text is emitted into the generated client.
-    '  const base = { authorization: `Bearer ${configured().token}` }',
+    "  const base: Record<string, string> = token === '' ? {} : { authorization: `Bearer ${token}` }",
     '  const csrfToken = configured().csrfToken',
     "  return csrfToken === undefined || csrfToken === '' ? base : { ...base, 'x-csrf-token': csrfToken }",
     '}',
