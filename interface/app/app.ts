@@ -39,6 +39,7 @@ import {
   readSession,
   type Session,
   setClient,
+  type TrackerStep,
 } from '../client/client.js'
 import { mountBuilder } from './builder.js'
 import {
@@ -349,6 +350,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     instanceStatus.className = 'instance-status'
     instanceStatus.textContent = statusLine(view.status)
     main.appendChild(instanceStatus)
+    renderTracker(view.tracker, view.status.currentStep)
     renderNotes(view.notes)
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
@@ -468,6 +470,55 @@ export async function mountApp(options: AppOptions): Promise<void> {
     if (view.canTakeOver) {
       main.appendChild(renderTakeover(slug, instanceId, view))
     }
+  }
+
+  /**
+   * The per-step tracker of an instance (VT-2, S14, #244): one entry per
+   * definition step in order, the one state it shows, and the reason a step
+   * was skipped or sent back. It is read-only; the task controls stay below it.
+   * The engine computes every state (A9), and the page only renders the read.
+   */
+  const renderTracker = (
+    tracker: readonly TrackerStep[],
+    currentStep: string | undefined
+  ): void => {
+    const list = document.createElement('ol')
+    list.className = 'tracker'
+    list.dataset.tracker = ''
+    for (const step of tracker) {
+      const item = document.createElement('li')
+      item.className = 'tracker-step'
+      item.dataset.trackerStep = step.key
+      item.dataset.trackerState = step.state
+      const key = document.createElement('span')
+      key.className = 'tracker-key'
+      key.textContent = step.key
+      const state = document.createElement('span')
+      state.className = 'tracker-state'
+      state.textContent = trackerLabel(step.state)
+      item.append(key, state)
+      if (step.holder !== undefined) {
+        const holder = document.createElement('span')
+        holder.className = 'tracker-holder'
+        holder.textContent = `holder ${step.holder}`
+        item.append(holder)
+      }
+      if (step.condition !== undefined) {
+        const condition = document.createElement('span')
+        condition.className = 'tracker-condition'
+        condition.textContent = `skipped when ${JSON.stringify(step.condition)}`
+        item.append(condition)
+      }
+      if (step.comment !== undefined) {
+        const comment = document.createElement('p')
+        comment.className = 'tracker-comment'
+        comment.textContent = step.comment
+        item.append(comment)
+      }
+      if (step.key === currentStep) item.dataset.current = ''
+      list.append(item)
+    }
+    main.append(list)
   }
 
   /**
@@ -1202,6 +1253,21 @@ function showCreatedUser(host: HTMLElement, user: CreatedUser): void {
 function statusLine(status: InstanceView['status']): string {
   const holder = status.holder === undefined ? '' : `, holder ${status.holder}`
   return `Step ${status.step} of ${status.totalSteps}: ${status.state}${holder}`
+}
+
+/** The plain-language label of one tracker state (VT-2, S14). */
+const TRACKER_STATES: Readonly<Record<string, string>> = {
+  'not-reached': 'not reached',
+  unopened: 'waiting to be opened',
+  opened: 'opened',
+  completed: 'completed',
+  skipped: 'skipped',
+  'sent-back': 'sent back',
+}
+
+/** The plain-language state that the tracker shows (VT-2, S14). */
+function trackerLabel(state: string): string {
+  return TRACKER_STATES[state] ?? state
 }
 
 /** The wait before a takeover in plain language (S10, AS-3). */
