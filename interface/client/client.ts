@@ -627,6 +627,13 @@ export async function createUser(createUser: CreateUser): Promise<CreatedUser> {
   return (await response.json()) as CreatedUser
 }
 
+export function instancePdfUrl(instanceId: string, step?: string): string {
+  const query = new URLSearchParams()
+  if (step !== undefined) query.set('step', String(step))
+  const search = query.size === 0 ? '' : `?${query}`
+  return `${configured().baseUrl}/api/v1/instances/${instanceId}/pdf${search}`
+}
+
 export async function listFlows(): Promise<readonly FlowSummary[]> {
   const url = `${configured().baseUrl}/api/v1/flows`
   const response = await fetch(url, {

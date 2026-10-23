@@ -266,6 +266,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/instances/{instanceId}/pdf:
+    get:
+      operationId: instancePdf
+      summary: Render an instance as a PDF for a step
+      description: >-
+        The instance as a given step sees it, with the step history, as a PDF
+        (OU-1, I8). The read is the instance read through the engine's rules:
+        the same `mayRead` authorization answers 403 to a principal that may
+        not read the instance, and the form holds only the fields the step
+        makes visible and only the values the actor may read (FM-3, I8). The
+        tracker states and the instance's timeline are the step history
+        (VT-2, VT-5, I4), and a connector call shows its operation, time and
+        outcome and never a response body (I13). The current step is the
+        default; `step` renders the form of another step of the pinned
+        definition with the same rules, while the history stays the
+        instance's. The response is a PDF with a filename that names the
+        instance and the step. A cleared or unknown instance answers 404 and
+        an unknown step answers 404.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          description: The id of the instance (DX-1, #187).
+          schema:
+            type: string
+        - name: step
+          in: query
+          required: false
+          description: >-
+            The definition key of the step whose form the PDF shows (OU-1).
+            An absent value renders the current step, or the closed state
+            when no step is open.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The instance as the step sees it, with its step history
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: The principal may not read the instance (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: >-
+            The log holds no such instance, or the definition holds no such
+            step
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/instances/{instanceId}/timeline:
     get:
       operationId: readInstanceTimeline
@@ -2189,7 +2245,8 @@ components:
           description: The human name of the group (ID-6).
         path:
           type: string
-          description: The group path in the realm, when the provider reports one.
+          description: >-
+            The group path in the realm, when the provider reports one.
         members:
           type: array
           description: The users that the group holds directly (AS-1).
@@ -2210,7 +2267,8 @@ components:
           description: The slug of the flow that the instance runs (ID-1).
         step:
           type: string
-          description: The key of the step whose targets resolved to nobody (WF-1).
+          description: >-
+            The key of the step whose targets resolved to nobody (WF-1).
         state:
           type: string
           description: The queue state of the task (I10, AS-5).

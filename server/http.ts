@@ -45,8 +45,9 @@ import {
   STARTER_DEFINITION,
 } from '../engine/flow.js'
 import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
-import { instanceOf, readInstance } from '../engine/instances.js'
+import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
+import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
@@ -622,6 +623,73 @@ export function createApp(config: Config, pool: Pool): Hono {
         ? view
         : { ...view, undoUntil: view.closedAt + undoHours * HOUR_MS }
     )
+  })
+
+  // Issue OU-1, FM-3, VT-2, VT-5, I4, I8, I12, I13, ADR 0009: the instance
+  // PDF. It is another read of the instance through the same engine rule as
+  // the instance read, so a principal without `mayRead` answers 403 and a
+  // cleared or unknown instance answers 404. The form is the current step by
+  // default or the `step` query, with the step's rules and the values the
+  // actor may read; the history is the instance's tracker and timeline (I4).
+  app.get('/api/v1/instances/:instanceId/pdf', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const instanceId = c.req.param('instanceId')
+    if (await isClearedSeedRecord(pool, 'instance', instanceId)) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const log = await readLog(pool)
+    const instance = instanceOf(log, instanceId)
+    if (instance === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const published = publishedByHash(log, instance.definitionVersion)
+    if (published === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const requested = nonEmpty(c.req.query('step'))
+    if (
+      requested !== undefined &&
+      !published.definition.steps.some((step) => step.key === requested)
+    ) {
+      return c.json({ error: `no step has the key ${requested}` }, 404)
+    }
+    const context = {
+      flow: instance.flow,
+      definition: published.definition,
+      log,
+      grants: grantsFor(log, auth.principal),
+    }
+    const resolver = await resolverForRequest(
+      config,
+      pool,
+      log,
+      instance.starter,
+      instance.values ?? {}
+    )
+    const view =
+      requested === undefined
+        ? readInstance(auth.principal.id, instance, context, resolver)
+        : readInstanceStep(auth.principal.id, instance, context, requested, resolver)
+    if (view === undefined) {
+      return c.json({ error: 'the principal may not read the instance' }, 403)
+    }
+    const stored = await readFlowProjection(pool, instance.flow)
+    const step = requested ?? view.status.currentStep ?? view.status.state
+    const pdf = renderInstancePdf({
+      flowSlug: instance.flow,
+      ...(stored?.title === undefined ? {} : { flowTitle: stored.title }),
+      instanceId,
+      actor: auth.principal.id,
+      step,
+      now: operationDeps.clock(),
+      view,
+      timeline: timeline(log.filter((event) => event.payload.instanceId === instanceId)),
+    })
+    return c.body(new Uint8Array(pdf), 200, {
+      'content-type': 'application/pdf',
+      'content-disposition': `inline; filename="${pdfFilename(instance.flow, instanceId, step)}"`,
+    })
   })
 
   // Issue #246, S15, VT-5, VT-6, I4, I8, I12: the instance timeline and the
@@ -1765,6 +1833,13 @@ function includesChanges(value: string | undefined): boolean {
 /** A query value that names something, or undefined for an absent or empty one. */
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value
+}
+
+/** The filename of an instance PDF: the flow, the instance and the step, ASCII and safe (OU-1). */
+function pdfFilename(flow: string, instanceId: string, step: string): string {
+  const safe = (value: string): string =>
+    value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'instance'
+  return `enform-${safe(flow)}-${safe(instanceId)}-${safe(step)}.pdf`
 }
 
 /** The message of an unknown error. */

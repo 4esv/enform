@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   appendOperation,
   type FieldError,
+  instancePdfUrl,
   loginUrl,
   logout,
   type Operation,
@@ -51,6 +52,14 @@ test('#93 DX-4 the generator reproduces the checked-in client byte for byte', ()
   expect(existsSync(clientPath), 'the generated client is checked in').toBe(true)
   expect(readFileSync(out, 'utf8'), 'the checked-in client is current').toBe(
     readFileSync(clientPath, 'utf8')
+  )
+})
+
+test('#93 DX-4 the generated client builds the instance PDF URL (OU-1, I12)', () => {
+  setClient({ baseUrl: 'http://api.test', token: 'token' })
+  expect(instancePdfUrl('i-1')).toBe('http://api.test/api/v1/instances/i-1/pdf')
+  expect(instancePdfUrl('i-1', 'request')).toBe(
+    'http://api.test/api/v1/instances/i-1/pdf?step=request'
   )
 })
 

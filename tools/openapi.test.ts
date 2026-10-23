@@ -42,6 +42,7 @@ const operations = [
   ['/api/v1/flows/{slug}/draft', 'put'],
   ['/api/v1/flows/{slug}/publish', 'post'],
   ['/api/v1/inbox', 'get'],
+  ['/api/v1/instances/{instanceId}/pdf', 'get'],
   ['/api/v1/instances/{instanceId}/timeline', 'get'],
   ['/api/v1/timeline', 'get'],
 ] as const

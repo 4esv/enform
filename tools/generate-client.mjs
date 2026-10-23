@@ -176,9 +176,11 @@ function renderPath(path, pathParams) {
 // parameter that the document marks optional appends nothing when it is
 // absent. An operation whose success is only a redirect emits a URL builder
 // instead of a fetch, because a browser cannot observe a redirect through
-// `fetch` and must navigate to it (ADR 0012). An operation whose success
-// carries no JSON body (a 204) resolves to nothing and accepts exactly the
-// statuses that the document declares.
+// `fetch` and must navigate to it (ADR 0012). An operation whose success is a
+// PDF also emits a URL builder: the browser opens the file in a tab, and the
+// session cookie travels with the navigation (OU-1, I12). An operation whose
+// success carries no JSON body (a 204) resolves to nothing and accepts exactly
+// the statuses that the document declares.
 function renderOperation({ path, method, operation }) {
   const request = operation.requestBody?.content?.['application/json']?.schema
   const parameter = request === undefined ? undefined : lowerFirst(refName(request.$ref))
@@ -193,6 +195,9 @@ function renderOperation({ path, method, operation }) {
     body === undefined ? 'void' : typeOf(body[1].content['application/json'].schema)
   const statuses = successes.map(([status]) => Number(status))
   const redirectOnly = successes.length > 0 && successes.every(([status]) => /^3\d\d$/.test(status))
+  const binary = successes.some(
+    ([, response]) => response.content?.['application/pdf'] !== undefined
+  )
   const pathParams = (operation.parameters ?? []).filter((param) => param.in === 'path')
   const queryParams = (operation.parameters ?? []).filter((param) => param.in === 'query')
 
@@ -204,9 +209,9 @@ function renderOperation({ path, method, operation }) {
     ),
   ]
   const url = `\`${BASE_URL}${renderPath(path, pathParams)}${queryParams.length === 0 ? '' : SEARCH}\``
-  if (redirectOnly) {
+  if (redirectOnly || binary) {
     if (parameter !== undefined) {
-      throw new Error(`a redirect operation cannot carry a request body: ${operation.operationId}`)
+      throw new Error(`a URL builder cannot carry a request body: ${operation.operationId}`)
     }
     return [
       ...signature(`${operation.operationId}Url`, args, 'string', true),
