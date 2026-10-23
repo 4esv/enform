@@ -27,6 +27,7 @@ import {
   type DirectoryGroup,
   type DirectoryUser,
   type InstanceView,
+  instancePdfUrl,
   listFlows,
   listGroups,
   listUnroutable,
@@ -386,6 +387,17 @@ export async function mountApp(options: AppOptions): Promise<void> {
     instanceStatus.className = 'instance-status'
     instanceStatus.textContent = statusLine(view.status)
     main.appendChild(instanceStatus)
+    // Issue OU-1, I12, DX-4: the instance PDF of the current step. The URL
+    // comes from the generated client, so the page names no API path. A new
+    // tab carries the session cookie and the server authorizes the read.
+    const printPdf = document.createElement('a')
+    printPdf.className = 'print-pdf'
+    printPdf.dataset.printPdf = ''
+    printPdf.href = instancePdfUrl(instanceId)
+    printPdf.target = '_blank'
+    printPdf.rel = 'noopener'
+    printPdf.textContent = 'Print / PDF'
+    main.appendChild(printPdf)
     renderTracker(view.tracker, view.status.currentStep)
     renderNotes(view.notes)
     await renderTimeline(instanceId)
