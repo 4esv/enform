@@ -536,15 +536,15 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
 
 /**
  * Add one starter through the write path (#232). The principal is normalized
- * like a target (ID-4): `user:<id>` and a bare id are the same user, and a
- * `team:<name>` stays a team. The builder appends the two grants the requester
+ * like a target (ID-4, #252): `user:<id>` and a bare id are the same user, and
+ * `group:<id>` and `team:<name>` keep their kind. The builder appends the two grants the requester
  * needs and re-renders, so the outcome grid names the new starter at once.
  */
 async function addStarter(state: BuilderState, input: HTMLInputElement): Promise<void> {
   const confirmation = starterStatusOf(state)
   const principal = principalOfStarter(input.value)
   if (principal === '') {
-    confirmation.textContent = 'Enter a user:<id>, team:<name> or an id.'
+    confirmation.textContent = 'Enter a user:<id>, group:<id>, team:<name> or an id.'
     return
   }
   const first = state.steps[0]
@@ -674,9 +674,7 @@ function definitionOf(state: BuilderState): Record<string, unknown> {
       targets: step.targets
         .map((target) => target.trim())
         .filter((target) => target !== '')
-        .map((target) =>
-          target === 'starter' ? { starter: 'starter' } : { user: userTargetOf(target) }
-        ),
+        .map(targetOf),
       fields: step.fields.map((field) => ({
         key: field.key,
         control: field.control,
@@ -754,9 +752,49 @@ function readTargets(value: unknown): string[] {
   for (const target of targets) {
     if (!isRecord(target)) continue
     if (target.starter !== undefined) read.push('starter')
+    else if (typeof target.group === 'string') read.push(`group:${target.group}`)
+    else if (typeof target.team === 'string') read.push(`team:${target.team}`)
     else if (typeof target.user === 'string') read.push(target.user)
   }
   return read.length === 0 ? ['starter'] : read
+}
+
+/**
+ * The target a builder input names (AS-1, #252, I12). `group:<id>` and
+ * `team:<name>` keep their kind, so the engine resolves the directory group
+ * or the team live; `user:<id>` and a bare id are the same user (ID-4).
+ */
+function targetOf(value: string): Record<string, string> {
+  const target = value.trim()
+  if (target === 'starter') return { starter: 'starter' }
+  const separator = target.indexOf(':')
+  if (separator > 0 && separator < target.length - 1) {
+    const kind = target.slice(0, separator)
+    const name = target.slice(separator + 1).trim()
+    if (name !== '' && (kind === 'group' || kind === 'team' || kind === 'user')) {
+      return { [kind]: name }
+    }
+  }
+  return { user: target }
+}
+
+/**
+ * The principal that a target's grant names (AS-1, ID-4, #252): a group grant
+ * names `group:<id>` and a team grant names `team:<name>`, while a user grant
+ * names the bare id. The server merges both spellings of a group and a team
+ * into the principal's grants.
+ */
+function principalOfTarget(target: string): string {
+  const trimmed = target.trim()
+  if (trimmed.startsWith('group:')) {
+    const id = trimmed.slice('group:'.length).trim()
+    return id === '' ? '' : `group:${id}`
+  }
+  if (trimmed.startsWith('team:')) {
+    const name = trimmed.slice('team:'.length).trim()
+    return name === '' ? '' : `team:${name}`
+  }
+  return userTargetOf(trimmed)
 }
 
 /**
@@ -766,13 +804,13 @@ function readTargets(value: unknown): string[] {
  * spellings reach the one immutable id that the grant and the definition use.
  */
 function principalsOf(state: BuilderState, target: string): readonly string[] {
-  if (target !== 'starter') return [userTargetOf(target)]
+  if (target !== 'starter') return [principalOfTarget(target)]
   return state.starters.length > 0 ? state.starters : [state.actor]
 }
 
 /** The name of one grant row: the starter's principal or the user's id (ID-4). */
 function targetLabel(state: BuilderState, target: string, principal: string): string {
-  if (target !== 'starter') return userTargetOf(target)
+  if (target !== 'starter') return principalOfTarget(target)
   return state.starters.length > 0 ? principal : 'the starter'
 }
 
@@ -783,9 +821,8 @@ function targetLabel(state: BuilderState, target: string, principal: string): st
 function principalOfStarter(value: string): string {
   const trimmed = value.trim()
   if (trimmed === '') return ''
-  if (trimmed.startsWith('team:')) {
-    const name = trimmed.slice('team:'.length).trim()
-    return name === '' ? '' : `team:${name}`
+  if (trimmed.startsWith('team:') || trimmed.startsWith('group:')) {
+    return principalOfTarget(trimmed)
   }
   return userTargetOf(trimmed)
 }
@@ -920,3 +957,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+// The target normalization the builder and its unit test share (AS-1, #252).
+export { principalOfTarget, targetOf }

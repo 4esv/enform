@@ -595,6 +595,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/admin/groups:
+    get:
+      operationId: listGroups
+      summary: List the directory groups
+      description: >-
+        The groups of the built-in directory and the members each one holds
+        (ID-6, AS-1). The group id is the principal that a `group` target and a
+        grant to a group name, so the administrator reads who a group task
+        reaches before it is published (I10). The read requires `org.grants`
+        on `org`, the organization-administration scope of `MVP.md` 5.6,
+        because the directory is an administrator surface (ID-6, I8).
+      responses:
+        '200':
+          description: The groups of the local directory and their members.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DirectoryGroup'
+        '403':
+          description: >-
+            The principal does not hold `org.grants` on the organization (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/flows:
     get:
       operationId: listFlows
@@ -854,6 +881,33 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/InboxItem'
+  /api/v1/unroutable:
+    get:
+      operationId: listUnroutable
+      summary: Read the Unroutable queue
+      description: >-
+        The open tasks whose targets resolved to nobody (I10, AS-5). The flow
+        owner reads the queue and receives the `send-unroutable` alert that the
+        start or the completion recorded in the same operation (SE-2). The
+        server authorizes every row against `task.reassign` on the flow or
+        `org.grants` on the organization, so no other principal reads it (I8).
+      responses:
+        '200':
+          description: The open unroutable tasks, newest activity first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UnroutableItem'
+        '403':
+          description: >-
+            The principal holds neither `task.reassign` on the flow nor
+            `org.grants` on the organization (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 components:
   parameters:
     CsrfToken:
@@ -2105,6 +2159,67 @@ components:
           type: integer
           minimum: 1
           description: The draft version that the publication is based on (I5).
+    DirectoryGroupMember:
+      type: object
+      description: >-
+        One member of a directory group (ID-6, AS-1). The id is the immutable
+        Keycloak subject that a group target resolves to (ID-4).
+      required: [id, displayName, email]
+      properties:
+        id:
+          $ref: '#/components/schemas/ActorId'
+        displayName:
+          type: string
+          description: The display name that the directory holds (ID-4).
+        email:
+          type: string
+          description: The email address that the directory holds (ID-6).
+    DirectoryGroup:
+      type: object
+      description: >-
+        One group of the built-in directory and the members it holds now
+        (ID-6, AS-1). A `group` target names the group id, and the resolver
+        reads the members through the identity provider's admin API (AS-4).
+      required: [id, name, members]
+      properties:
+        id:
+          $ref: '#/components/schemas/ActorId'
+        name:
+          type: string
+          description: The human name of the group (ID-6).
+        path:
+          type: string
+          description: The group path in the realm, when the provider reports one.
+        members:
+          type: array
+          description: The users that the group holds directly (AS-1).
+          items:
+            $ref: '#/components/schemas/DirectoryGroupMember'
+    UnroutableItem:
+      type: object
+      description: >-
+        One open task in the Unroutable queue (I10, AS-5). It names the step
+        that resolved to nobody, so the flow owner sees what waits and why.
+      required: [instanceId, flowSlug, step, state, lastActivityAt]
+      properties:
+        instanceId:
+          type: string
+          description: The id of the instance that the task belongs to (DX-1).
+        flowSlug:
+          type: string
+          description: The slug of the flow that the instance runs (ID-1).
+        step:
+          type: string
+          description: The key of the step whose targets resolved to nobody (WF-1).
+        state:
+          type: string
+          description: The queue state of the task (I10, AS-5).
+          enum: [unroutable]
+        lastActivityAt:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6): the
+            time of the newest event on this instance.
     InboxItem:
       type: object
       description: >-

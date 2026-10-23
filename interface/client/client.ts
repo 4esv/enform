@@ -477,6 +477,40 @@ export interface PublishDraft {
 }
 
 /**
+ * One member of a directory group (ID-6, AS-1). The id is the immutable Keycloak subject that a
+ * group target resolves to (ID-4).
+ */
+export interface DirectoryGroupMember {
+  readonly id: ActorId
+  readonly displayName: string
+  readonly email: string
+}
+
+/**
+ * One group of the built-in directory and the members it holds now (ID-6, AS-1). A `group`
+ * target names the group id, and the resolver reads the members through the identity provider's
+ * admin API (AS-4).
+ */
+export interface DirectoryGroup {
+  readonly id: ActorId
+  readonly name: string
+  readonly path?: string
+  readonly members: readonly DirectoryGroupMember[]
+}
+
+/**
+ * One open task in the Unroutable queue (I10, AS-5). It names the step that resolved to nobody,
+ * so the flow owner sees what waits and why.
+ */
+export interface UnroutableItem {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly state: string
+  readonly lastActivityAt: number
+}
+
+/**
  * One task or instance in the inbox (VT-1, VT-2, S14). The item shows one step of one instance
  * with its state, its holder, its due time and the last activity on it, so the reader sees
  * whether nobody opened the task yet, who holds it, and how long it sits there (VT-2, AS-2).
@@ -601,6 +635,26 @@ export async function listFlows(): Promise<readonly FlowSummary[]> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as readonly FlowSummary[]
+}
+
+export async function listGroups(): Promise<readonly DirectoryGroup[]> {
+  const url = `${configured().baseUrl}/api/v1/admin/groups`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly DirectoryGroup[]
+}
+
+export async function listUnroutable(): Promise<readonly UnroutableItem[]> {
+  const url = `${configured().baseUrl}/api/v1/unroutable`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly UnroutableItem[]
 }
 
 export async function listUsers(): Promise<readonly DirectoryUser[]> {

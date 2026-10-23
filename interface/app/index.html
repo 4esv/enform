@@ -28,6 +28,8 @@
       const flow = params.get('flow') ?? params.get('slug') ?? ''
       const inbox = params.get('inbox') === '1'
       const users = params.get('users') === '1'
+      const groups = params.get('groups') === '1'
+      const queue = params.get('queue') === '1'
       const changes = params.get('changes') === '1'
       mountApp({
         root: document.getElementById('app'),
@@ -39,6 +41,8 @@
         ...(params.get('new') === '1' ? { newFlow: true } : {}),
         ...(inbox ? { inbox: true, inboxTab: params.get('tab') ?? 'my' } : {}),
         ...(users ? { users: true } : {}),
+        ...(groups ? { groups: true } : {}),
+        ...(queue ? { queue: true } : {}),
         ...(changes ? { changes: true } : {}),
         ...(sources
           ? { clock: sources.clock, ids: sources.ids, instanceIds: sources.instanceIds }

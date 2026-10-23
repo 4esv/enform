@@ -24,9 +24,12 @@ import {
   type CreatedUser,
   createFlow,
   createUser,
+  type DirectoryGroup,
   type DirectoryUser,
   type InstanceView,
   listFlows,
+  listGroups,
+  listUnroutable,
   listUsers,
   loginUrl,
   logout,
@@ -43,6 +46,7 @@ import {
   setClient,
   type TimelineEntry,
   type TrackerStep,
+  type UnroutableItem,
 } from '../client/client.js'
 import { mountBuilder } from './builder.js'
 import {
@@ -98,6 +102,10 @@ export interface AppOptions {
   readonly inboxTab?: string
   /** Whether the URL asks for the directory users page (ID-6). */
   readonly users?: boolean
+  /** Whether the URL asks for the directory groups page (ID-6, AS-1). */
+  readonly groups?: boolean
+  /** Whether the URL asks for the Unroutable queue (I10, AS-5). */
+  readonly queue?: boolean
   /** Whether the URL asks for the global change feed (VT-6). */
   readonly changes?: boolean
   /** The injected clock (I6); absent means Date.now. */
@@ -177,6 +185,21 @@ export async function mountApp(options: AppOptions): Promise<void> {
   users.textContent = 'Users'
   users.dataset.users = ''
   header.appendChild(users)
+  // Issue #252, ID-6, AS-1: the groups and their members, the directory read
+  // that a group target names. The link is always offered; the page shows the
+  // server's 403 to a principal without `org.grants` (I8), as Users does.
+  const groups = document.createElement('a')
+  groups.href = '/?groups=1'
+  groups.textContent = 'Groups'
+  groups.dataset.groups = ''
+  header.appendChild(groups)
+  // Issue #252, I10, AS-5: the Unroutable queue. The flow owner reads the
+  // tasks that resolved to nobody; the server authorizes every row (I8).
+  const queue = document.createElement('a')
+  queue.href = '/?queue=1'
+  queue.textContent = 'Queue'
+  queue.dataset.queue = ''
+  header.appendChild(queue)
   if (displayName !== undefined) {
     const who = document.createElement('span')
     who.className = 'principal'
@@ -1361,10 +1384,119 @@ export async function mountApp(options: AppOptions): Promise<void> {
     main.appendChild(form)
   }
 
+  /**
+   * Render the directory groups and their members (ID-6, AS-1, #252). The read
+   * and the write go through the generated client, so the server decides who
+   * may see the directory (I8, I12). The id is the principal that a group
+   * target names in the builder.
+   */
+  const renderGroups = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Groups'
+    main.appendChild(heading)
+
+    let groups: readonly DirectoryGroup[]
+    try {
+      groups = await listGroups()
+    } catch (error: unknown) {
+      const refusal = document.createElement('p')
+      refusal.className = 'status'
+      refusal.dataset.groupsRefused = ''
+      refusal.textContent = messageOf(error)
+      main.appendChild(refusal)
+      return
+    }
+
+    const list = document.createElement('ul')
+    list.className = 'groups'
+    list.dataset.groupList = ''
+    main.appendChild(list)
+    if (groups.length === 0) {
+      const empty = document.createElement('li')
+      empty.className = 'empty'
+      empty.textContent = 'The directory holds no group yet.'
+      list.appendChild(empty)
+      return
+    }
+    for (const entry of groups) {
+      const item = document.createElement('li')
+      item.className = 'group'
+      item.dataset.groupRow = entry.id
+      const name = document.createElement('strong')
+      name.dataset.groupName = ''
+      name.textContent = entry.name
+      const id = document.createElement('code')
+      id.dataset.groupId = ''
+      id.textContent = entry.id
+      const members = document.createElement('ul')
+      members.dataset.groupMembers = ''
+      for (const member of entry.members) {
+        const person = document.createElement('li')
+        person.dataset.groupMember = member.id
+        person.textContent = `${member.displayName} (${member.email})`
+        members.appendChild(person)
+      }
+      item.append(name, id, members)
+      list.appendChild(item)
+    }
+  }
+
+  /**
+   * Render the Unroutable queue (I10, AS-5, #252). The flow owner sees the
+   * open tasks whose targets resolved to nobody; the server authorizes every
+   * row, so a principal without `task.reassign` reads nothing (I8).
+   */
+  const renderUnroutable = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Unroutable'
+    main.appendChild(heading)
+
+    let items: readonly UnroutableItem[]
+    try {
+      items = await listUnroutable()
+    } catch (error: unknown) {
+      const refusal = document.createElement('p')
+      refusal.className = 'status'
+      refusal.dataset.unroutableRefused = ''
+      refusal.textContent = messageOf(error)
+      main.appendChild(refusal)
+      return
+    }
+
+    const list = document.createElement('ul')
+    list.className = 'unroutable'
+    list.dataset.unroutableList = ''
+    main.appendChild(list)
+    if (items.length === 0) {
+      const empty = document.createElement('li')
+      empty.className = 'empty'
+      empty.textContent = 'No task waits in the Unroutable queue.'
+      list.appendChild(empty)
+      return
+    }
+    for (const item of items) {
+      const entry = document.createElement('li')
+      entry.dataset.unroutableItem = item.instanceId
+      const link = document.createElement('a')
+      link.href = `/?flow=${encodeURIComponent(item.flowSlug)}&instance=${encodeURIComponent(item.instanceId)}`
+      link.textContent = `${item.flowSlug} ${item.step}`
+      entry.appendChild(link)
+      list.appendChild(entry)
+    }
+  }
+
   const renderRoute = async (): Promise<void> => {
     clearPage()
     if (options.users === true) {
       await renderUsers()
+      return
+    }
+    if (options.groups === true) {
+      await renderGroups()
+      return
+    }
+    if (options.queue === true) {
+      await renderUnroutable()
       return
     }
     if (options.inbox === true) {
