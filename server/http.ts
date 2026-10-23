@@ -874,7 +874,6 @@ type CloseIntent = {
   readonly reason: string
   readonly version: number
   readonly id: string
-  readonly at: number
 }
 
 /**
@@ -899,7 +898,7 @@ function readCloseIntent(body: Record<string, unknown>): CloseIntent | undefined
   ) {
     return undefined
   }
-  return { instanceId, reason, version, id: body.id, at: body.at }
+  return { instanceId, reason, version, id: body.id }
 }
 
 /**
@@ -931,8 +930,11 @@ function withdrawOperation(
   if (intent.version !== (instance.version ?? 0)) {
     return { status: 409, error: 'the view is stale, refresh and retry' }
   }
+  // The server clock stamps the close, not the client's `at`: the undo period
+  // is measured from this time, so a client clock cannot extend or shorten it.
+  const at = Date.now()
   const result = withdraw(instance, principal.id, intent.reason, {
-    clock: () => intent.at,
+    clock: () => at,
     ids: () => intent.id,
   })
   if (!result.accepted || result.operation === undefined) {
@@ -971,12 +973,15 @@ function cancelOperation(
   if (intent.version !== (instance.version ?? 0)) {
     return { status: 409, error: 'the view is stale, refresh and retry' }
   }
+  // The server clock stamps the close (S13, WF-5): the undo period is measured
+  // from the server's time, never from a client time that could be backdated.
+  const at = Date.now()
   const result = cancel(
     instance,
     principal.id,
     intent.reason,
     { flow: instance.flow, grants },
-    { clock: () => intent.at, ids: () => intent.id }
+    { clock: () => at, ids: () => intent.id }
   )
   if (!result.accepted || result.operation === undefined) {
     const reason = result.reason ?? 'the cancel was refused'
@@ -1022,8 +1027,13 @@ function undoOperation(
     return { status: 400, error: `the log holds no published definition for ${instanceId}` }
   }
   const undoPeriod = (published.definition.undoHours ?? DEFAULT_UNDO_HOURS) * HOUR_MS
-  const result = undoWithdrawOrCancel(instance, principal.id, version, undoPeriod, body.at, {
-    clock: () => body.at as number,
+  // The period is checked against the server clock, and the undo carries that
+  // clock too, so a client cannot backdate `at` to undo after the flow's
+  // period (S13, WF-5, I6). The client's `at` is only the envelope's time and
+  // is not trusted for this decision.
+  const at = Date.now()
+  const result = undoWithdrawOrCancel(instance, principal.id, version, undoPeriod, at, {
+    clock: () => at,
     ids: () => body.id as string,
   })
   if (!result.accepted || result.operation === undefined) {
