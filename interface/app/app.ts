@@ -71,6 +71,9 @@ const INSTANCE_CANCELLED = 'instance.cancelled@1'
 /** The versioned event type of the undo of a close (S13, WF-5). */
 const INSTANCE_UNDONE = 'instance.undone@1'
 
+/** The versioned event type of a takeover (S10, AS-3). */
+const STEP_TAKEN_OVER = 'step.taken-over@1'
+
 export interface AppOptions {
   /** The element that receives the page. */
   readonly root: HTMLElement
@@ -457,6 +460,14 @@ export async function mountApp(options: AppOptions): Promise<void> {
     if (view.status.holder === actor && view.previousSteps.length > 0) {
       main.appendChild(renderSendBack(slug, instanceId, view))
     }
+
+    // An assignee may take over a task that another person holds when the step
+    // allows it (S10, AS-3). The read decides who may see the control and how
+    // long the holder must be idle; the engine still measures the idle period
+    // and reassigns the task (A9, I5).
+    if (view.canTakeOver) {
+      main.appendChild(renderTakeover(slug, instanceId, view))
+    }
   }
 
   /**
@@ -694,6 +705,83 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
       void appendOperation(intent)
         .then(() => renderTask(slug, instanceId, 'Sent back'))
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof RequestRefused &&
+            error.status === 409 &&
+            error.errors.length === 0
+          ) {
+            await renderTask(slug, instanceId, error.error)
+            return
+          }
+          showRefusal(status, form, error)
+        })
+    })
+
+    section.appendChild(form)
+    return section
+  }
+
+  /**
+   * The takeover form (S10, AS-3): a required reason and a submit. When the
+   * read names a `takeoverAvailableAt` that is still in the future, the page
+   * shows the remaining idle time and disables the control; the server refuses
+   * the takeover either way. The submit posts the intent and re-reads the
+   * instance, so the page shows the new holder and the reason the takers gave.
+   */
+  const renderTakeover = (slug: string, instanceId: string, view: InstanceView): HTMLElement => {
+    const section = document.createElement('section')
+    section.className = 'takeover'
+    section.dataset.takeoverSection = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Take over'
+    section.appendChild(heading)
+
+    const remaining =
+      view.takeoverAvailableAt === undefined ? 0 : view.takeoverAvailableAt - clock()
+    const waiting = remaining > 0
+    if (waiting) {
+      const wait = document.createElement('p')
+      wait.className = 'takeover-wait'
+      wait.dataset.takeoverWait = ''
+      wait.textContent = `The holder must be idle before a takeover: ${remainingLabel(remaining)} left.`
+      section.appendChild(wait)
+    }
+
+    const form = document.createElement('form')
+    const reasonLabel = document.createElement('label')
+    reasonLabel.textContent = 'Reason (required)'
+    const reason = document.createElement('textarea')
+    reason.name = 'reason'
+    reason.required = true
+    reason.dataset.takeoverReason = ''
+    reasonLabel.appendChild(reason)
+    form.appendChild(reasonLabel)
+
+    const submit = document.createElement('button')
+    submit.type = 'submit'
+    submit.textContent = 'Take over'
+    submit.dataset.takeover = ''
+    submit.disabled = waiting
+    form.appendChild(submit)
+
+    const status = document.createElement('p')
+    status.className = 'status'
+    form.appendChild(status)
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const why = reason.value.trim()
+      if (submit.disabled || why === '') return
+      const intent: Operation = {
+        id: ids(),
+        type: STEP_TAKEN_OVER,
+        at: clock(),
+        actor,
+        payload: { instanceId, reason: why, version: view.version },
+      }
+      void appendOperation(intent)
+        .then(() => renderTask(slug, instanceId, `Taken over: ${why}`))
         .catch(async (error: unknown) => {
           if (
             error instanceof RequestRefused &&
@@ -1114,6 +1202,14 @@ function showCreatedUser(host: HTMLElement, user: CreatedUser): void {
 function statusLine(status: InstanceView['status']): string {
   const holder = status.holder === undefined ? '' : `, holder ${status.holder}`
   return `Step ${status.step} of ${status.totalSteps}: ${status.state}${holder}`
+}
+
+/** The wait before a takeover in plain language (S10, AS-3). */
+function remainingLabel(milliseconds: number): string {
+  const seconds = Math.ceil(milliseconds / 1000)
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`
+  const minutes = Math.ceil(seconds / 60)
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
 }
 
 function renderControl(
