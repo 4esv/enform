@@ -5,6 +5,11 @@
 // through the configured SMTP transport, and records delivery or a retry. It
 // never decides correctness: PostgreSQL is the only queue (ADR 0003).
 //
+// Issue #248, S12, SE-3, SE-4, SE-5: a pass also fires the due timers before it
+// claims the outbox. The engine decides the timer and its side effect; the
+// worker only claims the row, appends the `timer.fired@1` event and delivers
+// the reminder or the escalation that the same transaction put in the outbox.
+//
 // A missing SMTP URL leaves the rows queued and logs once (SE-1): a small
 // installation runs without a mail server. A row reaches `sent` at most once
 // (I3): a claimed row is `sending`, a delivered row is `sent`, and a second
@@ -14,7 +19,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Pool } from 'pg'
 import type { Config } from './config.js'
-import { createPool } from './db.js'
+import { createPool, fireDueTimers } from './db.js'
 import { createMailer, type MailEntry, type Mailer } from './mail.js'
 
 /** The idle poll interval of the worker, in milliseconds. */
@@ -63,6 +68,16 @@ async function run(pool: Pool, mailer: Mailer | undefined, stopped: () => boolea
   await resetStaleClaims(pool)
   let reported = false
   while (!stopped()) {
+    try {
+      // A due timer fires into the outbox before the batch is claimed, so the
+      // reminder or escalation of this pass goes out in the same pass (SE-3,
+      // SE-4, I2, I3).
+      await fireDueTimers(pool, Date.now())
+    } catch (error) {
+      process.stderr.write(`enform worker: ${messageOf(error)}\n`)
+      await delay(POLL_INTERVAL_MS)
+      continue
+    }
     if (mailer === undefined) {
       if (!reported) {
         const queued = await queuedCount(pool)
