@@ -19,7 +19,7 @@
 
 import { type ActionResult, type CompletionContext, complete } from './action.js'
 import type { Version } from './concurrency.js'
-import type { FlowStep } from './definition.js'
+import type { FlowStep, Target } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Operation, OperationDeps } from './operation.js'
 import type { OutboxEntry } from './outbox.js'
@@ -181,13 +181,19 @@ function escalationTimer(step: FlowStep, settings: StepTimerSettings): Scheduled
     since: settings.since,
     reminderInterval: 0,
     deadline,
-    escalationTargets: (step.escalationTargets ?? []).map((target) => JSON.stringify(target)),
+    escalationTargets: (step.escalationTargets ?? []).map(targetLabel),
   }
   return {
     kind: 'escalation',
     fireAt: deadline,
     entry: escalation(timers, step.key, settings.to),
   }
+}
+
+/** The stable text of one target, as the escalation payload names it (SE-4, AS-1). */
+function targetLabel(target: Target): string {
+  const [kind] = Object.keys(target)
+  return `${kind}:${String((target as Record<string, string>)[kind])}`
 }
 
 /** The result of a completion that cancels the task's timers (S12, SE-5, I2). */

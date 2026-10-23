@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/timer.fired@1.json",
+  "title": "enform timer.fired@1 event payload",
+  "description": "The payload of a timer.fired@1 event (S12, SE-3, SE-4, SE-5, I2, I3, I4). The worker claims one due timer row and records its firing with the timer id, the task it belongs to and the one outbox entry that the timer carries, so the firing and its side effect commit in one event (I2). The projection marks the row fired in the same transaction, so a fired timer never fires again (I3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["timerId", "instanceId", "step", "kind", "fireAt", "outbox"],
+  "properties": {
+    "timerId": {
+      "description": "The timer row id, which is the engine's I3 side-effect key of the timer (I3).",
+      "type": "string"
+    },
+    "instanceId": {
+      "description": "The id of the instance whose task the timer belongs to (DX-1).",
+      "type": "string"
+    },
+    "step": {
+      "description": "The step whose task the timer belongs to (SE-3, SE-4).",
+      "type": "string"
+    },
+    "kind": {
+      "description": "The timer: a reminder at an interval, or the escalation at the deadline (SE-3, SE-4).",
+      "enum": ["reminder", "escalation"]
+    },
+    "fireAt": {
+      "description": "The time the timer was due, from the server clock (I6).",
+      "type": "number"
+    },
+    "outbox": {
+      "description": "The one side effect that the timer causes, committed with the firing (I2, SE-1).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": { "$ref": "#/$defs/outboxEntry" }
+    }
+  },
+  "$defs": {
+    "outboxEntry": {
+      "description": "One side effect (SE-1): the connector operation, the connector, and its payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "target", "payload"],
+      "properties": {
+        "operation": { "type": "string" },
+        "target": { "type": "string" },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

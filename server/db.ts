@@ -26,12 +26,19 @@ import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
-import { outboxOfEvent } from '../engine/outbox.js'
+import { type OutboxEntry, outboxOfEvent } from '../engine/outbox.js'
+import { ESCALATION_EMAIL, MINUTE_MS, REMINDER_EMAIL, TIMER_FIRED } from '../engine/reminders.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
-import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
+import { EMAIL_CONNECTOR, INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
+import {
+  cancelStepTimers,
+  scheduleNextReminder,
+  scheduleStepTimers,
+  timerRecipient,
+} from './timers.js'
 
 /** The event that records a change to the profile cache (ID-4, ADR 0012). */
 export const PRINCIPAL_UPDATED_TYPE = 'identity.principal.updated@1'
@@ -250,6 +257,69 @@ async function appendOperationIn(client: PoolClient, operation: Operation): Prom
     })
   }
   return { inserted: seq !== undefined, seq: seq === undefined ? null : Number(seq) }
+}
+
+/**
+ * Claim and fire the due timers of every task in one transaction each (SE-3,
+ * SE-4, SE-5, I2, I3). The claim is `for update skip locked`, so two workers
+ * never fire the same timer, and the `timer.fired@1` event and the fired mark
+ * commit together: a crash before the commit leaves the timer due, and a crash
+ * after it leaves the timer fired. The event carries the one outbox entry that
+ * the timer stands for, which `projectEvent` inserts in the same transaction.
+ * A cancelled, fired or future timer is never claimed.
+ */
+export async function fireDueTimers(pool: Pool, now: number, limit = 20): Promise<number> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const due = await client.query<{
+      id: string
+      kind: 'reminder' | 'escalation'
+      fire_at: string
+      instance_id: string
+      step: string
+      payload: Record<string, unknown>
+    }>(
+      `select id, kind, fire_at, instance_id, step, payload
+       from timers
+       where cancelled_at is null and fired_at is null and fire_at <= $1
+       order by fire_at, id
+       limit $2
+       for update skip locked`,
+      [now, limit]
+    )
+    if (due.rows.length === 0) {
+      await client.query('commit')
+      return 0
+    }
+    for (const row of due.rows) {
+      const entry: OutboxEntry = {
+        operation: row.kind === 'reminder' ? REMINDER_EMAIL : ESCALATION_EMAIL,
+        target: EMAIL_CONNECTOR,
+        payload: row.payload,
+      }
+      await appendOperationIn(client, {
+        id: `timer:${row.id}`,
+        type: TIMER_FIRED,
+        at: now,
+        payload: {
+          timerId: row.id,
+          instanceId: row.instance_id,
+          step: row.step,
+          kind: row.kind,
+          fireAt: Number(row.fire_at),
+          outbox: [entry],
+        },
+      })
+    }
+    await client.query('commit')
+    return due.rows.length
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 /** Read one event by the client-created operation id (I1), or undefined when it is absent. */
@@ -1080,6 +1150,19 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         at: event.at,
         seq: event.seq,
       })
+      // The start's active step schedules its timers from its own settings and
+      // the time the task entered it (SE-3, SE-4, S12).
+      const step = await stepOfInstance(client, start.instanceId, start.currentStep)
+      if (step !== undefined) {
+        const to = timerRecipient(start.assignees, start.currentStep)
+        await scheduleStepTimers(client, {
+          instanceId: start.instanceId,
+          step,
+          since: event.at,
+          seq: event.seq,
+          ...(to === undefined ? {} : { to }),
+        })
+      }
     }
     return
   }
@@ -1118,15 +1201,34 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
        where instance_id = $1 and step = $2`,
       [completion.instanceId, completion.step, event.at, event.seq]
     )
+    // The completion closes the task, so its pending timers are cancelled in
+    // the same event (SE-5, I2). A completion before the deadline therefore
+    // sends no reminder and no escalation.
+    await cancelStepTimers(client, {
+      instanceId: completion.instanceId,
+      step: completion.step,
+      at: event.at,
+      seq: event.seq,
+    })
     if (next !== undefined) {
+      const assignees = readAssignees(event.payload.assignees)
       await upsertTask(client, {
         instanceId: completion.instanceId,
         step: next.key,
-        assignees: readAssignees(event.payload.assignees),
+        assignees,
         holder: null,
         state: 'available',
         at: event.at,
         seq: event.seq,
+      })
+      // The next step enters now, so its timers count from this event (SE-3).
+      const to = timerRecipient(assignees, next.key)
+      await scheduleStepTimers(client, {
+        instanceId: completion.instanceId,
+        step: next,
+        since: event.at,
+        seq: event.seq,
+        ...(to === undefined ? {} : { to }),
       })
     }
     return
@@ -1181,6 +1283,14 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
        where instance_id = $1 and step = $2`,
       [sentBack.instanceId, sentBack.from, event.at, event.seq]
     )
+    // The step that sent the task back is no longer open, so its pending
+    // timers are cancelled in this event (SE-5, I2).
+    await cancelStepTimers(client, {
+      instanceId: sentBack.instanceId,
+      step: sentBack.from,
+      at: event.at,
+      seq: event.seq,
+    })
     // The target task is open again with the assignees the engine resolved for
     // that step (AS-4, I13). That is the row the inbox and the task read use.
     await upsertTask(client, {
@@ -1192,6 +1302,18 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       at: event.at,
       seq: event.seq,
     })
+    // The target step's timers count from the send back that reopened it.
+    const targetStep = await stepOfInstance(client, sentBack.instanceId, sentBack.to)
+    if (targetStep !== undefined) {
+      const to = timerRecipient(sentBack.assignees, sentBack.to)
+      await scheduleStepTimers(client, {
+        instanceId: sentBack.instanceId,
+        step: targetStep,
+        since: event.at,
+        seq: event.seq,
+        ...(to === undefined ? {} : { to }),
+      })
+    }
     return
   }
   if (event.type === INSTANCE_WITHDRAWN || event.type === INSTANCE_CANCELLED) {
@@ -1225,6 +1347,14 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
        where instance_id = $1 and step = $2`,
       [close.instanceId, close.step, kind, event.at, event.seq]
     )
+    // A close ends the open task, so its pending timers are cancelled in the
+    // same event and neither a reminder nor the escalation follows (SE-5, I2).
+    await cancelStepTimers(client, {
+      instanceId: close.instanceId,
+      step: close.step,
+      at: event.at,
+      seq: event.seq,
+    })
     return
   }
   if (event.type === INSTANCE_UNDONE) {
@@ -1257,6 +1387,38 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
        where instance_id = $1 and step = $2`,
       [restore.instanceId, restore.step, restore.holder, event.at, event.seq]
     )
+    return
+  }
+  if (event.type === TIMER_FIRED) {
+    const fired = readTimerFired(event)
+    // The timer fired at most once (I3): the claim and this mark share the one
+    // transaction that appended the event.
+    await client.query(
+      `update timers set fired_at = $2, seq = $3 where id = $1 and fired_at is null`,
+      [fired.timerId, event.at, event.seq]
+    )
+    // A step without a deadline keeps reminding: the next interval's reminder
+    // is scheduled in the same event that records this one firing (SE-3).
+    const [entry] = outboxOfEvent(event)
+    if (fired.kind === 'reminder' && entry !== undefined) {
+      const step = await stepOfInstance(client, fired.instanceId, fired.step)
+      if (step !== undefined && step.deadlineMinutes === undefined) {
+        const occurrence = Number(entry.payload.occurrence)
+        const at = Number(entry.payload.at)
+        const interval = (step.reminderMinutes ?? 0) * MINUTE_MS
+        if (Number.isInteger(occurrence) && Number.isFinite(at) && interval > 0) {
+          const to = typeof entry.payload.to === 'string' ? entry.payload.to : undefined
+          await scheduleNextReminder(client, {
+            instanceId: fired.instanceId,
+            step,
+            since: at - occurrence * interval,
+            occurrence: occurrence + 1,
+            seq: event.seq,
+            ...(to === undefined ? {} : { to }),
+          })
+        }
+      }
+    }
     return
   }
   if (event.type === SEED_CLEARED_TYPE) {
@@ -1422,6 +1584,7 @@ async function deleteClearedSeedProjections(client: PoolClient): Promise<void> {
     }
     if (record.kind === 'instance') {
       await client.query('delete from tasks where instance_id = $1', [record.id])
+      await client.query('delete from timers where instance_id = $1', [record.id])
       await client.query('delete from instances where id = $1', [record.id])
       continue
     }
@@ -1471,6 +1634,26 @@ async function nextStepOf(
   return nextStep(readStoredDefinition(row.definition, `instance ${instanceId}`), step)
 }
 
+/** One step of the definition that the instance pins, or undefined when it has none (DF-2, S12). */
+async function stepOfInstance(
+  client: PoolClient,
+  instanceId: string,
+  step: string
+): Promise<FlowStep | undefined> {
+  const result = await client.query<{ definition: unknown }>(
+    `select v.definition
+     from instances i
+     join flow_versions v on v.content_hash = i.definition_version
+     where i.id = $1`,
+    [instanceId]
+  )
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  return readStoredDefinition(row.definition, `instance ${instanceId}`).steps.find(
+    (candidate) => candidate.key === step
+  )
+}
+
 /** Read the start payload that the projection folds (I4, I13, #222). */
 function readStart(event: Event): {
   instanceId: string
@@ -1517,6 +1700,25 @@ function readCompletion(event: Event): { instanceId: string; step: string } {
     throw new Error(`events: malformed ${STEP_COMPLETED} payload at seq ${event.seq}`)
   }
   return { instanceId, step }
+}
+
+/** Read a `timer.fired@1` payload that the projection folds (SE-3, SE-4, I3). */
+function readTimerFired(event: Event): {
+  timerId: string
+  instanceId: string
+  step: string
+  kind: 'reminder' | 'escalation'
+} {
+  const { timerId, instanceId, step, kind } = event.payload
+  if (
+    typeof timerId !== 'string' ||
+    typeof instanceId !== 'string' ||
+    typeof step !== 'string' ||
+    (kind !== 'reminder' && kind !== 'escalation')
+  ) {
+    throw new Error(`events: malformed ${TIMER_FIRED} payload at seq ${event.seq}`)
+  }
+  return { timerId, instanceId, step, kind }
 }
 
 /** Read a submit payload that the projection folds (I4, FM-7). */
