@@ -1312,6 +1312,7 @@ components:
       required:
         - instanceId
         - status
+        - tracker
         - visible
         - editable
         - required
@@ -1338,6 +1339,17 @@ components:
             refused at once.
         status:
           $ref: '#/components/schemas/Status'
+        tracker:
+          type: array
+          description: >-
+            The per-step tracker (VT-2, S14, #244), one entry per definition
+            step in definition order. Each step shows one state, and the read
+            adds the holder of the open step, the condition that skipped a
+            step and the comment that sent one back. The engine reads it from
+            the instance, its pinned definition and the log (I4, I6), so the
+            tracker never shows another instance's history.
+          items:
+            $ref: '#/components/schemas/TrackerStep'
         visible:
           type: array
           description: >-
@@ -1479,6 +1491,33 @@ components:
         comment:
           type: string
           description: The comment itself (WF-3).
+    TrackerStep:
+      type: object
+      description: >-
+        One step of the per-step tracker (VT-2, S14, #244). It is one
+        definition step in definition order, with the one state it shows and,
+        when the log holds them, the holder of the open step, the condition
+        that skipped the step and the comment that sent it back.
+      required: [key, state]
+      properties:
+        key:
+          type: string
+          description: The definition key of the step (WF-1).
+        state:
+          type: string
+          description: The one state the step shows (VT-2).
+          enum: [not-reached, unopened, opened, completed, skipped, sent-back]
+        holder:
+          $ref: '#/components/schemas/ActorId'
+        condition:
+          description: >-
+            The JSON Logic condition that skipped the step (S05, WF-1); the
+            VT-2 reason. It is absent for a step that was not skipped.
+        comment:
+          type: string
+          description: >-
+            The comment that sent the step back (WF-3, S11). It is absent for
+            a step that no send back reopened.
     InstanceField:
       type: object
       description: >-

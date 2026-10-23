@@ -223,6 +223,7 @@ export interface InstanceView {
   readonly instanceId: string
   readonly version: number
   readonly status: Status
+  readonly tracker: readonly TrackerStep[]
   readonly visible: readonly string[]
   readonly editable: readonly string[]
   readonly required: readonly string[]
@@ -252,6 +253,19 @@ export interface Note {
   readonly step: string
   readonly actor: ActorId
   readonly comment: string
+}
+
+/**
+ * One step of the per-step tracker (VT-2, S14, #244). It is one definition step in definition
+ * order, with the one state it shows and, when the log holds them, the holder of the open step,
+ * the condition that skipped the step and the comment that sent it back.
+ */
+export interface TrackerStep {
+  readonly key: string
+  readonly state: string
+  readonly holder?: ActorId
+  readonly condition?: Record<string, unknown>
+  readonly comment?: string
 }
 
 /**
