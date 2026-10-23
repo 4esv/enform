@@ -201,6 +201,11 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
         key: 'registrar',
         targets: [{ team: registrarTeam }],
         outcomes: ['approve'],
+        // One minute of idle lets the registrar peers take a claimed task over
+        // in the demo and its browser journey (S10, AS-3, #242). The advisor
+        // step keeps the default, so a takeover there is never allowed.
+        takeover: 'after-idle',
+        idleMinutes: 1,
       },
     ],
   }
