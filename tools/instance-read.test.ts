@@ -157,7 +157,7 @@ test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', (
   // The read carries the per-step tracker (VT-2, S14, #244): the current step
   // waits to be opened and the later step is not reached.
   expect(view?.tracker).toEqual([
-    { key: 'request', state: 'unopened' },
+    { key: 'request', state: 'unopened', startAt: 1_700_000_000_000 },
     { key: 'review', state: 'not-reached' },
   ])
 

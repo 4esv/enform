@@ -67,6 +67,13 @@ type InstanceView = {
   readonly tracker: readonly TrackerStep[]
 }
 
+/** One event as `GET /api/v1/log` returns it. */
+type Event = {
+  readonly type: string
+  readonly at: number
+  readonly payload: Record<string, unknown>
+}
+
 type Setup = {
   readonly config: TestConfig
   readonly dir: string
@@ -190,6 +197,24 @@ async function readAs(token: string, instanceId: string): Promise<InstanceView> 
   )
 }
 
+/** Read the log as a bearer principal, so the expected times come from the events. */
+async function readLogAs(token: string): Promise<readonly Event[]> {
+  const { publicUrl } = requireSetup()
+  return json<readonly Event[]>(
+    await fetch(`${publicUrl}/api/v1/log`, { headers: { authorization: `Bearer ${token}` } }),
+    'GET /api/v1/log'
+  )
+}
+
+/** The time of the last event of one type that names one instance. */
+function eventAt(log: readonly Event[], type: string, instanceId: string): number {
+  const event = log.findLast(
+    (candidate) => candidate.type === type && candidate.payload.instanceId === instanceId
+  )
+  if (event === undefined) throw new Error(`the log has no ${type} for ${instanceId}`)
+  return event.at
+}
+
 /** Post one engine intent as a bearer principal. */
 async function postIntent(token: string, intent: Record<string, unknown>): Promise<Response> {
   const { publicUrl } = requireSetup()
@@ -222,12 +247,14 @@ test('#244 VT-2 the request instance shows the skipped chair and the unopened re
   const { config } = requireSetup()
   const sam = castMember('starter')
   const request = demoInstance((instance) => instance.step === 'request')
-  const view = await readAs(await passwordToken(config, sam.email, sam.password), request.id)
+  const token = await passwordToken(config, sam.email, sam.password)
+  const view = await readAs(token, request.id)
+  const startedAt = eventAt(await readLogAs(token), 'instance.started@1', request.id)
 
   expect(view.status.currentStep).toBe('request')
   expect(view.tracker).toEqual([
     { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
-    { key: 'request', state: 'unopened' },
+    { key: 'request', state: 'unopened', startAt: startedAt },
     { key: 'advisor', state: 'not-reached' },
     { key: 'registrar', state: 'not-reached' },
   ])
@@ -276,12 +303,16 @@ test('#244 VT-2 the advisor instance shows the request completed and the advisor
   const { config } = requireSetup()
   const sam = castMember('starter')
   const advisor = demoInstance((instance) => instance.step === 'advisor')
-  const view = await readAs(await passwordToken(config, sam.email, sam.password), advisor.id)
+  const token = await passwordToken(config, sam.email, sam.password)
+  const view = await readAs(token, advisor.id)
+  const log = await readLogAs(token)
+  const startedAt = eventAt(log, 'instance.started@1', advisor.id)
+  const completedAt = eventAt(log, 'step.completed@1', advisor.id)
 
   expect(view.tracker).toEqual([
     { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
-    { key: 'request', state: 'completed' },
-    { key: 'advisor', state: 'unopened' },
+    { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: completedAt },
+    { key: 'advisor', state: 'unopened', startAt: completedAt },
     { key: 'registrar', state: 'not-reached' },
   ])
 }, 180_000)
@@ -290,13 +321,23 @@ test('#244 VT-2 the done instance shows every step completed or skipped', async 
   const { config } = requireSetup()
   const sam = castMember('starter')
   const done = demoInstance((instance) => instance.done)
-  const view = await readAs(await passwordToken(config, sam.email, sam.password), done.id)
+  const token = await passwordToken(config, sam.email, sam.password)
+  const view = await readAs(token, done.id)
+  const log = await readLogAs(token)
+  const startedAt = eventAt(log, 'instance.started@1', done.id)
+  const completed = log.filter(
+    (event) => event.type === 'step.completed@1' && event.payload.instanceId === done.id
+  )
+  const [requestAt, advisorAt, registrarAt] = completed.map((event) => event.at)
+  if (requestAt === undefined || advisorAt === undefined || registrarAt === undefined) {
+    throw new Error('the done instance has no three completions')
+  }
 
   expect(view.tracker).toEqual([
     { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
-    { key: 'request', state: 'completed' },
-    { key: 'advisor', state: 'completed' },
-    { key: 'registrar', state: 'completed' },
+    { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: requestAt },
+    { key: 'advisor', state: 'completed', startAt: requestAt, lastActivityAt: advisorAt },
+    { key: 'registrar', state: 'completed', startAt: advisorAt, lastActivityAt: registrarAt },
   ])
 }, 180_000)
 
@@ -335,13 +376,22 @@ test('#244 VT-2 a send back moves the tracker to the target step with the commen
   expect(sent.status, await sent.text()).toBe(201)
 
   const moved = await readAs(await passwordToken(config, sam.email, sam.password), instance.id)
+  const log = await readLogAs(token)
+  const completedAt = eventAt(log, 'step.completed@1', instance.id)
+  const sentBackAt = eventAt(log, 'step.sent-back@1', instance.id)
   expect(moved.status.currentStep).toBe('request')
   // The sending step keeps the state the log records for it: Okafor claimed
   // the advisor step and the send back records no completion for it.
   expect(moved.tracker).toEqual([
     { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
-    { key: 'request', state: 'sent-back', comment: COMMENT },
-    { key: 'advisor', state: 'opened' },
+    {
+      key: 'request',
+      state: 'sent-back',
+      comment: COMMENT,
+      startAt: sentBackAt,
+      lastActivityAt: sentBackAt,
+    },
+    { key: 'advisor', state: 'opened', startAt: completedAt, lastActivityAt: sentBackAt },
     { key: 'registrar', state: 'not-reached' },
   ])
   sentBackTracker = moved.tracker

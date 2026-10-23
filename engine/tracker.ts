@@ -38,7 +38,9 @@ export type TrackerState =
  * One step of the tracker (VT-2, S14). It is one definition step in definition
  * order. `holder` is the holder of the current open step, `condition` is the
  * condition that skipped the step (the VT-2 reason), and `comment` is the
- * send-back comment that reopened the current step.
+ * send-back comment that reopened the current step. `startAt` is when the
+ * instance entered the step and `lastActivityAt` is the newest event for it.
+ * The due time belongs to the reminders lane (SE-3), not to this projection.
  */
 export type TrackerStep = {
   /** The definition key of the step (WF-1). */
@@ -51,6 +53,18 @@ export type TrackerStep = {
   readonly condition?: JsonValue
   /** The comment that sent the current step back (WF-3, S11). */
   readonly comment?: string
+  /**
+   * When the instance entered the step (VT-2, S14): the start for the first
+   * active step, the completion that advanced to it, or the send back that
+   * reopened it. It is absent for a step that the instance never entered.
+   */
+  readonly startAt?: number
+  /**
+   * The newest event for the step (VT-2, S14): a claim (including a takeover),
+   * a completion or a send back. It is absent until the log records one, so a
+   * step that waits unopened carries only its start time.
+   */
+  readonly lastActivityAt?: number
 }
 
 /**
@@ -77,6 +91,10 @@ type Folded = {
   readonly states: ReadonlyMap<string, TrackerState>
   readonly conditions: ReadonlyMap<string, JsonValue>
   readonly comments: ReadonlyMap<string, string>
+  /** When the instance entered each step (VT-2, S14). */
+  readonly starts: ReadonlyMap<string, number>
+  /** The newest event for each step (VT-2, S14). */
+  readonly activities: ReadonlyMap<string, number>
   readonly currentStep?: string
   readonly holder?: ActorId
 }
@@ -91,12 +109,15 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
   const states = new Map<string, TrackerState>()
   const conditions = new Map<string, JsonValue>()
   const comments = new Map<string, string>()
+  const starts = new Map<string, number>()
+  const activities = new Map<string, number>()
   let currentStep = instance.currentStep
   let holder = instance.holder
   for (const event of ownEvents(instance, log)) {
     if (event.type === INSTANCE_STARTED) {
       currentStep = stringField(event.payload, 'currentStep') ?? instance.currentStep
       holder = undefined
+      if (currentStep !== undefined) starts.set(currentStep, event.at)
       for (const skipped of readSkipped(event.payload.skipped)) {
         states.set(skipped.step, 'skipped')
         conditions.set(skipped.step, skipped.condition)
@@ -107,6 +128,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       const step = stringField(event.payload, 'step')
       if (step === undefined) continue
       states.set(step, 'opened')
+      activities.set(step, event.at)
       holder = stringField(event.payload, 'holder') ?? event.actor
       currentStep = step
       continue
@@ -115,6 +137,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       const step = stringField(event.payload, 'step')
       if (step === undefined) continue
       states.set(step, 'opened')
+      activities.set(step, event.at)
       holder = stringField(event.payload, 'to') ?? event.actor
       currentStep = step
       continue
@@ -124,8 +147,11 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       if (step === undefined) continue
       states.set(step, 'completed')
       comments.delete(step)
+      activities.set(step, event.at)
       holder = undefined
-      currentStep = nextStep(definition, step)?.key
+      const next = nextStep(definition, step)?.key
+      if (next !== undefined) starts.set(next, event.at)
+      currentStep = next
       continue
     }
     if (event.type === STEP_SENT_BACK) {
@@ -137,6 +163,12 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       const comment = stringField(event.payload, 'comment')
       if (comment === undefined) comments.delete(to)
       else comments.set(to, comment)
+      // The send back is the newest event for the step it left and for the
+      // step it reopens, so both carry it as their last activity (VT-2).
+      const from = stringField(event.payload, 'from')
+      if (from !== undefined) activities.set(from, event.at)
+      starts.set(to, event.at)
+      activities.set(to, event.at)
       holder = undefined
       currentStep = to
       continue
@@ -163,7 +195,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       holder = stringField(event.payload, 'holder')
     }
   }
-  return { states, conditions, comments, currentStep, holder }
+  return { states, conditions, comments, starts, activities, currentStep, holder }
 }
 
 /** The events that name this instance (I4); an instance without an id owns none. */
@@ -199,6 +231,8 @@ function entry(key: string, folded: Folded): TrackerStep {
     ...(state === 'sent-back' && folded.comments.has(key)
       ? { comment: folded.comments.get(key) }
       : {}),
+    ...(folded.starts.has(key) ? { startAt: folded.starts.get(key) } : {}),
+    ...(folded.activities.has(key) ? { lastActivityAt: folded.activities.get(key) } : {}),
   }
 }
 

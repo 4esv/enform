@@ -1494,10 +1494,12 @@ components:
     TrackerStep:
       type: object
       description: >-
-        One step of the per-step tracker (VT-2, S14, #244). It is one
+        One step of the per-step tracker (VT-2, S14, #244, #246). It is one
         definition step in definition order, with the one state it shows and,
         when the log holds them, the holder of the open step, the condition
-        that skipped the step and the comment that sent it back.
+        that skipped the step, the comment that sent it back, the time the
+        instance entered the step and the newest event for it. The due time
+        belongs to the reminders lane (SE-3).
       required: [key, state]
       properties:
         key:
@@ -1518,6 +1520,20 @@ components:
           description: >-
             The comment that sent the step back (WF-3, S11). It is absent for
             a step that no send back reopened.
+        startAt:
+          type: integer
+          description: >-
+            When the instance entered the step (VT-2, S14): the start for the
+            first active step, the completion that advanced to it, or the
+            send back that reopened it. It is absent for a step that the
+            instance never entered.
+        lastActivityAt:
+          type: integer
+          description: >-
+            The newest event for the step (VT-2, S14): a claim (including a
+            takeover), a completion or a send back. It is absent until the
+            log records one, so a step that waits unopened carries only its
+            start time.
     InstanceField:
       type: object
       description: >-

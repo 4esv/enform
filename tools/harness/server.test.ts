@@ -351,7 +351,7 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
           state: 'skipped',
           condition: { '==': [{ var: 'urgent' }, false] },
         },
-        { key: 'advisor', state: 'unopened' },
+        { key: 'advisor', state: 'unopened', startAt: 10 },
         { key: 'registrar', state: 'not-reached' },
       ],
       visible: [],
