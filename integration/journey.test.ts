@@ -589,7 +589,12 @@ test('#222 I4 a second instance never appears in the first instance read', async
   // The second instance is the one the started tab now shows; the first is
   // done and absent (VT-1).
   const started = await inbox('started')
-  expect(started.some((item) => item.instanceId === SECOND_INSTANCE_ID)).toBe(true)
+  const secondItem = started.find((item) => item.instanceId === SECOND_INSTANCE_ID)
+  expect(secondItem, 'the second instance is in the started tab').toBeDefined()
+  expect(
+    secondItem?.dueAt,
+    'the request step sets no deadline, so it lends no timer'
+  ).toBeUndefined()
   expect(started.some((item) => item.instanceId === INSTANCE_ID)).toBe(false)
 })
 

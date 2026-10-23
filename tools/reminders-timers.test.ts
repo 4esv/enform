@@ -12,6 +12,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js'
 import { expect, test } from 'vitest'
 import type { FlowStep } from '../engine/definition.js'
 import {
+  assigneesAddedBy,
   ESCALATION_EMAIL,
   MINUTE_MS,
   nextReminderTimer,
@@ -106,6 +107,27 @@ test('#248 I3 I6 a reminder interval longer than the deadline schedules no remin
     deadlineMinutes: 60,
   }
   expect(timers(step).map((timer) => timer.kind)).toEqual(['escalation'])
+})
+
+test('#248 SE-4 a user and a team add resolve to the principals that the escalation names', () => {
+  const membership = (principal: string): readonly string[] =>
+    principal === 'CS-Chairs' ? ['user:okafor', 'user:lee'] : []
+  const added = assigneesAddedBy(
+    'advisor',
+    ['user:okafor', 'team:CS-Chairs', 'group:staff'],
+    membership
+  )
+  expect(added).toEqual([
+    { step: 'advisor', target: { user: 'okafor' }, members: ['okafor'] },
+    {
+      step: 'advisor',
+      target: { team: 'CS-Chairs' },
+      members: ['user:okafor', 'user:lee'],
+    },
+    // The group directory is not in this lane, so the target stays recorded and
+    // adds no principal (the stated gap).
+    { step: 'advisor', target: { group: 'staff' }, members: [] },
+  ])
 })
 
 test('#248 I2 I3 the timer.fired@1 schema matches the worker payload', () => {

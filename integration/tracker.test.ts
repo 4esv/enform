@@ -404,6 +404,49 @@ test('#244 VT-2 a send back moves the tracker to the target step with the commen
   sentBackTracker = moved.tracker
 }, 180_000)
 
+test('#250 VT-2 the tracker and the inbox show the relative due label in Chromium', async () => {
+  const { browser, publicUrl } = requireSetup()
+  const sam = castMember('starter')
+  const done = demoInstance((instance) => instance.done)
+  const registrar = demoInstance((instance) => instance.step === 'registrar')
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    await signIn(page, publicUrl, sam.email, sam.password)
+
+    // The done instance entered the registrar step, which sets a two minute
+    // deadline, so the tracker carries the relative label and keeps the
+    // absolute time for the tooltip and the datetime attribute (VT-2).
+    await page.goto(
+      `${publicUrl}/?flow=${encodeURIComponent(flowSlug())}&instance=${encodeURIComponent(done.id)}`
+    )
+    const trackerDue = page.locator('[data-tracker-step="registrar"] [data-tracker-due]')
+    await trackerDue.waitFor({ timeout: 30_000 })
+    expect(await trackerDue.textContent()).toMatch(/^(due in|overdue by) /)
+    const trackerAbsolute = await trackerDue.getAttribute('datetime')
+    expect(trackerAbsolute, 'the absolute time stays on the datetime attribute').toMatch(
+      /^\d{4}-\d{2}-\d{2}T/
+    )
+    expect(await trackerDue.getAttribute('title')).toBe(trackerAbsolute)
+
+    // The open registrar instance is in the starter's Started tab, and the
+    // inbox item shows the same relative label (VT-1, VT-2).
+    await page.goto(`${publicUrl}/?inbox=1&tab=started`)
+    const item = page.locator(`[data-inbox-instance="${registrar.id}"]`)
+    await item.waitFor({ timeout: 30_000 })
+    const inboxDue = item.locator('[data-inbox-due]')
+    await inboxDue.waitFor({ timeout: 30_000 })
+    expect(await inboxDue.textContent()).toMatch(/^(due in|overdue by) /)
+    const inboxAbsolute = await inboxDue.getAttribute('datetime')
+    expect(inboxAbsolute, 'the absolute time stays on the datetime attribute').toMatch(
+      /^\d{4}-\d{2}-\d{2}T/
+    )
+    expect(await inboxDue.getAttribute('title')).toBe(inboxAbsolute)
+  } finally {
+    await context.close()
+  }
+}, 180_000)
+
 test('#244 I4 a rebuild reproduces the tracker from the log', async () => {
   const { config, configPath } = requireSetup()
   const sam = castMember('starter')

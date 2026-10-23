@@ -42,6 +42,14 @@ const MINUTE = 60_000
 const REMINDER = 'send-reminder'
 const ESCALATION = 'send-escalation'
 
+/** One seeded user as `seed demo --json` returns it. */
+type DemoUser = {
+  readonly role: string
+  readonly id: string
+  readonly email: string
+  readonly password: string
+}
+
 /** One seeded instance as `seed demo --json` returns it. */
 type DemoInstance = {
   readonly id: string
@@ -52,6 +60,7 @@ type DemoInstance = {
 /** The JSON body of `seed demo`. */
 type SeedOutput = {
   readonly ok: boolean
+  readonly users?: readonly DemoUser[]
   readonly instances?: readonly DemoInstance[]
 }
 
@@ -91,6 +100,14 @@ type InstanceView = {
   readonly version: number
   readonly status: { readonly currentStep?: string }
   readonly tracker: readonly TrackerStep[]
+}
+
+/** One inbox item as `GET /api/v1/inbox` returns it (VT-1, VT-2). */
+type InboxItem = {
+  readonly instanceId: string
+  readonly step: string
+  readonly state: string
+  readonly dueAt?: number
 }
 
 /** One message in Mailpit's list response. */
@@ -192,7 +209,10 @@ beforeAll(async () => {
 
     // A flow whose only step sets the timer under test (S12, SE-3, SE-4). The
     // administrator is its starter and its assignee, so one bearer token drives
-    // the start, the claim and the completion through the public API.
+    // the start, the claim and the completion through the public API. The
+    // escalation adds a second person from the demo seed, so the added assignee
+    // is observable beside the current owner (SE-4).
+    const okafor = castMember('advisor')
     const definition: FlowDefinition = {
       schemaVersion: 2,
       steps: [
@@ -202,7 +222,7 @@ beforeAll(async () => {
           outcomes: ['approve'],
           reminderMinutes: 1,
           deadlineMinutes: 1,
-          escalationTargets: [{ user: adminId }],
+          escalationTargets: [{ user: adminId }, { user: okafor.id }],
         },
       ],
     }
@@ -308,6 +328,13 @@ function requireSetup(): Setup {
   return setup
 }
 
+/** A demo user by role, or the reason the seed did not carry it. */
+function castMember(role: string): DemoUser {
+  const user = requireSetup().seed.users?.find((entry) => entry.role === role)
+  if (user === undefined) throw new Error(`the demo seed has no ${role}`)
+  return user
+}
+
 /** Run one CLI command synchronously and return its result. */
 function runCli(args: readonly string[]) {
   return spawnSync(
@@ -380,6 +407,32 @@ async function readInstance(token: string, instanceId: string): Promise<Instance
     headers: { authorization: `Bearer ${token}` },
   })
   return json<InstanceView>(response, `GET /api/v1/instances/${instanceId}`)
+}
+
+/** Read one inbox tab as one principal (VT-1, VT-2). */
+async function readInbox(
+  token: string,
+  tab: 'my' | 'available' | 'started'
+): Promise<readonly InboxItem[]> {
+  const { publicUrl } = requireSetup()
+  const response = await fetch(`${publicUrl}/api/v1/inbox?tab=${tab}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  return json<readonly InboxItem[]>(response, `GET /api/v1/inbox?tab=${tab}`)
+}
+
+/** The resolved assignees that one task row holds (SE-4, I13). */
+function taskAssignees(instanceId: string): readonly string[] {
+  const { databaseUrl } = requireSetup()
+  const [value] = queryDatabase(
+    databaseUrl,
+    `select assignees::text from tasks where instance_id = '${instanceId}'`
+  )
+  if (value === undefined || value === '') return []
+  const assignees = JSON.parse(value) as readonly {
+    readonly members: readonly string[]
+  }[]
+  return assignees.flatMap((entry) => entry.members)
 }
 
 /** The timers of one instance, in kind order (SE-3, SE-4). */
@@ -528,10 +581,22 @@ test('#248 VT-2 SE-4 the start schedules the timers and the tracker shows the du
   expect(step?.state).toBe('unopened')
   expect(step?.startAt, 'the start enters the step').toBe(reminderAt)
   expect(step?.dueAt, 'the tracker carries the deadline (VT-2, SE-4)').toBe(reminderAt + MINUTE)
+
+  // The inbox carries the same due time for the open task (VT-1, VT-2). A
+  // step without a deadline answers no `dueAt`, so the other instance never
+  // lends its timer to this one.
+  const available = await readInbox(adminToken, 'available')
+  expect(available.find((item) => item.instanceId === reminderId)?.dueAt).toBe(reminderAt + MINUTE)
+  expect(
+    available.find((item) => item.instanceId === cancelledId)?.dueAt,
+    'the completed instance left the inbox'
+  ).toBeUndefined()
 })
 
 test('#248 SE-3 SE-4 the worker sends the reminder and the escalation once', async () => {
-  const { adminId, reminderId } = requireSetup()
+  const { adminId, adminToken, config, reminderId } = requireSetup()
+  const okafor = castMember('advisor')
+  const okaforToken = await passwordToken(config, okafor.email, okafor.password)
   const worker = startWorker()
   try {
     const reminder = await waitForMail('the reminder email', (message) =>
@@ -578,8 +643,22 @@ test('#248 SE-3 SE-4 the worker sends the reminder and the escalation once', asy
       instance: reminderId,
       step: STEP,
       rule: 'escalation',
-      adds: [`user:${adminId}`],
+      adds: [`user:${adminId}`, `user:${okafor.id}`],
     })
+
+    // The escalation adds its targets without removing the owner (SE-4): both
+    // principals are in the task row, the added person reads the task, and the
+    // inbox offers it to both of them. A rebuild reproduces the same members
+    // in the next test.
+    expect(taskAssignees(reminderId)).toEqual(expect.arrayContaining([adminId, okafor.id]))
+    const addedView = await readInstance(okaforToken, reminderId)
+    expect(addedView.status.currentStep, 'the added target reads the task (SE-4)').toBe(STEP)
+    for (const token of [adminToken, okaforToken]) {
+      expect(
+        (await readInbox(token, 'available')).some((item) => item.instanceId === reminderId),
+        'the owner and the added target see the task in available'
+      ).toBe(true)
+    }
   } finally {
     await worker.stop()
   }
@@ -594,8 +673,89 @@ test('#248 SE-3 SE-4 the worker sends the reminder and the escalation once', asy
   expect(timersOf(reminderId).map((timer) => timer.firedAt !== null)).toEqual([true, true])
 })
 
+test('#250 S13 WF-5 SE-5 the undo reschedules the cancelled timers and a reminder fires', async () => {
+  const { adminId, adminToken, configPath } = requireSetup()
+  const instanceId = randomUUID()
+  await postIntent(adminToken, instanceId, { flow: SLUG, instanceId, values: {} })
+
+  // The withdrawal closes the task and cancels its pending timers (SE-5).
+  const open = await readInstance(adminToken, instanceId)
+  const withdrawn = await postOperation(adminToken, {
+    id: randomUUID(),
+    type: 'instance.withdrawn@1',
+    at: Date.now(),
+    actor: adminId,
+    payload: { instanceId, reason: 'undo the timers', version: open.version },
+  })
+  expect(withdrawn.status, withdrawn.body).toBe(201)
+  expect(timersOf(instanceId)).toHaveLength(2)
+  for (const timer of timersOf(instanceId)) expect(timer.cancelledAt).not.toBeNull()
+
+  // The undo restores the task and reschedules the step's timers from the undo
+  // time (S13, WF-5, SE-5). The reminder key is re-armed and the new deadline
+  // inserts one escalation occurrence, so both are pending again.
+  const closed = await readInstance(adminToken, instanceId)
+  const undone = await postOperation(adminToken, {
+    id: randomUUID(),
+    type: 'instance.undone@1',
+    at: Date.now(),
+    actor: adminId,
+    payload: { instanceId, version: closed.version },
+  })
+  expect(undone.status, undone.body).toBe(201)
+  const undoneAt = (JSON.parse(undone.body) as { at: number }).at
+  const pending = (): readonly TimerRow[] =>
+    timersOf(instanceId).filter((timer) => timer.cancelledAt === null && timer.firedAt === null)
+  expect(
+    pending()
+      .map((timer) => timer.kind)
+      .sort()
+  ).toEqual(['escalation', 'reminder'])
+  for (const timer of pending()) expect(timer.fireAt).toBe(undoneAt + MINUTE)
+
+  // A duplicate or stale undo is refused and adds no second row (I3).
+  const duplicate = await postOperation(adminToken, {
+    id: randomUUID(),
+    type: 'instance.undone@1',
+    at: Date.now(),
+    actor: adminId,
+    payload: { instanceId, version: closed.version },
+  })
+  expect(duplicate.status, duplicate.body).toBe(409)
+  expect(pending()).toHaveLength(2)
+
+  // The inbox reads the rescheduled deadline of this instance (VT-1, VT-2).
+  const available = await readInbox(adminToken, 'available')
+  expect(available.find((item) => item.instanceId === instanceId)?.dueAt).toBe(undoneAt + MINUTE)
+
+  // The worker fires the re-armed reminder, and a rebuild keeps the rows.
+  const worker = startWorker()
+  try {
+    await waitFor('the undone reminder fires', () => {
+      const rows = timersOf(instanceId)
+      return rows.some((timer) => timer.kind === 'reminder' && timer.firedAt !== null)
+        ? rows
+        : undefined
+    })
+  } finally {
+    await worker.stop()
+  }
+  expect(
+    outboxRows(instanceId).some((row) => row.effect === REMINDER),
+    'the reminder reaches the outbox'
+  ).toBe(true)
+
+  const afterFire = timersOf(instanceId)
+  const rebuilt = runCli(['admin', 'rebuild', '--config', configPath])
+  expect(rebuilt.status, rebuilt.stderr).toBe(0)
+  expect(timersOf(instanceId), 'the rebuild keeps the rescheduled and fired rows').toEqual(
+    afterFire
+  )
+}, 180_000)
+
 test('#248 SE-5 I3 the cancelled instance sends no email and a rebuild keeps the state', async () => {
-  const { adminToken, configPath, reminderId, cancelledId } = requireSetup()
+  const { adminToken, config, configPath, reminderId, cancelledId } = requireSetup()
+  const okafor = castMember('advisor')
   const before = { reminder: timersOf(reminderId), cancelled: timersOf(cancelledId) }
 
   // The completed instance produced no reminder and no escalation: every
@@ -617,6 +777,16 @@ test('#248 SE-5 I3 the cancelled instance sends no email and a rebuild keeps the
   expect(timersOf(reminderId).every((timer) => timer.firedAt !== null)).toBe(true)
   expect(timersOf(cancelledId).every((timer) => timer.cancelledAt !== null)).toBe(true)
   for (const row of outboxRows(reminderId)) expect(row.status).toBe('sent')
+
+  // The escalation add is a projection of the `timer.fired@1` occurrence, so
+  // the rebuild keeps the added target beside the owner (SE-4, I4).
+  expect(taskAssignees(reminderId)).toEqual(expect.arrayContaining([okafor.id]))
+  const okaforToken = await passwordToken(config, okafor.email, okafor.password)
+  const addedView = await readInstance(okaforToken, reminderId)
+  expect(addedView.status.currentStep, 'the rebuilt task still names the added target').toBe(STEP)
+  expect(
+    (await readInbox(okaforToken, 'available')).some((item) => item.instanceId === reminderId)
+  ).toBe(true)
 
   // The completed instance's tracker matches after the rebuild (VT-2).
   const view = await readInstance(adminToken, cancelledId)
