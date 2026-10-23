@@ -26,6 +26,7 @@ import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
+import { outboxOfEvent } from '../engine/outbox.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
@@ -286,6 +287,11 @@ export async function rebuild(pool: Pool): Promise<number> {
   const client = await pool.connect()
   try {
     await client.query('begin')
+    // The outbox rows are derived state (I4), but their delivery columns are
+    // operational state beside the log: a rebuild saves them by the
+    // deterministic row id and restores them after the fold, so a delivered
+    // row is never queued again and a retry of it stays a no-op (I3, SE-1).
+    const delivery = await readOutboxDelivery(client)
     await client.query(
       'truncate grants, principals, flows, flow_versions, instances, tasks, teams, team_members, outbox, timers'
     )
@@ -311,6 +317,7 @@ export async function rebuild(pool: Pool): Promise<number> {
     // cleared record after the fold, so a rebuild never resurrects a demo
     // that `enform seed clear` removed (DE-4, I4).
     await deleteClearedSeedProjections(client)
+    await restoreOutboxDelivery(client, delivery)
     await client.query('commit')
     return events.rowCount ?? events.rows.length
   } catch (error) {
@@ -871,8 +878,79 @@ export async function takeOidcAttempt(
   return { codeVerifier: row.code_verifier, returnTo: row.return_to }
 }
 
-/** Update the projections that one event feeds. A type this slice does not read projects nothing. */
+/**
+ * The delivery columns of one outbox row, saved across a rebuild (I3, SE-1).
+ * The log is the audit; the status is operational state and is not derived
+ * from it.
+ */
+type OutboxDelivery = {
+  readonly id: string
+  readonly status: string
+  readonly attempts: number
+  readonly nextAttemptAt: number
+  readonly lastError: string | null
+  readonly sentAt: number | null
+  readonly deliveredAt: number | null
+}
+
+/** Read the delivery state of every outbox row before a rebuild truncates it (I3). */
+async function readOutboxDelivery(client: PoolClient): Promise<readonly OutboxDelivery[]> {
+  const result = await client.query<{
+    id: string
+    status: string
+    attempts: number
+    next_attempt_at: string
+    last_error: string | null
+    sent_at: string | null
+    delivered_at: string | null
+  }>('select id, status, attempts, next_attempt_at, last_error, sent_at, delivered_at from outbox')
+  return result.rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    attempts: row.attempts,
+    nextAttemptAt: Number(row.next_attempt_at),
+    lastError: row.last_error,
+    sentAt: row.sent_at === null ? null : Number(row.sent_at),
+    deliveredAt: row.delivered_at === null ? null : Number(row.delivered_at),
+  }))
+}
+
+/**
+ * Restore the delivery state that a rebuild saved (I3, SE-1). A row that was
+ * `sending` when the rebuild started is a claim that no surviving worker
+ * holds, so it returns to `queued`; a `sent` or `failed` row keeps its status,
+ * attempt count, backoff and last error.
+ */
+async function restoreOutboxDelivery(
+  client: PoolClient,
+  delivery: readonly OutboxDelivery[]
+): Promise<void> {
+  for (const row of delivery) {
+    await client.query(
+      `update outbox
+       set status = $2, attempts = $3, next_attempt_at = $4, last_error = $5,
+           sent_at = $6, delivered_at = $7
+       where id = $1`,
+      [
+        row.id,
+        row.status === 'sending' ? 'queued' : row.status,
+        row.attempts,
+        row.nextAttemptAt,
+        row.lastError,
+        row.sentAt,
+        row.deliveredAt,
+      ]
+    )
+  }
+}
+
+/**
+ * Update the projections that one event feeds. A type this slice does not read
+ * projects nothing. Every event that carries an `outbox` entry projects one
+ * outbox row in the same transaction (I2, I4).
+ */
 async function projectEvent(client: PoolClient, event: Event): Promise<void> {
+  await projectOutbox(client, event)
   if (event.type === DEFINITION_CHANGED) {
     const change = readDefinitionChange(event)
     const draftVersion = await nextDraftVersion(client, change.flow)
@@ -1167,6 +1245,77 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     // Remove their projections again, so a live append and a rebuild agree.
     await deleteClearedSeedProjections(client)
   }
+}
+
+/**
+ * Project the side effects that one event carries (I2, I4, SE-1). The row id is
+ * deterministic from the event's client operation id and the entry's index, so
+ * a rebuild and a replay insert the same ids and a duplicate insert is a no-op
+ * (I1, I3). The instance and flow are stored beside the entry so the template
+ * can build the link (SE-2).
+ */
+async function projectOutbox(client: PoolClient, event: Event): Promise<void> {
+  const entries = outboxOfEvent(event)
+  if (entries.length === 0) return
+  const instanceId = await instanceIdOfEvent(client, event)
+  // A start carries its flow on the event before the instance row exists; the
+  // other side effects read the slug from the instance projection (I4, SE-2).
+  const eventFlow = event.payload.flow
+  const flowSlug =
+    typeof eventFlow === 'string'
+      ? eventFlow
+      : instanceId === undefined
+        ? null
+        : await flowSlugOfInstance(client, instanceId)
+  for (const [index, entry] of entries.entries()) {
+    await client.query(
+      `insert into outbox
+         (id, effect, payload, created_at, delivered_at, seq, instance_id, flow_slug,
+          status, attempts, next_attempt_at, last_error, sent_at)
+       values ($1, $2, $3::jsonb, $4, null, $5, $6, $7, 'queued', 0, 0, null, null)
+       on conflict (id) do nothing`,
+      [
+        outboxRowId(event.operationId, index),
+        entry.operation,
+        JSON.stringify(entry.payload),
+        event.at,
+        event.seq,
+        instanceId ?? null,
+        flowSlug,
+      ]
+    )
+  }
+}
+
+/** The deterministic id of one outbox row (I3): the operation id and the entry index. */
+function outboxRowId(operationId: string, index: number): string {
+  return `${operationId}:${index}`
+}
+
+/**
+ * The instance that an event's side effect belongs to (SE-2). A submit, a send
+ * back, a close and a takeover name it on their payload; an `event.undone@1`
+ * names the event it compensates, so its instance is that event's instance.
+ */
+async function instanceIdOfEvent(client: PoolClient, event: Event): Promise<string | undefined> {
+  const direct = event.payload.instanceId ?? event.payload.instance
+  if (typeof direct === 'string') return direct
+  const undoOf = event.payload.eventId
+  if (typeof undoOf !== 'number') return undefined
+  const result = await client.query<{ instance_id: string | null }>(
+    `select payload->>'instanceId' as instance_id from events where seq = $1`,
+    [undoOf]
+  )
+  return result.rows[0]?.instance_id ?? undefined
+}
+
+/** The flow slug that an instance runs, from the instance projection (I4, SE-2). */
+async function flowSlugOfInstance(client: PoolClient, instanceId: string): Promise<string | null> {
+  const result = await client.query<{ flow_slug: string }>(
+    'select flow_slug from instances where id = $1',
+    [instanceId]
+  )
+  return result.rows[0]?.flow_slug ?? null
 }
 
 /** One resolved task row, folded from an instance event (I4, I13). */

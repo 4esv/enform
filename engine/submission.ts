@@ -322,13 +322,20 @@ function routeAtStart(
 }
 
 /**
- * The assignment email that the first assignee receives (S06, SE-1): the
- * connector operation, the connector and the recipient. I10 forbids a silent
- * drop, so a step whose assignees resolve to nobody refuses the submit rather
- * than record no email.
+ * The assignment email that the first assignee of the current step receives
+ * (S06, SE-1): the connector operation, the connector and the recipient. The
+ * instance accumulates the assignees of every step it entered, so the
+ * recipient is the first member of the current step and not the first member
+ * of an earlier step. A log that records no assignee for the current step
+ * falls back to the first recorded member, so an instance from before every
+ * entered step carried its assignees still records an email. I10 forbids a
+ * silent drop, so a step whose assignees resolve to nobody refuses the submit
+ * rather than record no email.
  */
 function assignmentEmail(instance: Instance): OutboxEntry {
-  const to = instance.assignees.flatMap((assignee) => assignee.members)[0]
+  const current = instance.assignees.find((assignee) => assignee.step === instance.currentStep)
+    ?.members[0]
+  const to = current ?? instance.assignees.flatMap((assignee) => assignee.members)[0]
   if (to === undefined) {
     throw new Error(`instance: the step ${instance.currentStep} has no assignee to notify (I10)`)
   }
