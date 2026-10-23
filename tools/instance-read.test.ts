@@ -347,6 +347,69 @@ test('#76 an instance whose pinned definition is absent is not projected (DF-2)'
 // that resolves through the projection passes what complete() expects rather
 // than an accidental 0.
 
+test('#242 S10 the read names when an assignee may take a claimed task over (AS-3)', () => {
+  const takeoverDefinition: FlowDefinition = parse(`{
+    "schemaVersion": 2,
+    "steps": [
+      {
+        "key": "registrar",
+        "targets": [{ "team": "registrar-office" }],
+        "takeover": "after-idle",
+        "idleMinutes": 4
+      }
+    ]
+  }`)
+  const takeoverFlow: Flow = {
+    slug: 'takeover-flow',
+    versions: [
+      { version: 1, contentHash: contentHash(takeoverDefinition), definition: takeoverDefinition },
+    ],
+  }
+  const teamResolve: TargetResolver = (target) => ('team' in target ? [SAM, PRISCILLA] : [])
+  const takeoverGrants: readonly Grant[] = [
+    { principal: SAM, scopes: ['instance.start'], resource: 'flow:takeover-flow' },
+    { principal: OUTSIDER, scopes: ['instance.read'], resource: 'flow:takeover-flow' },
+  ]
+  const sources = deps()
+  const pushed = push(createFlow('takeover-flow'), takeoverDefinition, sources, 'user:dana')
+  const published = publish(pushed.flow, sources, 'user:dana')
+  let state = apply(published.operation, apply(pushed.operation, emptyState))
+  const started = startInstance(
+    takeoverFlow,
+    INSTANCE_ID,
+    {},
+    SAM,
+    sources,
+    teamResolve,
+    takeoverGrants
+  )
+  state = apply(started.operation, state)
+  const claimed = claim(projected(state), SAM, projected(state).version ?? 0, sources)
+  if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
+  state = apply(claimed.operation, state)
+  const instance = projected(state)
+  const view = (actor: string): InstanceView => {
+    const read = readInstance(actor, instance, {
+      flow: 'takeover-flow',
+      definition: takeoverDefinition,
+      log: state.log,
+      grants: takeoverGrants,
+    })
+    if (read === undefined) throw new Error(`${actor} may not read the instance`)
+    return read
+  }
+
+  // Another assignee of the step may take the task over, and the read names the
+  // end of the four minute idle period measured from the claim on the log.
+  const peer = view(PRISCILLA)
+  expect(peer.canTakeOver).toBe(true)
+  expect(peer.takeoverAvailableAt).toBe(1_700_000_000_000 + 4 * 60_000)
+  // The holder cannot take the task over from itself, and a principal that may
+  // read but is not an assignee of the step cannot either.
+  expect(view(SAM).canTakeOver).toBe(false)
+  expect(view(OUTSIDER).canTakeOver).toBe(false)
+})
+
 test('#191 the projected version counts the accepted actions the write path kept', () => {
   const sources = deps()
   let state = seeded(sources)

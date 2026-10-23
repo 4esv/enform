@@ -27,6 +27,7 @@ import {
   type FlowStep,
   fieldsOf,
   type JsonValue,
+  takeoverIdleMs,
 } from './definition.js'
 import { editableKeys } from './editable.js'
 import { publishedByHash } from './flow.js'
@@ -46,7 +47,7 @@ import {
   visibleNotes,
 } from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
-import { STEP_TAKEN_OVER } from './takeover.js'
+import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -153,6 +154,19 @@ export type InstanceView = {
    * it to show the control; the engine still authorizes the write (A9, I8).
    */
   readonly canCancel: boolean
+  /**
+   * Whether the actor may take over the current task (S10, AS-3): it is an
+   * assignee of the current step, the step allows a takeover, and another
+   * principal holds the task. The page uses it to show the control; the engine
+   * still authorizes the write and measures the idle period (A9, I8).
+   */
+  readonly canTakeOver: boolean
+  /**
+   * When a takeover becomes available for an `after-idle` step (S10, AS-3):
+   * the claim time from the log plus the step's idle period. It is absent for
+   * `always` and `never`, and while no holder has a claim.
+   */
+  readonly takeoverAvailableAt?: number
 }
 
 /**
@@ -231,6 +245,7 @@ export function readInstance(
       }))
     outcomes = step.outcomes ?? []
   }
+  const takeover = takeoverView(current, actor, step, context.log)
   return {
     instanceId: current.instanceId,
     status: status(current, context.definition, context.log),
@@ -250,6 +265,38 @@ export function readInstance(
     ...(current.closedBy === undefined ? {} : { closedBy: current.closedBy }),
     canWithdraw: canWithdraw(actor, current),
     canCancel: canCancel(current, context),
+    ...takeover,
+  }
+}
+
+/**
+ * The takeover fields of the view (S10, AS-3). The step allows a takeover when
+ * it sets `always` or `after-idle`, and the actor may take it over when it is
+ * an assignee of the current step and another principal holds the task. For
+ * `after-idle` the view also carries the time the idle period ends, measured
+ * from the holder's claim event on the log; `always` and `never` have no such
+ * time. It is pure and deterministic (I6): it reads no clock.
+ */
+function takeoverView(
+  instance: ProjectedInstance,
+  actor: ActorId,
+  step: FlowStep | undefined,
+  log: Log
+): { readonly canTakeOver: boolean; readonly takeoverAvailableAt?: number } {
+  if (step === undefined) return { canTakeOver: false }
+  const idle = takeoverIdleMs(step)
+  if (idle === undefined) return { canTakeOver: false }
+  const holder = instance.holder
+  const canTakeOver =
+    holder !== undefined &&
+    holder !== actor &&
+    instance.assignees.some(
+      (assignee) => assignee.step === step.key && assignee.members.includes(actor)
+    )
+  const claimedAt = holder === undefined ? undefined : claimTimeOf(log, step.key, holder)
+  return {
+    canTakeOver,
+    ...(idle === 0 || claimedAt === undefined ? {} : { takeoverAvailableAt: claimedAt + idle }),
   }
 }
 

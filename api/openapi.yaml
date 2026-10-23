@@ -39,7 +39,11 @@ paths:
         (`CancelIntent`, `instance.cancelled@1`) does the same for a principal
         with `instance.cancel`, and its reason is required (S13, WF-4, AC-5);
         an undo intent (`UndoIntent`, `instance.undone@1`) names the instance
-        and the version the closer read (S13, WF-5). The server resolves the
+        and the version the closer read (S13, WF-5); a takeover intent
+        (`TakeoverIntent`, `step.taken-over@1`) names the instance, the
+        required reason and the version the assignee read, and the server
+        measures the step's idle period from the claim on the log on its own
+        clock (S10, AS-3). The server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
         told apart by `type` and by their payload shape. The server refuses a
@@ -72,12 +76,14 @@ paths:
           description: >-
             The operation is invalid, a raw `instance.started@1`,
             `step.completed@1`, `step.sent-back@1`, `instance.withdrawn@1`,
-            `instance.cancelled@1` or `instance.undone@1` was posted instead
-            of its intent, an intent cannot be resolved (an intent that lacks
-            the instance id, the version, the reason, the target step or the
-            comment, or that names an unknown instance), the engine refused a
-            send back for an empty comment (WF-3) or a cancel for a missing
-            reason (MVP.md 5.6), or a `config.grant.changed@1` lacks its id,
+            `instance.cancelled@1`, `instance.undone@1` or
+            `step.taken-over@1` was posted instead of its intent, an intent
+            cannot be resolved (an intent that lacks the instance id, the
+            version, the reason, the target step or the comment, or that names
+            an unknown instance), the engine refused a send back for an empty
+            comment (WF-3), a cancel for a missing reason (MVP.md 5.6) or a
+            takeover for a missing reason (AS-3), or a
+            `config.grant.changed@1` lacks its id,
             time, principal, scopes or resource. Nothing is appended. A
             configuration event other than a grant is not served in this
             slice.
@@ -86,16 +92,21 @@ paths:
             The principal may not make this change, or a state-changing cookie
             request carries no valid CSRF token. A grant requires `org.grants`
             on `org` or `flow.grant` on the resource. A withdraw requires the
-            starter (AC-5) and a cancel requires `instance.cancel` on the
-            flow (S13, AC-5). Nothing is appended.
+            starter (AC-5), a cancel requires `instance.cancel` on the flow
+            (S13, AC-5), and a takeover requires an assignee of the current
+            step (AS-3). Nothing is appended.
         '409':
           description: >-
             The engine refused the completion, the claim, the send back, the
-            withdraw, the cancel or the undo and appended nothing (I1, I5),
-            because the version the client read is stale, the actor does not
-            hold the step (AS-2), does not hold the outcome's scope (AC-4), is
-            not the holder a send back needs (S11), is not the starter or the
-            closer a close or an undo needs (S13, WF-4, WF-5), the undo period
+            withdraw, the cancel, the undo or the takeover and appended
+            nothing (I1, I5), because the version the client read is stale,
+            the actor does not hold the step (AS-2), does not hold the
+            outcome's scope (AC-4), is not an assignee of the step (AS-3),
+            the holder is not yet idle for the step's idle period (AS-3, the
+            reason names the remaining time), the step does not allow a
+            takeover (AS-3), is not the holder a send back needs (S11), is not
+            the starter or the closer a close or an undo needs (S13, WF-4,
+            WF-5), the undo period
             has passed (WF-5), captured a field the current step does not make
             editable (FM-3), or captured a value that fails its control or
             leaves a required field empty (FM-4). The `error` names the reason,
@@ -1082,6 +1093,60 @@ components:
               description: >-
                 The instance version that the client read (I5). The server
                 refuses a stale close and appends nothing.
+    TakeoverIntent:
+      type: object
+      description: >-
+        A takeover intent (S10, AS-3, WF-5): the parts a client can honestly
+        send when an assignee takes a claimed task over from another assignee
+        after the step's idle period. It carries the operation ID it chose
+        (I1), the event type `step.taken-over@1`, the actor, the instance it
+        acts on (DX-1), the required reason and the version it read (I5). The
+        server calls the engine with the session principal, the idle period
+        that the pinned definition sets and the server clock, and appends what
+        the engine decided; it records no `version` on the log. It is told
+        apart from an already resolved `step.taken-over@1` operation by the
+        payload: a resolved operation carries `step`, `from`, `to`, `when`,
+        `why` and `outbox`, an intent names `version`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `step.taken-over@1`.
+          examples:
+            - step.taken-over@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6). It
+            stamps the operation; the engine measures the idle period on the
+            server clock, so this time cannot shorten it.
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: >-
+            The instance, the required reason and the version the client read
+            (DX-1, AS-3).
+          required: [instanceId, reason, version]
+          properties:
+            instanceId:
+              type: string
+              description: >-
+                The ID of the instance whose task is taken over (DX-1).
+            reason:
+              type: string
+              minLength: 1
+              description: >-
+                The reason the taking principal gives, which is required
+                (AS-3).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version that the client read (I5). The engine
+                refuses a takeover from a stale view and appends nothing.
     UndoIntent:
       type: object
       description: >-
@@ -1259,6 +1324,7 @@ components:
         - notes
         - canWithdraw
         - canCancel
+        - canTakeOver
       properties:
         instanceId:
           type: string
@@ -1381,6 +1447,21 @@ components:
             AC-1): it holds `instance.cancel` on the flow, and a task is open.
             The page uses it to show the control; the engine still authorizes
             the write (A9, I8).
+        canTakeOver:
+          type: boolean
+          description: >-
+            Whether the actor may take over the current task (S10, AS-3): it
+            is an assignee of the current step, the step allows a takeover,
+            and another principal holds the task. The page uses it to show the
+            control; the engine still authorizes the write and measures the
+            idle period (A9, I8).
+        takeoverAvailableAt:
+          type: integer
+          description: >-
+            When a takeover becomes available for an `after-idle` step (S10,
+            AS-3): the claim time from the log plus the step's idle period. It
+            is absent for `always` and `never`, and while no holder has a
+            claim.
     Note:
       type: object
       description: >-

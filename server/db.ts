@@ -29,6 +29,7 @@ import type { Event, Operation } from '../engine/operation.js'
 import { outboxOfEvent } from '../engine/outbox.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
+import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 
@@ -1130,6 +1131,24 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     }
     return
   }
+  if (event.type === STEP_TAKEN_OVER) {
+    const taken = readTakeover(event)
+    // The holder moves to the actor who took the task over (AS-3, WF-5): the
+    // instance and its task hold the new principal, the previous holder is
+    // gone, and the version advances as the engine advanced it (I5). The
+    // event keeps from, to, when and why on the log (I14, I4).
+    await client.query(
+      `update instances set holder = $2, status = 'in-progress', version = version + 1, seq = $3
+       where id = $1`,
+      [taken.instanceId, taken.to, event.seq]
+    )
+    await client.query(
+      `update tasks set holder = $3, state = 'opened', last_activity_at = $4, seq = $5
+       where instance_id = $1 and step = $2`,
+      [taken.instanceId, taken.step, taken.to, event.at, event.seq]
+    )
+    return
+  }
   if (event.type === INSTANCE_SUBMITTED) {
     const submitted = readSubmission(event)
     await client.query(
@@ -1507,6 +1526,29 @@ function readSubmission(event: Event): { instanceId: string; values: Record<stri
     throw new Error(`events: malformed ${INSTANCE_SUBMITTED} payload at seq ${event.seq}`)
   }
   return { instanceId, values: readJsonRecord(event.payload.values) }
+}
+
+/** Read a takeover payload that the projection folds (AS-3, S10, I4, I14). */
+function readTakeover(event: Event): {
+  instanceId: string
+  step: string
+  from: string
+  to: string
+  when: number
+  why: string
+} {
+  const { instanceId, step, from, to, when, why } = event.payload
+  if (
+    typeof instanceId !== 'string' ||
+    typeof step !== 'string' ||
+    typeof from !== 'string' ||
+    typeof to !== 'string' ||
+    typeof when !== 'number' ||
+    typeof why !== 'string'
+  ) {
+    throw new Error(`events: malformed ${STEP_TAKEN_OVER} payload at seq ${event.seq}`)
+  }
+  return { instanceId, step, from, to, when, why }
 }
 
 /** Read a send-back payload that the projection folds (WF-3, I4). */

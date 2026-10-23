@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { expect, test } from 'vitest'
 import { claim } from '../engine/action.js'
+import { apply, emptyState } from '../engine/apply.js'
 import type { Grant } from '../engine/authorize.js'
 import type { ConditionData } from '../engine/condition.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
@@ -11,6 +12,7 @@ import { contentHash } from '../engine/instance.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../engine/submission.js'
+import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import {
   cancel,
   undoWithdrawOrCancel,
@@ -85,6 +87,9 @@ const validateUndone = ajv.compile(
 )
 const validateTitle = ajv.compile(
   JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'config.flow.title@1.json'), 'utf8'))
+)
+const validateTakenOver = ajv.compile(
+  JSON.parse(readFileSync(join(repo, 'schemas', 'events', 'step.taken-over@1.json'), 'utf8'))
 )
 
 test('#177 FM-7 the published event schemas match the payloads the engine writes', () => {
@@ -179,6 +184,76 @@ const cancelGrants: readonly Grant[] = [
   ...grants,
   { principal: CANCELER, scopes: ['instance.cancel'], resource: `flow:${SLUG}` },
 ]
+
+test('#242 S10 the published takeover schema matches the engine payload', () => {
+  // A step whose team resolves to two assignees, so one can take the task over
+  // from the other (AS-3).
+  const teamDefinition: FlowDefinition = parse(`{
+    "schemaVersion": 2,
+    "steps": [
+      { "key": "registrar", "targets": [{ "team": "registrar-office" }] }
+    ]
+  }`)
+  const teamFlow: Flow = {
+    slug: 'registrar-flow',
+    versions: [
+      { version: 1, contentHash: contentHash(teamDefinition), definition: teamDefinition },
+    ],
+  }
+  const ANA = 'user:ana'
+  const teamResolve: TargetResolver = (target) => ('team' in target ? [SAM, ANA] : [])
+  const teamGrants: readonly Grant[] = [
+    { principal: SAM, scopes: ['instance.start'], resource: `flow:${teamFlow.slug}` },
+  ]
+
+  // One source, so every operation gets a distinct ID (I1).
+  const sources = deps()
+  const started = startInstance(
+    teamFlow,
+    'inst-takeover',
+    {},
+    SAM,
+    sources,
+    teamResolve,
+    teamGrants
+  )
+  const applied = apply(started.operation, emptyState)
+  const claimed = claim(
+    { ...started.instance, version: applied.log.length },
+    SAM,
+    applied.log.length,
+    sources
+  )
+  if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
+  const held = apply(claimed.operation, applied)
+
+  const taken = takeover(
+    claimed.instance,
+    ANA,
+    'Lee is out until 10/19',
+    1_700_000_100_000,
+    0,
+    claimed.instance.version ?? 0,
+    held.log,
+    sources
+  )
+  expect(taken.accepted).toBe(true)
+  if (taken.operation === undefined) throw new Error(taken.reason)
+  expect(taken.operation.type).toBe(STEP_TAKEN_OVER)
+  expect(validateTakenOver(taken.operation.payload), 'the takeover payload validates').toBe(true)
+  expect(
+    validateTakenOver({ ...taken.operation.payload, from: undefined }),
+    'a takeover without the previous holder is rejected'
+  ).toBe(false)
+  expect(
+    validateTakenOver({ ...taken.operation.payload, why: '' }),
+    'a takeover without a reason is rejected'
+  ).toBe(false)
+  expect(
+    validateTakenOver({ ...taken.operation.payload, outbox: 'none' }),
+    'a malformed outbox is rejected'
+  ).toBe(false)
+})
 
 test('#238 S13 the published close and undo schemas match the engine payloads', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)

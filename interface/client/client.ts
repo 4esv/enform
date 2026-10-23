@@ -125,6 +125,25 @@ export interface CancelIntent {
 }
 
 /**
+ * A takeover intent (S10, AS-3, WF-5): the parts a client can honestly send when an assignee
+ * takes a claimed task over from another assignee after the step's idle period. It carries the
+ * operation ID it chose (I1), the event type `step.taken-over@1`, the actor, the instance it
+ * acts on (DX-1), the required reason and the version it read (I5). The server calls the engine
+ * with the session principal, the idle period that the pinned definition sets and the server
+ * clock, and appends what the engine decided; it records no `version` on the log. It is told
+ * apart from an already resolved `step.taken-over@1` operation by the payload: a resolved
+ * operation carries `step`, `from`, `to`, `when`, `why` and `outbox`, an intent names
+ * `version`.
+ */
+export interface TakeoverIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * An undo intent (S13, WF-5, I4): the parts a client can honestly send when the actor who
  * withdrew or cancelled an instance undoes it. It carries the operation ID it chose (I1), the
  * event type `instance.undone@1`, the actor, the instance it acts on (DX-1) and the version it
@@ -220,6 +239,8 @@ export interface InstanceView {
   readonly undoUntil?: number
   readonly canWithdraw: boolean
   readonly canCancel: boolean
+  readonly canTakeOver: boolean
+  readonly takeoverAvailableAt?: number
 }
 
 /**

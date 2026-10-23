@@ -32,7 +32,7 @@ import type { Pool } from 'pg'
 import { claim, STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { CompletionRefused, resolveCompletion } from '../engine/completions.js'
-import { type FlowDefinition, parse } from '../engine/definition.js'
+import { type FlowDefinition, parse, takeoverIdleMs } from '../engine/definition.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
 import {
   changeTitle,
@@ -51,6 +51,7 @@ import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
+import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import { teamsOf } from '../engine/teams.js'
 import {
   cancel,
@@ -741,6 +742,9 @@ async function resolveOperation(
     if (body.type === INSTANCE_UNDONE) {
       return undoOperation(log, principal, body)
     }
+    if (body.type === STEP_TAKEN_OVER) {
+      return takeoverOperation(log, principal, body)
+    }
     return { status: 400, error: 'this operation is not served in this slice' }
   } catch (error) {
     if (error instanceof CompletionRefused) {
@@ -1040,6 +1044,87 @@ function undoOperation(
     return { status: 409, error: result.reason ?? 'the undo was refused' }
   }
   return { operation: result.operation }
+}
+
+/**
+ * Apply a takeover through the engine (S10, AS-3, WF-5, I5, I14, #242). The
+ * client posts the intent: the instance, the reason and the version it read.
+ * The server loads the instance and the log, reads the step's takeover setting
+ * from the pinned definition, and passes the session principal as the actor,
+ * the computed idle period and the server clock as `now`. The engine decides
+ * the assignee, the reassign, the attribution and the notification; the
+ * client's id and time are only the operation's id and time. A step that never
+ * allows a takeover, a raw resolved takeover, a missing reason and a stale
+ * view are refused; every engine refusal except authorization answers 409 with
+ * the reason, the remaining idle time included.
+ */
+function takeoverOperation(
+  log: Log,
+  principal: Principal,
+  body: Record<string, unknown>
+): { readonly operation: Operation } | { readonly status: number; readonly error: string } {
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  if (payload !== undefined && hasEngineTakeoverField(payload)) {
+    return { status: 400, error: 'a raw step.taken-over@1 is refused; post the takeover intent' }
+  }
+  const instanceId = stringValue(payload?.instanceId)
+  const reason = typeof payload?.reason === 'string' ? payload.reason.trim() : undefined
+  const version = payload?.version
+  if (
+    instanceId === undefined ||
+    reason === undefined ||
+    reason === '' ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return {
+      status: 400,
+      error: 'a takeover needs an id, a time, an instance, a reason and a version',
+    }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) {
+    return { status: 400, error: `the log holds no published definition for ${instanceId}` }
+  }
+  const step = published.definition.steps.find((entry) => entry.key === instance.currentStep)
+  if (step === undefined) {
+    return { status: 409, error: 'the instance has no current step to take over' }
+  }
+  const idleTimeout = takeoverIdleMs(step)
+  if (idleTimeout === undefined) {
+    return { status: 409, error: `step ${step.key}: the step does not allow a takeover` }
+  }
+  // The idle period is measured on the server clock (AS-3): the client's `at`
+  // only stamps the operation, so a client time cannot shorten the wait.
+  const now = Date.now()
+  const result = takeover(instance, principal.id, reason, now, idleTimeout, version, log, {
+    clock: () => body.at as number,
+    ids: () => body.id as string,
+  })
+  if (!result.accepted || result.operation === undefined) {
+    return {
+      status: takeoverStatus(result.reason),
+      error: result.reason ?? 'the takeover was refused',
+    }
+  }
+  return { operation: result.operation }
+}
+
+/** The engine fields that only a resolved takeover carries (S10, ADR 0010). */
+function hasEngineTakeoverField(payload: Record<string, unknown>): boolean {
+  return ['step', 'from', 'to', 'when', 'why', 'outbox'].some((key) => payload[key] !== undefined)
+}
+
+/** The HTTP status of a takeover refusal: authorization is 403, every other refusal is 409. */
+function takeoverStatus(reason: string | undefined): 403 | 409 {
+  return reason?.includes('is not an assignee') ? 403 : 409
 }
 
 /** The engine fields that only a resolved close carries (S13, WF-4, ADR 0010). */

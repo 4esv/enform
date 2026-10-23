@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/step.taken-over@1.json",
+  "title": "enform step.taken-over@1 event payload",
+  "description": "The payload of a step.taken-over@1 event (S10, AS-3, WF-5, I2, I4, I14). An assignee of the current step takes a claimed task over from another assignee after the step's idle period, with a required reason, so the event names the instance, the step, the previous holder, the new holder, the server time of the takeover and the reason, and the notification to the previous holder in the same operation (I2, SE-2). It is an attributed reassign on the append-only log (I4, I14).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "step", "from", "to", "when", "why", "outbox"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance the takeover acts on (DX-1).",
+      "type": "string"
+    },
+    "step": {
+      "description": "The step whose claimed task the takeover reassigns (AS-3).",
+      "type": "string"
+    },
+    "from": {
+      "description": "The principal that held the task before the takeover (AS-3, I14).",
+      "type": "string"
+    },
+    "to": {
+      "description": "The principal that takes the task over (AS-3, I14).",
+      "type": "string"
+    },
+    "when": {
+      "description": "The time of the takeover, from the server clock (AS-3, I6, I14).",
+      "type": "number"
+    },
+    "why": {
+      "description": "The reason the taking principal gave, which is required (AS-3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "outbox": {
+      "description": "The side effects that the takeover causes, committed with the state change (I2, SE-2).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/outboxEntry" }
+    }
+  },
+  "$defs": {
+    "outboxEntry": {
+      "description": "One side effect (SE-1): the connector operation, the connector, and its payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "target", "payload"],
+      "properties": {
+        "operation": { "type": "string" },
+        "target": { "type": "string" },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

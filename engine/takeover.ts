@@ -91,7 +91,7 @@ export function takeover(
   if (holder === undefined) {
     return { accepted: false, instance, reason: `step ${step}: the task is not claimed` }
   }
-  const claimedAt = claimTime(log, step, holder)
+  const claimedAt = claimTimeOf(log, step, holder)
   if (claimedAt === undefined) {
     return { accepted: false, instance, reason: `step ${step}: the task has no claim to take over` }
   }
@@ -127,11 +127,13 @@ function isAssignee(instance: Instance, actor: ActorId): boolean {
 }
 
 /**
- * The time of the claim that the holder is based on (S10): the `at` of the
- * last `step.claimed@1` event for this step and this holder. It is absent when
- * the log has no such claim, so the idle time has no start.
+ * The time of the claim that the holder is based on (S10, AS-3): the `at` of
+ * the last `step.claimed@1` event for this step and this holder. It is absent
+ * when the log has no such claim, so the idle time has no start. The read
+ * uses it to tell the page when the idle period ends, so the engine and the
+ * view measure the period from one place. It is pure and deterministic (I6).
  */
-function claimTime(log: Log, step: string, holder: ActorId): number | undefined {
+export function claimTimeOf(log: Log, step: string, holder: ActorId): number | undefined {
   let at: number | undefined
   for (const event of log) {
     if (event.type !== STEP_CLAIMED) continue
