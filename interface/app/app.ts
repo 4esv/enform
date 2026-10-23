@@ -36,9 +36,12 @@ import {
   readFlow,
   readInbox,
   readInstance,
+  readInstanceTimeline,
   readSession,
+  readTimeline,
   type Session,
   setClient,
+  type TimelineEntry,
   type TrackerStep,
 } from '../client/client.js'
 import { mountBuilder } from './builder.js'
@@ -95,6 +98,8 @@ export interface AppOptions {
   readonly inboxTab?: string
   /** Whether the URL asks for the directory users page (ID-6). */
   readonly users?: boolean
+  /** Whether the URL asks for the global change feed (VT-6). */
+  readonly changes?: boolean
   /** The injected clock (I6); absent means Date.now. */
   readonly clock?: () => number
   /** The injected operation ID source (I1, I6); absent means crypto.randomUUID. */
@@ -156,6 +161,14 @@ export async function mountApp(options: AppOptions): Promise<void> {
   inbox.textContent = 'Inbox'
   inbox.dataset.inbox = ''
   header.appendChild(inbox)
+  // The global change feed (VT-6). The link is always offered; the server
+  // refuses a principal without `instance.timeline` and the page shows the
+  // reason, so the shell decides nothing (A9, I8).
+  const changes = document.createElement('a')
+  changes.href = '/?changes=1'
+  changes.textContent = 'Changes'
+  changes.dataset.changes = ''
+  header.appendChild(changes)
   // Issue #228, ID-6: the directory is an administrator surface. The link is
   // always offered; the page shows the server's 403 to a principal without
   // `org.grants` (I8), so the shell decides nothing (A9).
@@ -352,6 +365,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     main.appendChild(instanceStatus)
     renderTracker(view.tracker, view.status.currentStep)
     renderNotes(view.notes)
+    await renderTimeline(instanceId)
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
     // status line and no form (VT-1, FM-3). A closed instance shows the
@@ -502,6 +516,22 @@ export async function mountApp(options: AppOptions): Promise<void> {
         holder.className = 'tracker-holder'
         holder.textContent = `holder ${step.holder}`
         item.append(holder)
+      }
+      if (step.startAt !== undefined) {
+        const started = document.createElement('time')
+        started.className = 'tracker-start'
+        started.dataset.trackerStart = ''
+        started.dateTime = new Date(step.startAt).toISOString()
+        started.textContent = `started ${started.dateTime}`
+        item.append(started)
+      }
+      if (step.lastActivityAt !== undefined) {
+        const activity = document.createElement('time')
+        activity.className = 'tracker-activity'
+        activity.dataset.trackerActivity = ''
+        activity.dateTime = new Date(step.lastActivityAt).toISOString()
+        activity.textContent = `last activity ${activity.dateTime}`
+        item.append(activity)
       }
       if (step.condition !== undefined) {
         const condition = document.createElement('span')
@@ -851,6 +881,173 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   /**
+   * The instance timeline (S15, VT-5, I4): the instance's own events in log
+   * order, read through the generated client. The toggle re-reads with the
+   * flow's configuration changes when the server lets this actor see them; a
+   * 403 shows the server's reason and leaves the instance events in place.
+   * The timeline is read-only; the task controls stay below it.
+   */
+  const renderTimeline = async (instanceId: string): Promise<void> => {
+    const section = document.createElement('section')
+    section.className = 'timeline-section'
+    section.dataset.timelineSection = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Timeline'
+    section.appendChild(heading)
+
+    const toggleLabel = document.createElement('label')
+    toggleLabel.className = 'timeline-toggle'
+    const toggle = document.createElement('input')
+    toggle.type = 'checkbox'
+    toggle.dataset.timelineChanges = ''
+    toggleLabel.append(toggle, ' Include configuration changes')
+    section.appendChild(toggleLabel)
+
+    const status = document.createElement('p')
+    status.className = 'timeline-status'
+    status.dataset.timelineStatus = ''
+    const list = document.createElement('div')
+    section.append(status, list)
+    main.appendChild(section)
+
+    const load = async (includeChanges: boolean): Promise<void> => {
+      status.textContent = ''
+      try {
+        const entries = await readInstanceTimeline(
+          instanceId,
+          includeChanges ? '1' : undefined,
+          actor
+        )
+        list.replaceChildren(renderTimelineList(entries))
+      } catch (error: unknown) {
+        status.textContent = reasonOf(error)
+      }
+    }
+    toggle.addEventListener('change', () => {
+      void load(toggle.checked)
+    })
+    await load(false)
+  }
+
+  /**
+   * The global change feed (S15, VT-6, I4): the log in one order, filtered by
+   * flow slug and by event type. The administrator or flow owner reads it; a
+   * principal without the scope sees the server's 403 reason.
+   */
+  const renderChanges = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Changes'
+    main.appendChild(heading)
+
+    const form = document.createElement('form')
+    form.className = 'change-filters'
+    const flowLabel = document.createElement('label')
+    flowLabel.textContent = 'Flow'
+    const flow = document.createElement('input')
+    flow.name = 'flow'
+    flow.dataset.changeFlow = ''
+    flow.value = options.slug
+    flowLabel.appendChild(flow)
+    const typeLabel = document.createElement('label')
+    typeLabel.textContent = 'Type'
+    const type = document.createElement('input')
+    type.name = 'type'
+    type.dataset.changeType = ''
+    typeLabel.appendChild(type)
+    const submit = document.createElement('button')
+    submit.type = 'submit'
+    submit.textContent = 'Filter'
+    submit.dataset.changeFilter = ''
+    form.append(flowLabel, typeLabel, submit)
+
+    const status = document.createElement('p')
+    status.className = 'status'
+    const list = document.createElement('div')
+    form.appendChild(status)
+    main.append(form, list)
+
+    const load = async (): Promise<void> => {
+      status.textContent = ''
+      try {
+        const entries = await readTimeline(
+          flow.value.trim() === '' ? undefined : flow.value.trim(),
+          type.value.trim() === '' ? undefined : type.value.trim(),
+          actor
+        )
+        list.replaceChildren(renderTimelineList(entries))
+      } catch (error: unknown) {
+        list.replaceChildren()
+        status.textContent = reasonOf(error)
+      }
+    }
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      void load()
+    })
+    await load()
+  }
+
+  /**
+   * One timeline list (S15, VT-5, VT-6). Each entry is one event in the one
+   * global order (I4), with the event in plain language, its actor, its time,
+   * its step and comment when it carries them, and a connector call's
+   * operation, time and outcome (I13). The list is a projection; it decides
+   * nothing.
+   */
+  const renderTimelineList = (entries: readonly TimelineEntry[]): HTMLElement => {
+    if (entries.length === 0) {
+      const empty = document.createElement('p')
+      empty.className = 'empty'
+      empty.dataset.timelineEmpty = ''
+      empty.textContent = 'Nothing has happened yet.'
+      return empty
+    }
+    const list = document.createElement('ol')
+    list.className = 'timeline'
+    list.dataset.timeline = ''
+    for (const entry of entries) {
+      const item = document.createElement('li')
+      item.className = 'timeline-entry'
+      item.dataset.timelineSeq = String(entry.seq)
+      item.dataset.timelineType = entry.type
+      const type = document.createElement('span')
+      type.className = 'timeline-type'
+      type.textContent = timelineLabel(entry.type)
+      const at = document.createElement('time')
+      at.className = 'timeline-at'
+      at.dateTime = new Date(entry.at).toISOString()
+      at.textContent = at.dateTime
+      item.append(type, at)
+      if (entry.actor !== undefined) {
+        const actor = document.createElement('span')
+        actor.className = 'timeline-actor'
+        actor.textContent = entry.actor
+        item.append(actor)
+      }
+      if (entry.step !== undefined) {
+        const step = document.createElement('span')
+        step.className = 'timeline-step'
+        step.textContent = entry.step
+        item.append(step)
+      }
+      if (entry.comment !== undefined) {
+        const comment = document.createElement('p')
+        comment.className = 'timeline-comment'
+        comment.textContent = entry.comment
+        item.append(comment)
+      }
+      if (entry.call !== undefined) {
+        const call = document.createElement('span')
+        call.className = 'timeline-call'
+        call.textContent = `${entry.call.operation} ${entry.call.outcome} at ${new Date(entry.call.time).toISOString()}`
+        item.append(call)
+      }
+      list.append(item)
+    }
+    return list
+  }
+
+  /**
    * Render one inbox tab (VT-1, VT-2, S14, AS-2). Each item is a link to the
    * task page; the state, the holder and the last activity tell the reader
    * whether nobody opened the task, who holds it and how long it sits there.
@@ -1152,6 +1349,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
       await renderInbox(options.inboxTab ?? 'my')
       return
     }
+    if (options.changes === true) {
+      await renderChanges()
+      return
+    }
     const slug = options.slug.trim()
     if (slug === '') {
       await renderFlows(options.newFlow === true)
@@ -1268,6 +1469,38 @@ const TRACKER_STATES: Readonly<Record<string, string>> = {
 /** The plain-language state that the tracker shows (VT-2, S14). */
 function trackerLabel(state: string): string {
   return TRACKER_STATES[state] ?? state
+}
+
+/** The plain-language label of one timeline event (S15, VT-5). */
+const TIMELINE_TYPES: Readonly<Record<string, string>> = {
+  'instance.started@1': 'started',
+  'instance.submitted@1': 'submitted',
+  'step.claimed@1': 'claimed',
+  'step.completed@1': 'completed',
+  'step.sent-back@1': 'sent back',
+  'step.skipped@1': 'skipped',
+  'step.taken-over@1': 'taken over',
+  'instance.withdrawn@1': 'withdrawn',
+  'instance.cancelled@1': 'cancelled',
+  'instance.undone@1': 'undone',
+  'connector.called@1': 'connector called',
+  'config.definition.changed@1': 'definition changed',
+  'config.definition.published@1': 'published',
+  'config.flow.title@1': 'title changed',
+  'config.grant.changed@1': 'grant changed',
+  'config.team.changed@1': 'team changed',
+  'config.connector.changed@1': 'connector changed',
+  'config.template.changed@1': 'template changed',
+}
+
+/** The plain-language label of one timeline entry (S15, VT-5). */
+function timelineLabel(type: string): string {
+  return TIMELINE_TYPES[type] ?? type
+}
+
+/** The server's reason for a refusal, or the plain message of another error. */
+function reasonOf(error: unknown): string {
+  return error instanceof RequestRefused ? error.error : messageOf(error)
 }
 
 /** The wait before a takeover in plain language (S10, AS-3). */

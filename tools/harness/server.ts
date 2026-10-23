@@ -4,14 +4,16 @@ import { stripTypeScriptTypes } from 'node:module'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Grant } from '../../engine/authorize.js'
+import { authorize, type Grant } from '../../engine/authorize.js'
 import { CompletionRefused, resolveCompletion } from '../../engine/completions.js'
 import { publishedByHash, publishedFlow } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { instanceOf, readInstance } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
+import { mayRead } from '../../engine/status.js'
 import { resolveIntent } from '../../engine/submission.js'
+import { flowOf, isConfigChange, timeline, timelineFor } from '../../engine/timeline.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
 // describes. It delegates to the engine (apply, the append-only log). It is
@@ -200,6 +202,94 @@ function serveInstanceRead(
   json(res, 200, view)
 }
 
+/**
+ * Serve one instance timeline (#246, S15, VT-5, I4, I8). The actor arrives as
+ * the harness compatibility seam, exactly as it does for the instance read.
+ * The instance's own events answer to `mayRead`; the flow's configuration
+ * changes need `instance.timeline` on the flow.
+ */
+function serveInstanceTimeline(
+  res: ServerResponse,
+  url: string,
+  state: State,
+  options: ApiOptions
+): void {
+  const parsed = new URL(url, 'http://127.0.0.1')
+  const suffix = '/timeline'
+  const instanceId = decodeURIComponent(
+    parsed.pathname.slice('/api/v1/instances/'.length, -suffix.length)
+  )
+  const actor = parsed.searchParams.get('actor')
+  if (actor === null || actor === '') {
+    json(res, 400, { error: 'the actor query parameter is required' })
+    return
+  }
+  const instance = instanceOf(state.log, instanceId)
+  if (instance === undefined) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  const published = publishedByHash(state.log, instance.definitionVersion)
+  if (published === undefined) {
+    json(res, 404, { error: 'not found' })
+    return
+  }
+  const grants = options.grants ?? grantsOf(state.log)
+  if (
+    !mayRead(actor, instance, {
+      flow: instance.flow,
+      definition: published.definition,
+      log: state.log,
+      grants,
+    })
+  ) {
+    json(res, 403, { error: 'not readable' })
+    return
+  }
+  const requested = parsed.searchParams.get('includeChanges')
+  const includeChanges = requested === '1' || requested === 'true'
+  if (includeChanges && !authorize(grants, 'instance.timeline', `flow:${instance.flow}`)) {
+    json(res, 403, { error: 'the flow changes need instance.timeline' })
+    return
+  }
+  const events = state.log.filter(
+    (event) =>
+      event.payload.instanceId === instanceId ||
+      (includeChanges && isConfigChange(event.type) && flowOf(event) === instance.flow)
+  )
+  json(res, 200, timeline(events))
+}
+
+/** Serve the global change feed (#246, VT-6, I4, I8) through the harness seam. */
+function serveTimeline(res: ServerResponse, url: string, state: State, options: ApiOptions): void {
+  const parsed = new URL(url, 'http://127.0.0.1')
+  const actor = parsed.searchParams.get('actor')
+  if (actor === null || actor === '') {
+    json(res, 400, { error: 'the actor query parameter is required' })
+    return
+  }
+  const flow = parsed.searchParams.get('flow') ?? undefined
+  const type = parsed.searchParams.get('type') ?? undefined
+  const grants = options.grants ?? grantsOf(state.log)
+  const allowed = authorize(grants, 'org.grants', 'org')
+  if (!allowed && flow === undefined) {
+    json(res, 403, { error: 'the change feed needs instance.timeline or org.grants' })
+    return
+  }
+  if (!allowed && flow !== undefined && !authorize(grants, 'instance.timeline', `flow:${flow}`)) {
+    json(res, 403, { error: 'the change feed needs instance.timeline or org.grants' })
+    return
+  }
+  json(
+    res,
+    200,
+    timelineFor(state.log, {
+      ...(flow === undefined ? {} : { flow }),
+      ...(type === undefined ? {} : { type }),
+    })
+  )
+}
+
 /** Serve one interface file, or 404. */
 function serveInterface(res: ServerResponse, urlPath: string): void {
   const asset = interfaceAsset(urlPath)
@@ -280,8 +370,18 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
           definition: published.definition,
         })
       }
+      if (
+        method === 'GET' &&
+        url.startsWith('/api/v1/instances/') &&
+        new URL(url, 'http://127.0.0.1').pathname.endsWith('/timeline')
+      ) {
+        return serveInstanceTimeline(res, url, current, options)
+      }
       if (method === 'GET' && url.startsWith('/api/v1/instances/')) {
         return serveInstanceRead(res, url, current, options)
+      }
+      if (method === 'GET' && new URL(url, 'http://127.0.0.1').pathname === '/api/v1/timeline') {
+        return serveTimeline(res, url, current, options)
       }
       const uiPath = method === 'GET' ? interfacePath(url) : undefined
       if (uiPath !== undefined) return serveInterface(res, uiPath)

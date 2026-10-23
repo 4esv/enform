@@ -700,10 +700,12 @@ export async function readInstance(instanceId: string, actor?: string): Promise<
 
 export async function readInstanceTimeline(
   instanceId: string,
-  includeChanges?: string
+  includeChanges?: string,
+  actor?: string
 ): Promise<readonly TimelineEntry[]> {
   const query = new URLSearchParams()
   if (includeChanges !== undefined) query.set('includeChanges', String(includeChanges))
+  if (actor !== undefined) query.set('actor', String(actor))
   const search = query.size === 0 ? '' : `?${query}`
   const url = `${configured().baseUrl}/api/v1/instances/${instanceId}/timeline${search}`
   const response = await fetch(url, {
@@ -746,11 +748,13 @@ export async function readState(): Promise<State> {
 
 export async function readTimeline(
   flow?: string,
-  type?: string
+  type?: string,
+  actor?: string
 ): Promise<readonly TimelineEntry[]> {
   const query = new URLSearchParams()
   if (flow !== undefined) query.set('flow', String(flow))
   if (type !== undefined) query.set('type', String(type))
+  if (actor !== undefined) query.set('actor', String(actor))
   const search = query.size === 0 ? '' : `?${query}`
   const url = `${configured().baseUrl}/api/v1/timeline${search}`
   const response = await fetch(url, {

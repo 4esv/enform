@@ -296,6 +296,15 @@ paths:
             on the flow (I8).
           schema:
             type: string
+        - name: actor
+          in: query
+          required: false
+          description: >-
+            The harness compatibility seam (ADR 0012). The production route
+            authorizes with the session principal and ignores this parameter,
+            exactly as the instance read does.
+          schema:
+            type: string
       responses:
         '200':
           description: The instance's timeline, in log order
@@ -342,6 +351,14 @@ paths:
           in: query
           required: false
           description: Keep the entries of this versioned event type (VT-6).
+          schema:
+            type: string
+        - name: actor
+          in: query
+          required: false
+          description: >-
+            The harness compatibility seam (ADR 0012). The production route
+            authorizes with the session principal and ignores this parameter.
           schema:
             type: string
       responses:
