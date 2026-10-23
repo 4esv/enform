@@ -206,6 +206,11 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
         // step keeps the default, so a takeover there is never allowed.
         takeover: 'after-idle',
         idleMinutes: 1,
+        // A short timer keeps the reminder and escalation proof observable
+        // (S12, SE-3, SE-4): the registrar task reminds after one minute and
+        // escalates at two minutes, so a test never waits for a day.
+        reminderMinutes: 1,
+        deadlineMinutes: 2,
       },
     ],
   }

@@ -72,6 +72,10 @@ type BuilderStep = {
   key: string
   targets: string[]
   outcomes: string
+  /** The interval between two reminders in minutes, as typed (SE-3, S12). */
+  reminderMinutes: string
+  /** The deadline from the task's start in minutes, as typed (SE-4, S12). */
+  deadlineMinutes: string
   fields: BuilderField[]
 }
 
@@ -168,6 +172,8 @@ function render(state: BuilderState): void {
       key: `step${state.steps.length + 1}`,
       targets: ['starter'],
       outcomes: 'submit',
+      reminderMinutes: '',
+      deadlineMinutes: '',
       fields: [],
     })
     render(state)
@@ -275,6 +281,29 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   })
   outcomes.input.addEventListener('change', () => render(state))
   section.appendChild(outcomes.row)
+
+  // The task's timers (SE-3, SE-4, S12): the reminder interval and the
+  // deadline from the task's start, both in minutes. An empty input means the
+  // step sets no reminder or no deadline, and the engine schedules nothing.
+  const reminders = minuteRow(
+    'Reminder every (minutes, empty for none)',
+    step.reminderMinutes,
+    'reminderMinutes'
+  )
+  reminders.input.addEventListener('input', () => {
+    step.reminderMinutes = reminders.input.value
+  })
+  section.appendChild(reminders.row)
+
+  const deadline = minuteRow(
+    'Deadline (minutes, empty for none)',
+    step.deadlineMinutes,
+    'deadlineMinutes'
+  )
+  deadline.input.addEventListener('input', () => {
+    step.deadlineMinutes = deadline.input.value
+  })
+  section.appendChild(deadline.row)
 
   const fields = document.createElement('div')
   fields.className = 'builder-fields'
@@ -659,6 +688,8 @@ function definitionOf(state: BuilderState): Record<string, unknown> {
       // this list the engine makes no field editable and the form is read-only.
       ...(step.fields.length === 0 ? {} : { editable: step.fields.map((field) => field.key) }),
       outcomes: splitList(step.outcomes),
+      ...minutesField('reminderMinutes', step.reminderMinutes),
+      ...minutesField('deadlineMinutes', step.deadlineMinutes),
     })),
   }
 }
@@ -680,6 +711,8 @@ function readStep(body: unknown, index: number, total: number): BuilderStep {
     targets: readTargets(step.targets),
     outcomes:
       outcomes.length > 0 ? outcomes.join(', ') : index === total - 1 ? 'submit' : 'approve',
+    reminderMinutes: minutesOf(step.reminderMinutes),
+    deadlineMinutes: minutesOf(step.deadlineMinutes),
     fields: fields.map(readField).filter((field): field is BuilderField => field !== undefined),
   }
 }
@@ -690,6 +723,8 @@ function defaultStep(index: number): BuilderStep {
     key: index === 1 ? 'start' : `step${index}`,
     targets: ['starter'],
     outcomes: 'submit',
+    reminderMinutes: '',
+    deadlineMinutes: '',
     fields: [],
   }
 }
@@ -816,6 +851,48 @@ function textRow(text: string): { readonly row: HTMLElement; readonly input: HTM
   input.type = 'text'
   row.appendChild(input)
   return { row, input }
+}
+
+/** One labelled positive-integer input of the builder, for a step's timer settings (SE-3, SE-4). */
+function minuteRow(
+  text: string,
+  value: string,
+  name: string
+): { readonly row: HTMLElement; readonly input: HTMLInputElement } {
+  const row = document.createElement('label')
+  row.className = 'builder-field-row'
+  const span = document.createElement('span')
+  span.textContent = text
+  row.appendChild(span)
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.min = '1'
+  input.step = '1'
+  input.value = value
+  input.dataset[name] = ''
+  row.appendChild(input)
+  return { row, input }
+}
+
+/** One timer setting of a step, written only when it is a positive integer (SE-3, SE-4). */
+function minutesField(
+  name: 'reminderMinutes' | 'deadlineMinutes',
+  text: string
+): Record<string, number> {
+  const value = positiveMinutes(text)
+  return value === undefined ? {} : { [name]: value }
+}
+
+/** Read a positive integer from a builder input, or undefined when it is empty or invalid. */
+function positiveMinutes(text: string): number | undefined {
+  const trimmed = text.trim()
+  if (!/^[1-9][0-9]*$/.test(trimmed)) return undefined
+  return Number(trimmed)
+}
+
+/** Read one timer setting of a definition as the builder input's text (SE-3, SE-4). */
+function minutesOf(value: unknown): string {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? String(value) : ''
 }
 
 /** One labelled select of the builder. */

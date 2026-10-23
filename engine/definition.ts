@@ -145,7 +145,9 @@ export type Section = {
  * is true the step is skipped (WF-1, S05). `rules` are the conditions that
  * show, hide, collapse, require, lock or skip fields and sections (FM-2, FM-5).
  * `takeover` and `idleMinutes` set when an assignee may take over a claimed
- * task (AS-3, S10).
+ * task (AS-3, S10). `reminderMinutes` and `deadlineMinutes` set the task's
+ * reminders and its deadline (SE-3, SE-4, S12), and `escalationTargets` are
+ * the targets that the escalation adds (SE-4).
  */
 export type FlowStep = {
   readonly key: string
@@ -166,6 +168,23 @@ export type FlowStep = {
    * (AS-3, S10). It is a positive integer; an absent setting means 60 minutes.
    */
   readonly idleMinutes?: number
+  /**
+   * The interval between two reminders, in minutes (SE-3, S12). It is a
+   * positive integer; an absent setting means the step sends no reminder.
+   */
+  readonly reminderMinutes?: number
+  /**
+   * The deadline from the task's start, in minutes (SE-4, S12). It is a
+   * positive integer; an absent setting means the step has no deadline and no
+   * escalation. The reminders stop at the deadline.
+   */
+  readonly deadlineMinutes?: number
+  /**
+   * The targets that the escalation adds at the deadline (SE-4, S12). The
+   * escalation never removes the current owner; it notifies a person and, when
+   * the step names these, records the extra targets for the deadline.
+   */
+  readonly escalationTargets?: readonly Target[]
   readonly skipWhen?: JsonValue
   readonly rules?: readonly Rule[]
 }
@@ -449,6 +468,9 @@ function readV2Step(body: unknown): FlowStep {
     outcomes?: readonly string[]
     takeover?: TakeoverSetting
     idleMinutes?: number
+    reminderMinutes?: number
+    deadlineMinutes?: number
+    escalationTargets?: readonly Target[]
     skipWhen?: JsonValue
     rules?: readonly Rule[]
   } = { key: body.key, targets: readTargets(body.targets) }
@@ -473,6 +495,12 @@ function readV2Step(body: unknown): FlowStep {
   if (takeover !== undefined) step.takeover = takeover
   const idleMinutes = readIdleMinutes(body.idleMinutes)
   if (idleMinutes !== undefined) step.idleMinutes = idleMinutes
+  const reminderMinutes = readReminderMinutes(body.reminderMinutes)
+  if (reminderMinutes !== undefined) step.reminderMinutes = reminderMinutes
+  const deadlineMinutes = readDeadlineMinutes(body.deadlineMinutes)
+  if (deadlineMinutes !== undefined) step.deadlineMinutes = deadlineMinutes
+  const escalationTargets = readEscalationTargets(body.escalationTargets)
+  if (escalationTargets !== undefined) step.escalationTargets = escalationTargets
   if (body.skipWhen !== undefined) step.skipWhen = body.skipWhen as JsonValue
   const rules = readRules(body.rules, fieldKeys, sectionKeys)
   if (rules !== undefined) step.rules = rules
@@ -705,6 +733,45 @@ function readIdleMinutes(body: unknown): number | undefined {
 }
 
 /**
+ * Read the optional reminder interval of a step (SE-3, S12). An absent
+ * setting means the step sends no reminder; a present one is a positive
+ * number of minutes.
+ */
+function readReminderMinutes(body: unknown): number | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'number' || !Number.isInteger(body) || body < 1) {
+    throw new Error('flow definition: reminderMinutes must be a positive integer (SE-3)')
+  }
+  return body
+}
+
+/**
+ * Read the optional deadline of a step (SE-4, S12). An absent setting means
+ * the step has no deadline and no escalation; a present one is a positive
+ * number of minutes from the task's start.
+ */
+function readDeadlineMinutes(body: unknown): number | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'number' || !Number.isInteger(body) || body < 1) {
+    throw new Error('flow definition: deadlineMinutes must be a positive integer (SE-4)')
+  }
+  return body
+}
+
+/**
+ * Read the optional targets that an escalation adds at the deadline (SE-4,
+ * S12). An absent list adds nobody; every entry is a target like a step's
+ * targets (AS-1).
+ */
+function readEscalationTargets(body: unknown): readonly Target[] | undefined {
+  if (body === undefined) return undefined
+  if (!Array.isArray(body)) {
+    throw new Error('flow definition: escalationTargets must be an array (SE-4)')
+  }
+  return body.map(readTarget)
+}
+
+/**
  * The idle period in milliseconds that a step allows before a takeover (AS-3,
  * S10): 0 for `always`, `idleMinutes` minutes for `after-idle` (60 when the
  * step does not set it), and undefined for `never` or an absent setting. The
@@ -738,7 +805,8 @@ function canonicalDefinition(definition: FlowDefinition): JsonValue {
 /**
  * The canonical value of one step: key, targets, then the optional flat
  * fields, sections, visible and editable keys, outcomes, takeover setting,
- * idle period, skip condition and rules.
+ * idle period, reminder interval, deadline, escalation targets, skip
+ * condition and rules.
  */
 function canonicalStep(step: FlowStep): JsonValue {
   const canonical: Record<string, JsonValue> = {
@@ -752,6 +820,11 @@ function canonicalStep(step: FlowStep): JsonValue {
   if (step.outcomes !== undefined) canonical.outcomes = [...step.outcomes]
   if (step.takeover !== undefined) canonical.takeover = step.takeover
   if (step.idleMinutes !== undefined) canonical.idleMinutes = step.idleMinutes
+  if (step.reminderMinutes !== undefined) canonical.reminderMinutes = step.reminderMinutes
+  if (step.deadlineMinutes !== undefined) canonical.deadlineMinutes = step.deadlineMinutes
+  if (step.escalationTargets !== undefined) {
+    canonical.escalationTargets = step.escalationTargets.map((target) => ({ ...target }))
+  }
   if (step.skipWhen !== undefined) canonical.skipWhen = canonicalJson(step.skipWhen)
   if (step.rules !== undefined) canonical.rules = step.rules.map(canonicalRule)
   return canonical

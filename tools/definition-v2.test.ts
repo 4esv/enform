@@ -287,6 +287,86 @@ test('#242 the step takeover setting round trips through the canonical form (DF-
   })
 })
 
+/** A canonical v2 file with the advisor step's timers (S12, SE-3, SE-4). */
+const V2_TIMERS_FILE = `{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "advisor",
+      "targets": [
+        {
+          "user": "user:okafor"
+        }
+      ],
+      "outcomes": [
+        "approve",
+        "send_back"
+      ],
+      "reminderMinutes": 30,
+      "deadlineMinutes": 120,
+      "escalationTargets": [
+        {
+          "team": "CS-Chairs"
+        }
+      ]
+    }
+  ]
+}
+`
+
+// Issue #248, S12, SE-3, SE-4, DF-1, I9: a step sets the interval between its
+// reminders and its deadline, and the targets that the escalation adds. The
+// canonical form writes the interval and the deadline after the takeover
+// settings, then the escalation targets before the skip condition. An absent
+// setting is never written, and the v2 schema validates each as a positive
+// integer or a target list.
+test('#248 the step reminder and deadline settings round trip (S12, SE-3, SE-4, I9)', () => {
+  const once = parse(V2_TIMERS_FILE)
+  expect(once.steps[0]?.reminderMinutes).toBe(30)
+  expect(once.steps[0]?.deadlineMinutes).toBe(120)
+  expect(once.steps[0]?.escalationTargets).toEqual([{ team: 'CS-Chairs' }])
+  expect(serialize(once)).toBe(V2_TIMERS_FILE)
+  expect(parse(serialize(once)).steps[0]?.reminderMinutes).toBe(30)
+
+  // An absent setting is absent, not 0: the step sets no timer (SE-3, SE-4).
+  expect(parse(V2_FILE).steps[0]?.reminderMinutes).toBeUndefined()
+  expect(parse(V2_FILE).steps[0]?.deadlineMinutes).toBeUndefined()
+  expect(parse(V2_FILE).steps[0]?.escalationTargets).toBeUndefined()
+  expect(serialize(parse(V2_FILE))).toBe(V2_FILE)
+
+  const step = (body: string): string =>
+    `{ "schemaVersion": 2, "steps": [ { "key": "s", "targets": [ { "user": "user:sam" } ], ${body} } ] }`
+  expect(() => parse(step('"reminderMinutes": 0'))).toThrow(/positive integer/)
+  expect(() => parse(step('"reminderMinutes": 1.5'))).toThrow(/positive integer/)
+  expect(() => parse(step('"reminderMinutes": "30"'))).toThrow(/positive integer/)
+  expect(() => parse(step('"deadlineMinutes": 0'))).toThrow(/positive integer/)
+  expect(() => parse(step('"deadlineMinutes": "120"'))).toThrow(/positive integer/)
+  expect(() => parse(step('"escalationTargets": "CS-Chairs"'))).toThrow(/must be an array/)
+  expect(() => parse(step('"escalationTargets": [ { "team": 4 } ]'))).toThrow(
+    /target value must be a string/
+  )
+
+  const schema = JSON.parse(readFileSync(join(repo, 'schemas', 'flow', 'v2.json'), 'utf8'))
+  expect(schema.$defs.step.properties.reminderMinutes).toEqual({
+    description:
+      'The interval between two reminders, in minutes (SE-3, S12). Absent means the step sends no reminder.',
+    type: 'integer',
+    minimum: 1,
+  })
+  expect(schema.$defs.step.properties.deadlineMinutes).toEqual({
+    description:
+      "The deadline from the task's start, in minutes (SE-4, S12). Absent means the step has no deadline and no escalation; the reminders stop at the deadline.",
+    type: 'integer',
+    minimum: 1,
+  })
+  expect(schema.$defs.step.properties.escalationTargets).toEqual({
+    description:
+      'The targets that the escalation adds at the deadline (SE-4, S12). The escalation notifies a person and never removes the current owner.',
+    type: 'array',
+    items: { $ref: '#/$defs/target' },
+  })
+})
+
 // Issue #230, DF-1, FM-1, I9: the field label is part of the definition
 // contract. The parser reads it, the canonical form writes it after the
 // control, and a second parse sees the same label and the same bytes.

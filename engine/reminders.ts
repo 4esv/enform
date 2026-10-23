@@ -19,6 +19,7 @@
 
 import { type ActionResult, type CompletionContext, complete } from './action.js'
 import type { Version } from './concurrency.js'
+import type { FlowStep } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Operation, OperationDeps } from './operation.js'
 import type { OutboxEntry } from './outbox.js'
@@ -30,6 +31,16 @@ export const REMINDER_EMAIL = 'send-reminder'
 
 /** The connector operation that sends an escalation (SE-2, SE-4). */
 export const ESCALATION_EMAIL = 'send-escalation'
+
+/**
+ * The event type that records one timer firing (SE-3, SE-4, SE-5, I2, I3). The
+ * worker appends it with the timer id and the one outbox entry that the timer
+ * carries, so the firing and its side effect commit in one event.
+ */
+export const TIMER_FIRED = 'timer.fired@1'
+
+/** One minute in milliseconds (SE-3, SE-4). */
+export const MINUTE_MS = 60_000
 
 /** The rule name of a reminder in the I3 identity (I3, SE-3). */
 export const REMINDER_RULE = 'reminder'
@@ -64,6 +75,119 @@ export type TimerSettings = {
   readonly deadline: number
   /** The targets that the escalation adds at the deadline (SE-4). */
   readonly escalationTargets: readonly string[]
+}
+
+/**
+ * The settings that one flow step gives its timers (SE-3, SE-4, S12): the
+ * instance that the task belongs to, the time the task entered the step, and
+ * the person that a timer notifies. The step itself supplies the interval, the
+ * deadline and the escalation targets.
+ */
+export type StepTimerSettings = {
+  /** The instance that the task belongs to, for the I3 identity (I3). */
+  readonly instance: string
+  /** The time the task entered the step, from the injected clock (I6). */
+  readonly since: number
+  /** The person that the timer notifies; absent when the step has no assignee. */
+  readonly to?: string
+}
+
+/**
+ * One timer that a step schedules (SE-3, SE-4, SE-5): the reminder or the
+ * escalation, the time it fires, and the outbox entry that it carries when it
+ * fires. The timer row's id is the entry's I3 key (sideEffects.ts), so the same
+ * timer always has the same id (I3, I6).
+ */
+export type ScheduledTimer = {
+  readonly kind: 'reminder' | 'escalation'
+  readonly fireAt: number
+  readonly entry: OutboxEntry
+}
+
+/**
+ * The timers that one step schedules from its flow settings (SE-3, SE-4, S12).
+ * A step with `reminderMinutes` schedules one reminder per elapsed interval up
+ * to its deadline, and a step with `deadlineMinutes` schedules the escalation
+ * at the deadline. A step with a reminder interval and no deadline schedules
+ * its first reminder; `nextReminderTimer` schedules the following one when the
+ * previous fires. A step with neither setting schedules nothing. The function
+ * is pure and deterministic (I6).
+ */
+export function timersOfStep(
+  step: FlowStep,
+  settings: StepTimerSettings
+): readonly ScheduledTimer[] {
+  const interval = step.reminderMinutes === undefined ? undefined : step.reminderMinutes * MINUTE_MS
+  const timers: ScheduledTimer[] = []
+  if (interval !== undefined) {
+    const last =
+      step.deadlineMinutes === undefined
+        ? 1
+        : Math.floor((step.deadlineMinutes * MINUTE_MS) / interval)
+    for (let occurrence = 1; occurrence <= last; occurrence += 1) {
+      const timer = reminderTimer(step, settings, occurrence)
+      if (timer !== undefined) timers.push(timer)
+    }
+  }
+  const escalation = escalationTimer(step, settings)
+  if (escalation !== undefined) timers.push(escalation)
+  return timers
+}
+
+/**
+ * The reminder after one that has fired (SE-3, S12): the next occurrence that
+ * a step without a deadline schedules, so a task that waits keeps reminding
+ * until it completes. An absent reminder setting has no next reminder. The
+ * function is pure and deterministic (I6).
+ */
+export function nextReminderTimer(
+  step: FlowStep,
+  settings: StepTimerSettings,
+  occurrence: number
+): ScheduledTimer | undefined {
+  if (step.reminderMinutes === undefined) return undefined
+  return reminderTimer(step, settings, occurrence)
+}
+
+/** One reminder timer of one occurrence, or undefined when the step sets no interval (SE-3). */
+function reminderTimer(
+  step: FlowStep,
+  settings: StepTimerSettings,
+  occurrence: number
+): ScheduledTimer | undefined {
+  if (step.reminderMinutes === undefined) return undefined
+  const interval = step.reminderMinutes * MINUTE_MS
+  const timers: TimerSettings = {
+    instance: settings.instance,
+    since: settings.since,
+    reminderInterval: interval,
+    // Only the escalation reads the deadline; the reminder's entry never does.
+    deadline: 0,
+    escalationTargets: [],
+  }
+  return {
+    kind: 'reminder',
+    fireAt: settings.since + occurrence * interval,
+    entry: reminder(timers, step.key, occurrence, settings.to),
+  }
+}
+
+/** The escalation timer of a step, or undefined when the step sets no deadline (SE-4). */
+function escalationTimer(step: FlowStep, settings: StepTimerSettings): ScheduledTimer | undefined {
+  if (step.deadlineMinutes === undefined) return undefined
+  const deadline = settings.since + step.deadlineMinutes * MINUTE_MS
+  const timers: TimerSettings = {
+    instance: settings.instance,
+    since: settings.since,
+    reminderInterval: 0,
+    deadline,
+    escalationTargets: (step.escalationTargets ?? []).map((target) => JSON.stringify(target)),
+  }
+  return {
+    kind: 'escalation',
+    fireAt: deadline,
+    entry: escalation(timers, step.key, settings.to),
+  }
 }
 
 /** The result of a completion that cancels the task's timers (S12, SE-5, I2). */

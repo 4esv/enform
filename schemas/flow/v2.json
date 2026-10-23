@@ -65,6 +65,21 @@
           "type": "integer",
           "minimum": 1
         },
+        "reminderMinutes": {
+          "description": "The interval between two reminders, in minutes (SE-3, S12). Absent means the step sends no reminder.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "deadlineMinutes": {
+          "description": "The deadline from the task's start, in minutes (SE-4, S12). Absent means the step has no deadline and no escalation; the reminders stop at the deadline.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "escalationTargets": {
+          "description": "The targets that the escalation adds at the deadline (SE-4, S12). The escalation notifies a person and never removes the current owner.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/target" }
+        },
         "skipWhen": { "$ref": "#/$defs/jsonLogic" },
         "rules": {
           "description": "The conditions on data, step and user that show, hide, collapse, require, lock or skip fields and sections (FM-2, FM-5). A condition reads the instance's values at the root plus the reserved `context` root: `context.step` names the current step and `context.user` the acting principal. When the condition is true the effect applies to every target, in document order, and a later rule wins per target. `hide` changes presentation only; `skip` drops the target from the step's capture, so it is absent from the view, not required and not recorded (FM-2).",
