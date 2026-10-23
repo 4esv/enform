@@ -337,7 +337,14 @@ test('#244 VT-2 the done instance shows every step completed or skipped', async 
     { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
     { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: requestAt },
     { key: 'advisor', state: 'completed', startAt: requestAt, lastActivityAt: advisorAt },
-    { key: 'registrar', state: 'completed', startAt: advisorAt, lastActivityAt: registrarAt },
+    {
+      key: 'registrar',
+      state: 'completed',
+      startAt: advisorAt,
+      lastActivityAt: registrarAt,
+      // The demo registrar step sets a two minute deadline (S12, SE-4).
+      dueAt: advisorAt + 2 * 60_000,
+    },
   ])
 }, 180_000)
 

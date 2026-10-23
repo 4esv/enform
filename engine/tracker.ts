@@ -16,9 +16,10 @@
 // source and no I/O (I6), so two reads of the same log answer the same tracker.
 
 import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
-import type { FlowDefinition, JsonValue } from './definition.js'
+import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
+import { MINUTE_MS } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { INSTANCE_STARTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
@@ -39,8 +40,8 @@ export type TrackerState =
  * order. `holder` is the holder of the current open step, `condition` is the
  * condition that skipped the step (the VT-2 reason), and `comment` is the
  * send-back comment that reopened the current step. `startAt` is when the
- * instance entered the step and `lastActivityAt` is the newest event for it.
- * The due time belongs to the reminders lane (SE-3), not to this projection.
+ * instance entered the step, `lastActivityAt` is the newest event for it, and
+ * `dueAt` is its deadline counted from `startAt` (SE-4, VT-2).
  */
 export type TrackerStep = {
   /** The definition key of the step (WF-1). */
@@ -65,6 +66,12 @@ export type TrackerStep = {
    * step that waits unopened carries only its start time.
    */
   readonly lastActivityAt?: number
+  /**
+   * The due time of the step (VT-2, SE-4): the time the instance entered the
+   * step plus the step's `deadlineMinutes`. It is absent when the step sets no
+   * deadline or the instance never entered it.
+   */
+  readonly dueAt?: number
 }
 
 /**
@@ -83,7 +90,7 @@ export function trackerOf(
   log: Log
 ): readonly TrackerStep[] {
   const folded = fold(instance, definition, log)
-  return definition.steps.map((step) => entry(step.key, folded))
+  return definition.steps.map((step) => entry(step, folded))
 }
 
 /** The state of every step as the instance's own events record it. */
@@ -208,9 +215,11 @@ function ownEvents(instance: Instance, log: Log): readonly Event[] {
  * One tracker entry for a definition step (VT-2). A state that the log records
  * wins. Otherwise the current step is opened when it has a holder and unopened
  * when it has none, and every other step is not reached; the tracker never
- * invents a state.
+ * invents a state. The entry carries the due time when the step sets a deadline
+ * and the instance has entered it (VT-2, SE-4).
  */
-function entry(key: string, folded: Folded): TrackerStep {
+function entry(step: FlowStep, folded: Folded): TrackerStep {
+  const key = step.key
   const recorded = folded.states.get(key)
   const state: TrackerState =
     recorded ??
@@ -233,6 +242,9 @@ function entry(key: string, folded: Folded): TrackerStep {
       : {}),
     ...(folded.starts.has(key) ? { startAt: folded.starts.get(key) } : {}),
     ...(folded.activities.has(key) ? { lastActivityAt: folded.activities.get(key) } : {}),
+    ...(step.deadlineMinutes !== undefined && folded.starts.has(key)
+      ? { dueAt: (folded.starts.get(key) ?? 0) + step.deadlineMinutes * MINUTE_MS }
+      : {}),
   }
 }
 

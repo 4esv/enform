@@ -284,11 +284,11 @@ export interface Note {
 }
 
 /**
- * One step of the per-step tracker (VT-2, S14, #244, #246). It is one definition step in
+ * One step of the per-step tracker (VT-2, S14, #244, #246, #248). It is one definition step in
  * definition order, with the one state it shows and, when the log holds them, the holder of the
  * open step, the condition that skipped the step, the comment that sent it back, the time the
- * instance entered the step and the newest event for it. The due time belongs to the reminders
- * lane (SE-3).
+ * instance entered the step, the newest event for it and the due time that the step's deadline
+ * sets (SE-3, SE-4).
  */
 export interface TrackerStep {
   readonly key: string
@@ -298,6 +298,7 @@ export interface TrackerStep {
   readonly comment?: string
   readonly startAt?: number
   readonly lastActivityAt?: number
+  readonly dueAt?: number
 }
 
 /**

@@ -533,6 +533,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
         activity.textContent = `last activity ${activity.dateTime}`
         item.append(activity)
       }
+      // The step's due time comes from its deadline (VT-2, SE-4, S12). The
+      // engine computes it, and the page only renders the read.
+      if (step.dueAt !== undefined) {
+        const due = document.createElement('time')
+        due.className = 'tracker-due'
+        due.dataset.trackerDue = ''
+        due.dateTime = new Date(step.dueAt).toISOString()
+        due.textContent = `due ${due.dateTime}`
+        item.append(due)
+      }
       if (step.condition !== undefined) {
         const condition = document.createElement('span')
         condition.className = 'tracker-condition'

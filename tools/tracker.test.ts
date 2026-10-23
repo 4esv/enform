@@ -339,3 +339,51 @@ test('#244 I4 another instance never changes the tracker', () => {
     startAt: T,
   })
 })
+
+// Issue #248, S12, VT-2, SE-4: a step that sets a deadline carries its due
+// time on the tracker, counted from the start of the step. A step without a
+// deadline carries none, so the read never invents a due time.
+test('#248 VT-2 the tracker carries the step deadline as the due time (SE-4)', () => {
+  const definitionWithTimer = parse(`{
+    "schemaVersion": 2,
+    "steps": [
+      {
+        "key": "wait",
+        "targets": [{ "user": "user:okafor" }],
+        "reminderMinutes": 5,
+        "deadlineMinutes": 10
+      },
+      {
+        "key": "after",
+        "targets": [{ "user": "user:okafor" }]
+      }
+    ]
+  }`)
+  const flowWithTimer: Flow = {
+    slug: SLUG,
+    versions: [
+      {
+        version: 1,
+        contentHash: contentHash(definitionWithTimer),
+        definition: definitionWithTimer,
+      },
+    ],
+  }
+  const sources = deps()
+  const pushed = push(createFlow(SLUG), definitionWithTimer, sources, 'user:dana')
+  const published = publish(pushed.flow, sources, 'user:dana')
+  const seededState = apply(published.operation, apply(pushed.operation, emptyState))
+  const started = startInstance(flowWithTimer, INSTANCE_ID, {}, SAM, sources, resolve, grants)
+  const state = apply(started.operation, seededState)
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  if (instance === undefined) throw new Error('the log holds no started instance')
+  const tracker = trackerOf(instance, definitionWithTimer, state.log)
+  expect(tracker[0]).toEqual({
+    key: 'wait',
+    state: 'unopened',
+    startAt: T,
+    dueAt: T + 10 * 60_000,
+  })
+  // The next step is not reached, so it has no start time and no due time.
+  expect(tracker[1]).toEqual({ key: 'after', state: 'not-reached' })
+})
