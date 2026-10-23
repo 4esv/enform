@@ -87,7 +87,8 @@ export function resolveCompletion(
   log: Log,
   value: unknown,
   resolve?: TargetResolver,
-  grants?: readonly Grant[]
+  grants?: readonly Grant[],
+  owner?: ActorId
 ): Operation | undefined {
   const intent = asCompletionIntent(value)
   if (intent === undefined) return undefined
@@ -109,7 +110,7 @@ export function resolveCompletion(
     // The version the client read (I5, #222): a stale view is refused at once
     // rather than overwriting a newer decision.
     intent.payload.version,
-    { flow: instance.flow, definition: published.definition, grants, resolve },
+    { flow: instance.flow, definition: published.definition, grants, resolve, owner },
     { clock: () => intent.at, ids: () => intent.id }
   )
   if (!result.accepted || result.operation === undefined) {

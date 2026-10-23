@@ -31,10 +31,12 @@ import {
   assigneesAddedBy,
   ESCALATION_EMAIL,
   escalationAddsOfEvent,
+  escalationAssigneesOfEvent,
   MINUTE_MS,
   REMINDER_EMAIL,
   TIMER_FIRED,
 } from '../engine/reminders.js'
+import { UNROUTABLE_QUEUE } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { EMAIL_CONNECTOR, INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
@@ -277,7 +279,12 @@ async function appendOperationIn(client: PoolClient, operation: Operation): Prom
  * the timer stands for, which `projectEvent` inserts in the same transaction.
  * A cancelled, fired or future timer is never claimed.
  */
-export async function fireDueTimers(pool: Pool, now: number, limit = 20): Promise<number> {
+export async function fireDueTimers(
+  pool: Pool,
+  now: number,
+  limit = 20,
+  groupMembers?: ReadonlyMap<string, readonly string[]>
+): Promise<number> {
   const client = await pool.connect()
   try {
     await client.query('begin')
@@ -307,6 +314,14 @@ export async function fireDueTimers(pool: Pool, now: number, limit = 20): Promis
         target: EMAIL_CONNECTOR,
         payload: row.payload,
       }
+      // I4, I6, I13: an escalation resolves its targets at the firing time and
+      // records the members on the event, so a group add replays from the log
+      // without a directory read at rebuild time. The team membership is the
+      // log prefix before this firing, exactly as the read folds it.
+      const added =
+        row.kind === 'escalation'
+          ? await assigneesAtFiring(client, row.step, row.payload, groupMembers)
+          : []
       await appendOperationIn(client, {
         id: `timer:${row.id}`,
         type: TIMER_FIRED,
@@ -318,6 +333,7 @@ export async function fireDueTimers(pool: Pool, now: number, limit = 20): Promis
           kind: row.kind,
           fireAt: Number(row.fire_at),
           outbox: [entry],
+          ...(added.length === 0 ? {} : { assignees: added }),
         },
       })
     }
@@ -329,6 +345,30 @@ export async function fireDueTimers(pool: Pool, now: number, limit = 20): Promis
   } finally {
     client.release()
   }
+}
+
+/**
+ * The assignees that one escalation firing adds (SE-4, AS-4, I13). The labels
+ * come from the timer row's payload, and the membership is the team projection
+ * up to this firing plus the caller's group snapshot. The result is recorded
+ * on the `timer.fired@1` event, so a rebuild and a read reproduce it (I4, I6).
+ */
+async function assigneesAtFiring(
+  client: PoolClient,
+  step: string,
+  payload: Readonly<Record<string, unknown>>,
+  groupMembers: ReadonlyMap<string, readonly string[]> | undefined
+): Promise<readonly Assignee[]> {
+  const adds = payload.adds
+  const labels = Array.isArray(adds)
+    ? adds.filter((label): label is string => typeof label === 'string')
+    : []
+  if (labels.length === 0) return []
+  const current = await client.query<{ seq: string | null }>('select max(seq) as seq from events')
+  const teams = await teamMembershipAt(client, Number(current.rows[0]?.seq ?? 0))
+  const membership = (principal: string): readonly string[] =>
+    groupMembers?.get(principal) ?? teams(principal)
+  return assigneesAddedBy(step, labels, membership)
 }
 
 /** Read one event by the client-created operation id (I1), or undefined when it is absent. */
@@ -759,6 +799,47 @@ export async function readInboxRows(
   }))
 }
 
+/** One open task in the Unroutable queue (I10, AS-5), as the queue view returns it. */
+export type UnroutableRow = {
+  readonly instanceId: string
+  readonly flowSlug: string
+  readonly step: string
+  readonly lastActivityAt: number
+}
+
+/**
+ * Read the open tasks that the Unroutable queue holds (I10, AS-5). The task
+ * projection records `queue:unroutable` when every target resolved to nobody,
+ * and a task leaves the queue when it is claimed, completed or closed. The
+ * caller authorizes each row against the flow owner's scope (I8).
+ */
+export async function readUnroutableRows(pool: Pool): Promise<readonly UnroutableRow[]> {
+  const result = await pool.query<{
+    instance_id: string
+    flow_slug: string
+    step: string
+    last_activity_at: string
+  }>(
+    `select t.instance_id, i.flow_slug, t.step,
+            coalesce((select max(e.at) from events e
+                      where e.payload->>'instanceId' = i.id), 0) as last_activity_at
+     from tasks t
+     join instances i on i.id = t.instance_id
+     where t.queue = $1
+       and i.current_step = t.step
+       and i.done = false
+       and i.status in ('waiting', 'in-progress')
+     order by last_activity_at desc, t.instance_id asc`,
+    [UNROUTABLE_QUEUE]
+  )
+  return result.rows.map((row) => ({
+    instanceId: row.instance_id,
+    flowSlug: row.flow_slug,
+    step: row.step,
+    lastActivityAt: Number(row.last_activity_at),
+  }))
+}
+
 /** The grants that one principal holds (AC-1, I8). */
 export async function grantsOfPrincipal(pool: Pool, principal: string): Promise<readonly Grant[]> {
   const result = await pool.query<{ principal: string; resource: string; scopes: string[] }>(
@@ -1138,8 +1219,8 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     const start = readStart(event)
     await client.query(
       `insert into instances
-         (id, flow_slug, definition_version, current_step, status, starter, values, version, holder, submitted, done, seq)
-       values ($1, $2, $3, $4, 'waiting', $5, $6::jsonb, 0, null, false, false, $7)
+         (id, flow_slug, definition_version, current_step, status, starter, values, version, holder, submitted, done, queue, seq)
+       values ($1, $2, $3, $4, 'waiting', $5, $6::jsonb, 0, null, false, false, $7, $8)
        on conflict (id) do update
          set flow_slug = excluded.flow_slug,
              definition_version = excluded.definition_version,
@@ -1151,6 +1232,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
              holder = excluded.holder,
              submitted = excluded.submitted,
              done = excluded.done,
+             queue = excluded.queue,
              seq = excluded.seq`,
       [
         start.instanceId,
@@ -1159,6 +1241,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         start.currentStep,
         start.starter,
         JSON.stringify(start.values),
+        start.queue ?? null,
         event.seq,
       ]
     )
@@ -1169,6 +1252,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         assignees: start.assignees,
         holder: null,
         state: 'available',
+        queue: start.queue ?? null,
         at: event.at,
         seq: event.seq,
       })
@@ -1191,7 +1275,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   if (event.type === STEP_CLAIMED) {
     const claim = readClaim(event)
     await client.query(
-      `update instances set holder = $2, status = 'in-progress', version = version + 1, seq = $3
+      `update instances set holder = $2, status = 'in-progress', queue = null, version = version + 1, seq = $3
        where id = $1`,
       [claim.instanceId, claim.holder, event.seq]
     )
@@ -1208,13 +1292,14 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     await client.query(
       `update instances
        set current_step = $2, holder = null, done = $3, status = $4,
-           version = version + 1, seq = $5
+           queue = $5, version = version + 1, seq = $6
        where id = $1`,
       [
         completion.instanceId,
         next?.key ?? null,
         next === undefined,
         next === undefined ? 'done' : 'waiting',
+        completion.queue ?? null,
         event.seq,
       ]
     )
@@ -1240,6 +1325,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         assignees,
         holder: null,
         state: 'available',
+        queue: completion.queue ?? null,
         at: event.at,
         seq: event.seq,
       })
@@ -1262,7 +1348,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     // gone, and the version advances as the engine advanced it (I5). The
     // event keeps from, to, when and why on the log (I14, I4).
     await client.query(
-      `update instances set holder = $2, status = 'in-progress', version = version + 1, seq = $3
+      `update instances set holder = $2, status = 'in-progress', queue = null, version = version + 1, seq = $3
        where id = $1`,
       [taken.instanceId, taken.to, event.seq]
     )
@@ -1291,11 +1377,12 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
            holder = null,
            done = false,
            status = 'waiting',
+           queue = $4,
            version = version + 1,
            revisions = revisions || jsonb_build_object($2::text, $3::integer),
-           seq = $4
+           seq = $5
        where id = $1`,
-      [sentBack.instanceId, sentBack.to, sentBack.revision, event.seq]
+      [sentBack.instanceId, sentBack.to, sentBack.revision, sentBack.queue ?? null, event.seq]
     )
     // The step that sent the task back keeps its history: its task is no
     // longer open, so it leaves the inbox without deleting a row (I4).
@@ -1321,6 +1408,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       assignees: sentBack.assignees,
       holder: null,
       state: 'available',
+      queue: sentBack.queue ?? null,
       at: event.at,
       seq: event.seq,
     })
@@ -1349,6 +1437,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       `update instances
        set current_step = null,
            holder = null,
+           queue = null,
            done = false,
            status = $2,
            withdrawal = $2,
@@ -1388,6 +1477,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       `update instances
        set current_step = $2,
            holder = $3,
+           queue = null,
            done = false,
            status = case when $3::text is null then 'waiting' else 'in-progress' end,
            withdrawal = null,
@@ -1463,10 +1553,14 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     // `adds` labels from the log, and this projection stores the same members
     // in the task row that the inbox reads (I2, I4).
     if (fired.kind === 'escalation') {
+      // The firing records the resolved targets, so a group add replays from
+      // the log (I4, I6, I13). An older event without the field folds its
+      // labels through the team membership as before.
+      const recorded = escalationAssigneesOfEvent(event)
       const labels = escalationAddsOfEvent(event)
-      if (labels.length > 0) {
+      if (recorded !== undefined || labels.length > 0) {
         const membership = await teamMembershipAt(client, event.seq)
-        const added = assigneesAddedBy(fired.step, labels, membership)
+        const added = recorded ?? assigneesAddedBy(fired.step, labels, membership)
         const assignees = await taskAssignees(client, fired.instanceId, fired.step)
         const merged = mergeAssignees(assignees, added)
         await client.query(
@@ -1563,6 +1657,8 @@ type TaskRow = {
   readonly assignees: readonly Assignee[]
   readonly holder: string | null
   readonly state: string
+  /** The Unroutable queue when the task resolved to nobody (I10, AS-5). */
+  readonly queue: string | null
   readonly at: number
   readonly seq: number
 }
@@ -1571,12 +1667,13 @@ type TaskRow = {
 async function upsertTask(client: PoolClient, task: TaskRow): Promise<void> {
   await client.query(
     `insert into tasks
-       (id, instance_id, step, holder, state, assignees, last_activity_at, seq)
-     values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       (id, instance_id, step, holder, state, assignees, queue, last_activity_at, seq)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
      on conflict (id) do update
        set holder = excluded.holder,
            state = excluded.state,
            assignees = excluded.assignees,
+           queue = excluded.queue,
            last_activity_at = excluded.last_activity_at,
            seq = excluded.seq`,
     [
@@ -1586,6 +1683,7 @@ async function upsertTask(client: PoolClient, task: TaskRow): Promise<void> {
       task.holder,
       task.state,
       JSON.stringify(task.assignees),
+      task.queue,
       task.at,
       task.seq,
     ]
@@ -1772,6 +1870,7 @@ function readStart(event: Event): {
   assignees: readonly Assignee[]
   starter: string | null
   values: Record<string, unknown>
+  queue: string | null
 } {
   const { instanceId, flow, definitionVersion, currentStep, starter } = event.payload
   if (
@@ -1790,6 +1889,7 @@ function readStart(event: Event): {
     assignees: readAssignees(event.payload.assignees),
     starter: typeof starter === 'string' ? starter : null,
     values: readJsonRecord(event.payload.values),
+    queue: typeof event.payload.queue === 'string' ? event.payload.queue : null,
   }
 }
 
@@ -1803,12 +1903,20 @@ function readClaim(event: Event): { instanceId: string; step: string; holder: st
 }
 
 /** Read a completion payload that the projection folds (I4). */
-function readCompletion(event: Event): { instanceId: string; step: string } {
+function readCompletion(event: Event): {
+  instanceId: string
+  step: string
+  queue: string | null
+} {
   const { instanceId, step } = event.payload
   if (typeof instanceId !== 'string' || typeof step !== 'string') {
     throw new Error(`events: malformed ${STEP_COMPLETED} payload at seq ${event.seq}`)
   }
-  return { instanceId, step }
+  return {
+    instanceId,
+    step,
+    queue: typeof event.payload.queue === 'string' ? event.payload.queue : null,
+  }
 }
 
 /** Read a `timer.fired@1` payload that the projection folds (SE-3, SE-4, I3). */
@@ -1869,6 +1977,7 @@ function readSendBack(event: Event): {
   to: string
   revision: number
   assignees: readonly Assignee[]
+  queue: string | null
 } {
   const { instanceId, from, to, revision } = event.payload
   if (
@@ -1885,6 +1994,7 @@ function readSendBack(event: Event): {
     to,
     revision,
     assignees: readAssignees(event.payload.assignees),
+    queue: typeof event.payload.queue === 'string' ? event.payload.queue : null,
   }
 }
 

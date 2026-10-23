@@ -150,6 +150,13 @@ export type Instance = {
    */
   readonly revisions?: Readonly<Record<string, number>>
   /**
+   * The Unroutable queue that the open task sits in (I10, AS-5). It is absent
+   * while the current step resolved to at least one member, and it names
+   * `queue:unroutable` when every target resolved to nobody, so a read and the
+   * tracker can show that no person holds the task.
+   */
+  readonly queue?: string
+  /**
    * The log position that this view of the instance was read at (S09, I5). The
    * engine reads it from the log length (`version` in concurrency.ts), and an
    * action carries it as the version that the actor based its action on. It is

@@ -44,7 +44,7 @@ import {
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
-import { addGrant, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
+import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
@@ -83,6 +83,7 @@ import {
   readInboxRows,
   readLog,
   readTeamMembers,
+  readUnroutableRows,
   revokeSession,
   type SessionRow,
   sessionById,
@@ -97,6 +98,7 @@ import {
   DirectoryUserExistsError,
   endIdpSession,
   groupIds,
+  listDirectoryGroups,
   listDirectoryUsers,
   oidcConfiguration,
   principalFromToken,
@@ -274,6 +276,20 @@ export function createApp(config: Config, pool: Pool): Hono {
     } catch (error) {
       return c.json({ error: `the sign-in could not be completed: ${messageOf(error)}` }, 401)
     }
+  })
+
+  // Issue #252, ID-6, AS-1, I8: the directory groups and their members. The
+  // read is the administrator surface, so it requires `org.grants` on the
+  // organization exactly as the user list does. A group target names the id
+  // that this read lists (I10).
+  app.get('/api/v1/admin/groups', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!authorize(grants, 'org.grants', 'org')) {
+      return c.json({ error: 'the principal may not read the directory' }, 403)
+    }
+    return c.json(await listDirectoryGroups(config))
   })
 
   app.get('/api/v1/admin/users', async (c) => {
@@ -545,7 +561,7 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (body === undefined || typeof body.type !== 'string') {
       return c.json({ error: 'the body needs an operation' }, 400)
     }
-    return serveOperation(c, pool, auth, body)
+    return serveOperation(c, pool, config, auth, body)
   })
 
   app.get('/api/v1/log', async (c) => {
@@ -591,7 +607,7 @@ export function createApp(config: Config, pool: Pool): Hono {
         log,
         grants: grantsFor(log, auth.principal),
       },
-      resolverFor(instance.starter, instance.values ?? {}, await teamMembersFor(pool, log))
+      await resolverForRequest(config, pool, log, instance.starter, instance.values ?? {})
     )
     if (view === undefined) {
       return c.json({ error: 'the principal may not read the instance' }, 403)
@@ -741,6 +757,30 @@ export function createApp(config: Config, pool: Pool): Hono {
     return c.json(items)
   })
 
+  // Issue #252, S08, I10, AS-5, I8: the Unroutable queue. A task whose targets
+  // resolve to nobody is in the queue, and the flow owner sees it here. The
+  // server authorizes every row against `task.reassign` on the flow (or
+  // `org.grants` on the organization), so no other principal reads it.
+  app.get('/api/v1/unroutable', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const log = await readLog(pool)
+    const grants = grantsFor(log, auth.principal)
+    const allowed = authorize(grants, 'org.grants', 'org')
+    const items = []
+    for (const row of await readUnroutableRows(pool)) {
+      if (!allowed && !authorize(grants, 'task.reassign', `flow:${row.flowSlug}`)) continue
+      items.push({
+        instanceId: row.instanceId,
+        flowSlug: row.flowSlug,
+        step: row.step,
+        state: 'unroutable',
+        lastActivityAt: row.lastActivityAt,
+      })
+    }
+    return c.json(items)
+  })
+
   app.all('*', (c) => c.json({ error: 'not found in this slice' }, 404))
 
   return app
@@ -752,9 +792,15 @@ export function createApp(config: Config, pool: Pool): Hono {
  * version it read and the engine checks it (I5). A withdraw, a cancel and an
  * undo are close intents that the engine resolves (S13, WF-4, WF-5).
  */
-async function serveOperation(c: Context, pool: Pool, auth: Auth, body: Record<string, unknown>) {
+async function serveOperation(
+  c: Context,
+  pool: Pool,
+  config: Config,
+  auth: Auth,
+  body: Record<string, unknown>
+) {
   const log = await readLog(pool)
-  const resolved = await resolveOperation(pool, log, auth.principal, body)
+  const resolved = await resolveOperation(pool, log, config, auth.principal, body)
   if ('error' in resolved) {
     return c.json(
       { error: resolved.error, ...('errors' in resolved ? { errors: resolved.errors } : {}) },
@@ -774,6 +820,7 @@ async function serveOperation(c: Context, pool: Pool, auth: Auth, body: Record<s
 async function resolveOperation(
   pool: Pool,
   log: Log,
+  config: Config,
   principal: Principal,
   body: Record<string, unknown>
 ): Promise<
@@ -786,8 +833,15 @@ async function resolveOperation(
     if (body.type === INSTANCE_STARTED) {
       const payload = isRecord(body.payload) ? body.payload : {}
       const values = isRecord(payload.values) ? payload.values : {}
-      const resolver = resolverFor(actor, values, await teamMembersFor(pool, log))
-      const operation = resolveIntent(log, { ...body, actor }, resolver, grants)
+      const resolver = await resolverForRequest(config, pool, log, actor, values)
+      const flowSlug = stringValue(payload.flow) ?? ''
+      const operation = resolveIntent(
+        log,
+        { ...body, actor },
+        resolver,
+        grants,
+        flowOwner(log, flowSlug) ?? actor
+      )
       if (operation === undefined) {
         return {
           status: 400,
@@ -800,12 +854,15 @@ async function resolveOperation(
       const payload = isRecord(body.payload) ? body.payload : {}
       const instanceId = stringValue(payload.instanceId)
       const instance = instanceId === undefined ? undefined : instanceOf(log, instanceId)
-      const resolver = resolverFor(
+      const resolver = await resolverForRequest(
+        config,
+        pool,
+        log,
         instance?.starter,
-        instance?.values ?? {},
-        await teamMembersFor(pool, log)
+        instance?.values ?? {}
       )
-      const operation = resolveCompletion(log, { ...body, actor }, resolver, grants)
+      const owner = instance === undefined ? actor : (flowOwner(log, instance.flow) ?? actor)
+      const operation = resolveCompletion(log, { ...body, actor }, resolver, grants, owner)
       if (operation === undefined) {
         return {
           status: 400,
@@ -821,7 +878,7 @@ async function resolveOperation(
       return grantOperation(body, principal, grants)
     }
     if (body.type === STEP_SENT_BACK) {
-      return sendBackOperation(pool, log, principal, grants, body)
+      return sendBackOperation(pool, log, config, principal, grants, body)
     }
     if (body.type === INSTANCE_WITHDRAWN) {
       return withdrawOperation(log, principal, body)
@@ -894,6 +951,7 @@ function claimOperation(
 async function sendBackOperation(
   pool: Pool,
   log: Log,
+  config: Config,
   principal: Principal,
   grants: readonly Grant[],
   body: Record<string, unknown>
@@ -945,11 +1003,7 @@ async function sendBackOperation(
       flow: instance.flow,
       definition: published.definition,
       grants,
-      resolve: resolverFor(
-        instance.starter,
-        instance.values ?? {},
-        await teamMembersFor(pool, log)
-      ),
+      resolve: await resolverForRequest(config, pool, log, instance.starter, instance.values ?? {}),
     },
     { clock: () => body.at as number, ids: () => body.id as string }
   )
@@ -1346,17 +1400,19 @@ async function teamMembersFor(
 }
 
 /**
- * Build the target resolver of one request (AS-1, AS-4, I10, #222). `starter`
- * resolves to the principal that started the instance, `user` to itself,
- * `field` to the principal in the data or the instance values, and `team` to
- * the team membership. A group needs a directory read that this lane does not
- * have, so it resolves to nobody and the engine routes to Unroutable (I10);
- * `manager-of` has no directory source either.
+ * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252).
+ * `starter` resolves to the principal that started the instance, `user` to
+ * itself, `field` to the principal in the data or the instance values, `team`
+ * to the team membership, and `group` to the members that the Keycloak group
+ * holds now. A missing or unknown group resolves to nobody, and the engine
+ * routes the task to the Unroutable queue (I10); `manager-of` has no directory
+ * source either.
  */
 function resolverFor(
   starter: string | undefined,
   data: Readonly<Record<string, unknown>>,
-  teamMembers: ReadonlyMap<string, readonly string[]>
+  teamMembers: ReadonlyMap<string, readonly string[]>,
+  groupMembers: ReadonlyMap<string, readonly string[]>
 ): TargetResolver {
   return (target) => {
     if ('user' in target) return [target.user]
@@ -1366,8 +1422,37 @@ function resolverFor(
       return typeof value === 'string' && value !== '' ? [value] : []
     }
     if ('team' in target) return teamMembers.get(target.team) ?? []
+    if ('group' in target) return groupMembers.get(target.group) ?? []
     return []
   }
+}
+
+/**
+ * The group directory of one request (AS-1, I10, #252): the Keycloak groups
+ * that the Admin API lists, mapped from the group id that a target names to
+ * the ids of the members it holds now. The map is built once per request, like
+ * `teamMembersFor`, so a re-resolution in the same request reads one snapshot.
+ */
+async function groupMembersFor(config: Config): Promise<ReadonlyMap<string, readonly string[]>> {
+  const groups = await listDirectoryGroups(config)
+  return new Map(groups.map((group) => [group.id, group.members.map((member) => member.id)]))
+}
+
+/**
+ * The target resolver of one request, with both directory reads (AS-4, #252).
+ * The team projection comes from the log and the `team_members` rows, and the
+ * group membership comes from Keycloak through the service account.
+ */
+async function resolverForRequest(
+  config: Config,
+  pool: Pool,
+  log: Log,
+  starter: string | undefined,
+  data: Readonly<Record<string, unknown>>
+): Promise<TargetResolver> {
+  const teamMembers = await teamMembersFor(pool, log)
+  const groupMembers = await groupMembersFor(config)
+  return resolverFor(starter, data, teamMembers, groupMembers)
 }
 
 /** A string payload value, or undefined when it is another type. */

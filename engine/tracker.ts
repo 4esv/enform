@@ -72,6 +72,8 @@ export type TrackerStep = {
    * deadline or the instance never entered it.
    */
   readonly dueAt?: number
+  /** The Unroutable queue of the current unopened step (I10, AS-5); absent when the task resolved to a person. */
+  readonly queue?: string
 }
 
 /**
@@ -104,6 +106,7 @@ type Folded = {
   readonly activities: ReadonlyMap<string, number>
   readonly currentStep?: string
   readonly holder?: ActorId
+  readonly queue?: string
 }
 
 /**
@@ -120,10 +123,12 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
   const activities = new Map<string, number>()
   let currentStep = instance.currentStep
   let holder = instance.holder
+  let queue = instance.queue
   for (const event of ownEvents(instance, log)) {
     if (event.type === INSTANCE_STARTED) {
       currentStep = stringField(event.payload, 'currentStep') ?? instance.currentStep
       holder = undefined
+      queue = stringField(event.payload, 'queue')
       if (currentStep !== undefined) starts.set(currentStep, event.at)
       for (const skipped of readSkipped(event.payload.skipped)) {
         states.set(skipped.step, 'skipped')
@@ -138,6 +143,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       activities.set(step, event.at)
       holder = stringField(event.payload, 'holder') ?? event.actor
       currentStep = step
+      queue = undefined
       continue
     }
     if (event.type === STEP_TAKEN_OVER) {
@@ -147,6 +153,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       activities.set(step, event.at)
       holder = stringField(event.payload, 'to') ?? event.actor
       currentStep = step
+      queue = undefined
       continue
     }
     if (event.type === STEP_COMPLETED) {
@@ -159,6 +166,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       const next = nextStep(definition, step)?.key
       if (next !== undefined) starts.set(next, event.at)
       currentStep = next
+      queue = stringField(event.payload, 'queue')
       continue
     }
     if (event.type === STEP_SENT_BACK) {
@@ -178,6 +186,7 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       activities.set(to, event.at)
       holder = undefined
       currentStep = to
+      queue = stringField(event.payload, 'queue')
       continue
     }
     if (event.type === STEP_SKIPPED) {
@@ -194,15 +203,17 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       // it adds no state of its own (VT-2, S13).
       currentStep = stringField(event.payload, 'step') ?? instance.previousStep
       holder = stringField(event.payload, 'holder')
+      queue = undefined
       continue
     }
     if (event.type === INSTANCE_UNDONE) {
       // The undo restores the step and the holder that the close recorded (WF-5).
       currentStep = stringField(event.payload, 'step')
       holder = stringField(event.payload, 'holder')
+      queue = undefined
     }
   }
-  return { states, conditions, comments, starts, activities, currentStep, holder }
+  return { states, conditions, comments, starts, activities, currentStep, holder, queue }
 }
 
 /** The events that name this instance (I4); an instance without an id owns none. */
@@ -244,6 +255,9 @@ function entry(step: FlowStep, folded: Folded): TrackerStep {
     ...(folded.activities.has(key) ? { lastActivityAt: folded.activities.get(key) } : {}),
     ...(step.deadlineMinutes !== undefined && folded.starts.has(key)
       ? { dueAt: (folded.starts.get(key) ?? 0) + step.deadlineMinutes * MINUTE_MS }
+      : {}),
+    ...(state === 'unopened' && key === folded.currentStep && folded.queue !== undefined
+      ? { queue: folded.queue }
       : {}),
   }
 }

@@ -22,7 +22,8 @@ import { editableKeys } from './editable.js'
 import { type FieldError, validateField } from './fields.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
-import { resolveAssignees, type TargetResolver } from './routing.js'
+import { createOutboxOperation } from './outbox.js'
+import { route, type TargetResolver } from './routing.js'
 import { evaluateRules, type StepRuleState } from './rules.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
@@ -74,6 +75,11 @@ export type CompletionContext = {
    * rather than inventing a resolution.
    */
   readonly resolve?: TargetResolver
+  /**
+   * The flow owner that an unroutable next step alerts (I10). An absent owner
+   * is the actor that completes the step, so the alert is never lost.
+   */
+  readonly owner?: ActorId
 }
 
 /**
@@ -207,19 +213,23 @@ export function complete(
     return { accepted: false, instance, errors, reason: refusalReason(step, errors) }
   }
   const next = nextStep(context.definition, step)
-  // The engine records the next step's resolved assignees exactly as a start
-  // records the first step's (AS-4, I13). A caller that gives no resolver
-  // records none, so the engine never invents a resolution.
-  const entered =
+  // The engine routes the next step exactly as a start routes the first one
+  // (AS-4, I10, I13): a resolved step records its assignees, and a step whose
+  // targets resolve to nobody records the Unroutable queue and the owner alert
+  // in the same operation. A caller that gives no resolver records none, so
+  // the engine never invents a resolution.
+  const routed =
     next === undefined || context.resolve === undefined
       ? undefined
-      : resolveAssignees(next, context.resolve)
+      : route(next, context.resolve, context.owner ?? actor)
+  const entered = routed?.assignees
   const advanced: Instance = {
     ...instance,
     holder: undefined,
     currentStep: next?.key,
     done: next === undefined,
     version: version + 1,
+    ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
   }
   const completed = entered === undefined ? advanced : recordAssignees(advanced, entered)
   const change = {
@@ -229,8 +239,12 @@ export function complete(
     // A skipped key is absent from the recorded capture (FM-2, FM-7).
     values: capture(values, captured),
     ...(entered === undefined ? {} : { assignees: entered }),
+    ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
   }
-  const operation = createOperation(STEP_COMPLETED, change, deps, actor)
+  const operation =
+    routed?.alert === undefined
+      ? createOperation(STEP_COMPLETED, change, deps, actor)
+      : createOutboxOperation(STEP_COMPLETED, change, [routed.alert], deps, actor)
   return { accepted: true, instance: completed, operation }
 }
 

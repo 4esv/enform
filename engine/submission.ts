@@ -33,7 +33,7 @@ import {
   type OperationId,
 } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
-import { resolveAssignees, type TargetResolver } from './routing.js'
+import { route, type TargetResolver } from './routing.js'
 import { isStepSkipped, type SkippedStep } from './workflow.js'
 
 /**
@@ -69,14 +69,18 @@ export type SubmittedInstance = {
  * needs a signed-in principal (ID-2), and when `grants` are given the acting
  * principal must hold `instance.start` on `flow:<slug>` (AC-1, I8); the caller
  * passes its own grants and those of the groups and the teams that it belongs
- * to, as `grantsOf` reads them from the log. The client mints the instance id
+ * to, as `grantsOf` reads them from the log. When `owner` is given it names
+ * the flow owner that an unroutable start alerts (I10); an absent owner is the
+ * starter, so no alert is ever lost. The client mints the instance id
  * that `instanceId` carries, as it mints the operation id (ADR 0004), and the
  * start records it on the instance and in the `instance.started@1` payload, so
  * the log names the instance that the event started (#187), and records the slug
  * of the flow it runs (#222, I4). The function routes the draft to the
  * assignees of the first step whose skip condition is false
- * (WF-1, I10), records the steps that its route skipped with the conditions on
- * the start event, attributed to the starter (#192, S05), stamps the instance
+ * (WF-1, I10), or to the Unroutable queue with the owner alert when every
+ * target resolves to nobody (I10, AS-5), records the steps that its route
+ * skipped with the conditions on the start event, attributed to the starter
+ * (#192, S05), stamps the instance
  * with the content hash of the flow's latest published version (DF-2, I13), and
  * records the values that it routed with (FM-7). It is pure and deterministic
  * (I6).
@@ -88,20 +92,25 @@ export function startInstance(
   actor: ActorId | undefined,
   deps: OperationDeps,
   resolve: TargetResolver,
-  grants?: readonly Grant[]
+  grants?: readonly Grant[],
+  owner?: ActorId
 ): StartedInstance {
   const resource = `flow:${flow.slug}`
   assertStartable(actor, grants, resource)
   const definition = startableDefinition(flow)
-  const route = routeAtStart(definition, data)
-  const assignees = resolveAssignees(route.step, resolve)
+  const entry = routeAtStart(definition, data)
+  // I10, AS-5: the engine decides whether the task routes to people or to the
+  // Unroutable queue, and it raises the owner alert in the same operation.
+  const routed = route(entry.step, resolve, owner ?? actor)
+  const assignees = routed.assignees
   const instance: Instance = {
     ...createInstance(definition, assignees),
     instanceId,
-    currentStep: route.step.key,
+    currentStep: entry.step.key,
     submitted: false,
     starter: actor,
     values: data,
+    ...(routed.queue === undefined ? {} : { queue: routed.queue }),
   }
   const change = {
     instanceId,
@@ -110,13 +119,19 @@ export function startInstance(
     // instances apart.
     flow: flow.slug,
     definitionVersion: instance.definitionVersion,
-    currentStep: route.step.key,
+    currentStep: entry.step.key,
     assignees,
     starter: actor,
     values: data,
-    skipped: route.skipped,
+    skipped: entry.skipped,
+    ...(routed.queue === undefined ? {} : { queue: routed.queue }),
   }
-  const operation = createOperation(INSTANCE_STARTED, change, deps, actor)
+  // I2, SE-2: the unroutable alert is the start's outbox entry, so the state
+  // change and the owner alert commit in one operation.
+  const operation =
+    routed.alert === undefined
+      ? createOperation(INSTANCE_STARTED, change, deps, actor)
+      : createOutboxOperation(INSTANCE_STARTED, change, [routed.alert], deps, actor)
   return { instance, operation }
 }
 
@@ -160,7 +175,8 @@ export function resolveIntent(
   log: Log,
   value: unknown,
   resolve: TargetResolver,
-  grants?: readonly Grant[]
+  grants?: readonly Grant[],
+  owner?: ActorId
 ): Operation | undefined {
   const intent = asStartIntent(value)
   if (intent === undefined) return undefined
@@ -178,7 +194,8 @@ export function resolveIntent(
     intent.actor,
     { clock: () => intent.at, ids: () => intent.id },
     resolve,
-    grants
+    grants,
+    owner
   ).operation
 }
 

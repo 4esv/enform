@@ -10,7 +10,13 @@ import { type FlowDefinition, parse } from '../engine/definition.js'
 import { changeTitle, type Flow } from '../engine/flow.js'
 import { contentHash } from '../engine/instance.js'
 import type { OperationDeps } from '../engine/operation.js'
-import type { TargetResolver } from '../engine/routing.js'
+import { outboxOfEvent } from '../engine/outbox.js'
+import {
+  ALERT_CONNECTOR,
+  type TargetResolver,
+  UNROUTABLE_ALERT,
+  UNROUTABLE_QUEUE,
+} from '../engine/routing.js'
 import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import {
@@ -105,6 +111,44 @@ test('#177 FM-7 the published event schemas match the payloads the engine writes
   // true.
   expect(validateStarted({ ...started.operation.payload, values: 'not a record' })).toBe(false)
   expect(validateSubmitted({ ...submitted.operation.payload, submitted: false })).toBe(false)
+})
+
+// Issue #252, S08, I10, AS-5, SE-2, I2: a start whose targets resolve to
+// nobody records the Unroutable queue on the instance and the event, and its
+// one operation carries the flow owner alert in the same commit. The published
+// schema carries the queue, so a reader builds the same payload (MVP.md 9.1).
+
+test('#252 I10 a start routes an empty resolution to Unroutable with the owner alert', () => {
+  const sources = deps()
+  const started = startInstance(
+    flow,
+    INSTANCE_ID,
+    startedValues,
+    SAM,
+    sources,
+    () => [],
+    grants,
+    'user:priya'
+  )
+
+  expect(started.instance.queue, 'the instance records the queue').toBe(UNROUTABLE_QUEUE)
+  expect(started.operation.payload.queue, 'the event records the queue').toBe(UNROUTABLE_QUEUE)
+  expect(validateStarted(started.operation.payload), 'the unroutable start validates').toBe(true)
+  expect(
+    outboxOfEvent({
+      seq: 1,
+      operationId: started.operation.id,
+      type: started.operation.type,
+      at: started.operation.at,
+      payload: started.operation.payload,
+    })
+  ).toEqual([
+    {
+      operation: UNROUTABLE_ALERT,
+      target: ALERT_CONNECTOR,
+      payload: { to: 'user:priya', step: 'request' },
+    },
+  ])
 })
 
 // Issue #187, DX-1, ADR 0004, I4, FM-7: the published start schema carries the

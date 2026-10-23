@@ -40,6 +40,8 @@ export type Status = {
   readonly holder?: ActorId
   /** The state in plain language (VT-2, S14). */
   readonly state: StatusState
+  /** The Unroutable queue of the open task (I10, AS-5); absent when the task resolved to a person. */
+  readonly queue?: string
   /** The steps that a condition skipped, with the condition that skipped them (S05, #192). */
   readonly skipped: readonly SkippedStep[]
 }
@@ -114,6 +116,7 @@ export function status(instance: Instance, definition: FlowDefinition, log: Log)
     currentStep: instance.currentStep,
     holder: instance.holder,
     state: statusState(instance),
+    ...(instance.queue === undefined ? {} : { queue: instance.queue }),
     skipped: skippedSteps(instance, log),
   }
 }

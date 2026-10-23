@@ -213,11 +213,11 @@ export function escalationAddsOfEvent(event: Event): readonly string[] {
 /**
  * The assignees that an escalation adds to one step (SE-4, AS-1): one entry
  * per target label, in the order the flow names them. `user:<id>` adds that
- * principal, and `team:<name>` adds the members that the team holds at the
- * firing. A `group:<name>` label keeps the target with no members because the
- * group directory read is not in this lane (the stated gap); a dynamic label
- * needs the instance context that the firing does not carry. The function is
- * pure and deterministic (I6).
+ * principal, `team:<name>` adds the members that the team holds at the
+ * firing, and `group:<id>` adds the members that the injected membership
+ * holds at the firing (AS-4); a dynamic label needs the instance context that
+ * the firing does not carry. The function is pure and deterministic (I6): the
+ * membership is the caller's snapshot of the directory.
  */
 export function assigneesAddedBy(
   step: string,
@@ -242,11 +242,24 @@ function targetOfLabel(label: string): Target | undefined {
   return { [kind]: label.slice(separator + 1) } as Target
 }
 
-/** The members that one added target resolves to (SE-4, AS-4); a group and a dynamic target resolve to nobody in this lane. */
+/** The members that one added target resolves to (SE-4, AS-4); a dynamic target resolves to nobody. */
 function membersOfTarget(target: Target, membership: Membership): readonly string[] {
   if ('user' in target) return [target.user]
   if ('team' in target) return membership(target.team)
+  if ('group' in target) return membership(target.group)
   return []
+}
+
+/**
+ * The assignees that a `timer.fired@1` event records, or undefined when the
+ * event carries none (SE-4, I4). The worker resolves the escalation labels at
+ * the firing time and records the members on the event, so a group add does
+ * not depend on a directory read at rebuild time and a read reproduces the
+ * same principals (I4, I6, I13).
+ */
+export function escalationAssigneesOfEvent(event: Event): readonly Assignee[] | undefined {
+  const value = event.payload.assignees
+  return Array.isArray(value) ? (value as readonly Assignee[]) : undefined
 }
 
 /** The result of a completion that cancels the task's timers (S12, SE-5, I2). */

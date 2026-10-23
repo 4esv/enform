@@ -20,6 +20,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { Pool } from 'pg'
 import type { Config } from './config.js'
 import { createPool, fireDueTimers } from './db.js'
+import { listDirectoryGroups } from './keycloak.js'
 import { createMailer, type MailEntry, type Mailer } from './mail.js'
 
 /** The idle poll interval of the worker, in milliseconds. */
@@ -45,12 +46,31 @@ type OutboxRow = MailEntry & {
 /** A running worker loop and the way to drain it. */
 export type Worker = { readonly stop: () => Promise<void> }
 
+/** How long the worker keeps one group snapshot between timer passes (SE-4, I6). */
+const GROUP_CACHE_MS = 30_000
+
 /** Start the outbox loop for one configuration (ADR 0011, SE-1). */
 export function startWorker(config: Config): Worker {
   const pool = createPool(config.databaseUrl)
   const mailer = createMailer(config)
   let stopped = false
-  const loop = run(pool, mailer, () => stopped)
+  let groups:
+    | { readonly at: number; readonly members: ReadonlyMap<string, readonly string[]> }
+    | undefined
+  const groupMembers = async (): Promise<ReadonlyMap<string, readonly string[]>> => {
+    if (groups !== undefined && groups.at + GROUP_CACHE_MS > Date.now()) return groups.members
+    try {
+      const listed = await listDirectoryGroups(config)
+      const members = new Map(listed.map((group) => [group.id, group.members.map((m) => m.id)]))
+      groups = { at: Date.now(), members }
+      return members
+    } catch {
+      // A directory read failure records the labels without group members for
+      // this pass; the next pass reads again. A reminder never depends on it.
+      return groups?.members ?? new Map()
+    }
+  }
+  const loop = run(pool, mailer, groupMembers, () => stopped)
   return {
     stop: async () => {
       stopped = true
@@ -62,7 +82,12 @@ export function startWorker(config: Config): Worker {
 }
 
 /** Claim and deliver the due outbox rows until `stopped` (SE-1, I3). */
-async function run(pool: Pool, mailer: Mailer | undefined, stopped: () => boolean): Promise<void> {
+async function run(
+  pool: Pool,
+  mailer: Mailer | undefined,
+  groupMembers: () => Promise<ReadonlyMap<string, readonly string[]>>,
+  stopped: () => boolean
+): Promise<void> {
   // A worker that starts finds no live claim: a row left in `sending` by a
   // crashed worker is due again. No other process is delivering it (ADR 0003).
   await resetStaleClaims(pool)
@@ -71,8 +96,9 @@ async function run(pool: Pool, mailer: Mailer | undefined, stopped: () => boolea
     try {
       // A due timer fires into the outbox before the batch is claimed, so the
       // reminder or escalation of this pass goes out in the same pass (SE-3,
-      // SE-4, I2, I3).
-      await fireDueTimers(pool, Date.now())
+      // SE-4, I2, I3). An escalation resolves its group targets through the
+      // directory and records the members on the event (I4, I13).
+      await fireDueTimers(pool, Date.now(), 20, await groupMembers())
     } catch (error) {
       process.stderr.write(`enform worker: ${messageOf(error)}\n`)
       await delay(POLL_INTERVAL_MS)

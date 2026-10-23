@@ -33,7 +33,12 @@ import { editableKeys } from './editable.js'
 import { publishedByHash } from './flow.js'
 import { type Assignee, type Instance, mergeAssignees, recordAssignees } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
-import { assigneesAddedBy, escalationAddsOfEvent, TIMER_FIRED } from './reminders.js'
+import {
+  assigneesAddedBy,
+  escalationAddsOfEvent,
+  escalationAssigneesOfEvent,
+  TIMER_FIRED,
+} from './reminders.js'
 import { isLiveTarget } from './resolve.js'
 import type { TargetResolver } from './routing.js'
 import { evaluateRules } from './rules.js'
@@ -339,6 +344,9 @@ function started(event: Event, instanceId: string): ProjectedInstance {
     values: readValues(payload.values),
     starter: optionalString(payload.starter),
     currentStep: optionalString(payload.currentStep),
+    ...(optionalString(payload.queue) === undefined
+      ? {}
+      : { queue: optionalString(payload.queue) }),
     submitted: false,
     version: 0,
   }
@@ -364,7 +372,11 @@ function fold(
       return { ...instance, submitted: true, ...(values === undefined ? {} : { values }) }
     }
     case STEP_CLAIMED:
-      return advanced({ ...instance, holder: optionalString(event.payload.holder) })
+      return advanced({
+        ...instance,
+        holder: optionalString(event.payload.holder),
+        queue: undefined,
+      })
     case STEP_COMPLETED: {
       const next = nextStep(definition, stringField(event.payload, 'step'))
       const entered = optionalAssignees(event.payload.assignees)
@@ -373,11 +385,12 @@ function fold(
         holder: undefined,
         currentStep: next?.key,
         done: next === undefined,
+        queue: optionalString(event.payload.queue),
       })
       return entered === undefined ? moved : recordAssignees(moved, entered)
     }
     case STEP_TAKEN_OVER:
-      return advanced({ ...instance, holder: optionalString(event.payload.to) })
+      return advanced({ ...instance, holder: optionalString(event.payload.to), queue: undefined })
     case STEP_SENT_BACK:
       return advanced(sentBack(instance, event))
     case INSTANCE_WITHDRAWN:
@@ -414,12 +427,17 @@ function advanced(instance: ProjectedInstance): ProjectedInstance {
 function escalated(instance: ProjectedInstance, event: Event, log: Log): ProjectedInstance {
   const step = optionalString(event.payload.step)
   if (step === undefined) return instance
+  // The worker records the resolved targets on the event (fireDueTimers), so a
+  // group add replays from the log. An older event without that field folds
+  // the labels through the team membership as before.
+  const recorded = escalationAssigneesOfEvent(event)
   const labels = escalationAddsOfEvent(event)
-  if (labels.length === 0) return instance
+  if (recorded === undefined && labels.length === 0) return instance
   const membership = teamMembership(log.filter((candidate) => candidate.seq <= event.seq))
+  const added = recorded ?? assigneesAddedBy(step, labels, membership)
   return {
     ...instance,
-    assignees: mergeAssignees(instance.assignees, assigneesAddedBy(step, labels, membership)),
+    assignees: mergeAssignees(instance.assignees, added),
   }
 }
 
@@ -430,7 +448,13 @@ function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance 
   const revision = event.payload.revision
   if (typeof revision === 'number') revisions[to] = revision
   const entered = optionalAssignees(event.payload.assignees)
-  const moved: ProjectedInstance = { ...instance, currentStep: to, holder: undefined, revisions }
+  const moved: ProjectedInstance = {
+    ...instance,
+    currentStep: to,
+    holder: undefined,
+    queue: optionalString(event.payload.queue),
+    revisions,
+  }
   return entered === undefined ? moved : recordAssignees(moved, entered)
 }
 
@@ -444,6 +468,7 @@ function closed(
     ...instance,
     currentStep: undefined,
     holder: undefined,
+    queue: undefined,
     withdrawal: kind,
     previousStep: optionalString(event.payload.step),
     previousHolder: optionalString(event.payload.holder),
@@ -459,6 +484,7 @@ function reopened(instance: ProjectedInstance, event: Event): ProjectedInstance 
     ...instance,
     currentStep: optionalString(event.payload.step),
     holder: optionalString(event.payload.holder),
+    queue: undefined,
     withdrawal: undefined,
     previousStep: undefined,
     previousHolder: undefined,
