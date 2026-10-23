@@ -734,6 +734,7 @@ export function createApp(config: Config, pool: Pool): Hono {
         step: row.step,
         state: inboxState(row.taskState, row.instanceStatus),
         ...(row.holder === null ? {} : { holder: row.holder }),
+        ...(row.dueAt === null ? {} : { dueAt: row.dueAt }),
         lastActivityAt: row.lastActivityAt,
       })
     }
@@ -1381,6 +1382,8 @@ type InboxItem = {
   readonly step: string
   readonly state: string
   readonly holder?: string
+  /** The deadline of the task, from its escalation timer (VT-1, VT-2, SE-4); absent when the step sets none. */
+  readonly dueAt?: number
   readonly lastActivityAt: number
 }
 

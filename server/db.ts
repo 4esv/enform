@@ -92,6 +92,7 @@ export type InboxRow = {
   readonly taskState: string | null
   readonly instanceStatus: string
   readonly holder: string | null
+  readonly dueAt: number | null
   readonly lastActivityAt: number
 }
 
@@ -687,9 +688,18 @@ export async function readInboxRows(
     and i.status in ('waiting', 'in-progress')`
   let query: string
   let values: string[]
+  // The due time of the current task, from the escalation timer that the step
+  // scheduled (VT-1, VT-2, SE-4): the instance and step scope it, so another
+  // instance's timer never leaks. The newest deadline wins after a close and
+  // an undo reschedules the task.
+  const dueAt = `(select max(tm.fire_at) from timers tm
+    where tm.instance_id = i.id
+      and tm.step = coalesce(t.step, i.current_step)
+      and tm.kind = 'escalation')`
   if (tab === 'available') {
     query = `select t.instance_id, i.flow_slug, t.step, t.state as task_state,
                     i.status as instance_status, t.holder,
+                    ${dueAt} as due_at,
                     ${lastActivity} as last_activity_at
              from tasks t
              join instances i on i.id = t.instance_id
@@ -706,6 +716,7 @@ export async function readInboxRows(
   } else if (tab === 'started') {
     query = `select i.id as instance_id, i.flow_slug, i.current_step as step,
                     t.state as task_state, i.status as instance_status, t.holder,
+                    ${dueAt} as due_at,
                     ${lastActivity} as last_activity_at
              from instances i
              left join tasks t on t.instance_id = i.id and t.step = i.current_step
@@ -716,6 +727,7 @@ export async function readInboxRows(
   } else {
     query = `select t.instance_id, i.flow_slug, t.step, t.state as task_state,
                     i.status as instance_status, t.holder,
+                    ${dueAt} as due_at,
                     ${lastActivity} as last_activity_at
              from tasks t
              join instances i on i.id = t.instance_id
@@ -732,6 +744,7 @@ export async function readInboxRows(
     task_state: string | null
     instance_status: string
     holder: string | null
+    due_at: string | null
     last_activity_at: string
   }>(query, values)
   return result.rows.map((row) => ({
@@ -741,6 +754,7 @@ export async function readInboxRows(
     taskState: row.task_state,
     instanceStatus: row.instance_status,
     holder: row.holder,
+    dueAt: row.due_at === null ? null : Number(row.due_at),
     lastActivityAt: Number(row.last_activity_at),
   }))
 }
