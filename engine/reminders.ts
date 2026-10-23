@@ -19,10 +19,11 @@
 
 import { type ActionResult, type CompletionContext, complete } from './action.js'
 import type { Version } from './concurrency.js'
-import type { FlowStep, Target } from './definition.js'
-import type { Instance } from './instance.js'
-import type { ActorId, Operation, OperationDeps } from './operation.js'
-import type { OutboxEntry } from './outbox.js'
+import { type FlowStep, TARGET_KINDS, type Target, type TargetKind } from './definition.js'
+import type { Assignee, Instance } from './instance.js'
+import type { ActorId, Event, Operation, OperationDeps } from './operation.js'
+import { type OutboxEntry, outboxOfEvent } from './outbox.js'
+import type { Membership } from './resolve.js'
 import { sideEffectKey } from './sideEffects.js'
 import { EMAIL_CONNECTOR } from './submission.js'
 
@@ -194,6 +195,58 @@ function escalationTimer(step: FlowStep, settings: StepTimerSettings): Scheduled
 function targetLabel(target: Target): string {
   const [kind] = Object.keys(target)
   return `${kind}:${String((target as Record<string, string>)[kind])}`
+}
+
+/**
+ * The targets that one `timer.fired@1` event adds (SE-4, I4): the `adds`
+ * labels of its escalation outbox entry. A reminder, a malformed list or an
+ * event without an escalation entry adds none. The event is the occurrence, so
+ * a read of the log reproduces the same labels.
+ */
+export function escalationAddsOfEvent(event: Event): readonly string[] {
+  const entry = outboxOfEvent(event).find((candidate) => candidate.operation === ESCALATION_EMAIL)
+  const adds = entry?.payload.adds
+  if (!Array.isArray(adds)) return []
+  return adds.filter((label): label is string => typeof label === 'string')
+}
+
+/**
+ * The assignees that an escalation adds to one step (SE-4, AS-1): one entry
+ * per target label, in the order the flow names them. `user:<id>` adds that
+ * principal, and `team:<name>` adds the members that the team holds at the
+ * firing. A `group:<name>` label keeps the target with no members because the
+ * group directory read is not in this lane (the stated gap); a dynamic label
+ * needs the instance context that the firing does not carry. The function is
+ * pure and deterministic (I6).
+ */
+export function assigneesAddedBy(
+  step: string,
+  labels: readonly string[],
+  membership: Membership
+): readonly Assignee[] {
+  const added: Assignee[] = []
+  for (const label of labels) {
+    const target = targetOfLabel(label)
+    if (target === undefined) continue
+    added.push({ step, target, members: membersOfTarget(target, membership) })
+  }
+  return added
+}
+
+/** The target that one `adds` label names (SE-4, AS-1), or undefined for a malformed label. */
+function targetOfLabel(label: string): Target | undefined {
+  const separator = label.indexOf(':')
+  if (separator <= 0 || separator === label.length - 1) return undefined
+  const kind = label.slice(0, separator)
+  if (!TARGET_KINDS.includes(kind as TargetKind)) return undefined
+  return { [kind]: label.slice(separator + 1) } as Target
+}
+
+/** The members that one added target resolves to (SE-4, AS-4); a group and a dynamic target resolve to nobody in this lane. */
+function membersOfTarget(target: Target, membership: Membership): readonly string[] {
+  if ('user' in target) return [target.user]
+  if ('team' in target) return membership(target.team)
+  return []
 }
 
 /** The result of a completion that cancels the task's timers (S12, SE-5, I2). */

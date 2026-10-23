@@ -24,13 +24,21 @@ import {
 import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow } from '../engine/flow.js'
 import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
-import { contentHash } from '../engine/instance.js'
+import { contentHash, mergeAssignees } from '../engine/instance.js'
 import type { Event, Operation } from '../engine/operation.js'
 import { type OutboxEntry, outboxOfEvent } from '../engine/outbox.js'
-import { ESCALATION_EMAIL, MINUTE_MS, REMINDER_EMAIL, TIMER_FIRED } from '../engine/reminders.js'
+import {
+  assigneesAddedBy,
+  ESCALATION_EMAIL,
+  escalationAddsOfEvent,
+  MINUTE_MS,
+  REMINDER_EMAIL,
+  TIMER_FIRED,
+} from '../engine/reminders.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { EMAIL_CONNECTOR, INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
+import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 import {
@@ -1387,6 +1395,23 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
        where instance_id = $1 and step = $2`,
       [restore.instanceId, restore.step, restore.holder, event.at, event.seq]
     )
+    // The close cancelled the task's pending timers (SE-5), so the undo
+    // schedules them again from the step's settings and the undo time (S13,
+    // WF-5, SE-5). A cancelled row keeps its I3 key: a reminder is re-armed and
+    // a new deadline occurrence inserts a new escalation, so a stale or
+    // duplicate undo adds no second row (I3).
+    const restoreStep = await stepOfInstance(client, restore.instanceId, restore.step)
+    if (restoreStep !== undefined) {
+      const assignees = await taskAssignees(client, restore.instanceId, restore.step)
+      const to = restore.holder ?? timerRecipient(assignees, restore.step)
+      await scheduleStepTimers(client, {
+        instanceId: restore.instanceId,
+        step: restoreStep,
+        since: event.at,
+        seq: event.seq,
+        ...(to === undefined ? {} : { to }),
+      })
+    }
     return
   }
   if (event.type === TIMER_FIRED) {
@@ -1417,6 +1442,24 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
             ...(to === undefined ? {} : { to }),
           })
         }
+      }
+    }
+    // The escalation adds its targets to the task and to the instance's
+    // assignees (SE-4, I4). The occurrence is the event: a read folds the same
+    // `adds` labels from the log, and this projection stores the same members
+    // in the task row that the inbox reads (I2, I4).
+    if (fired.kind === 'escalation') {
+      const labels = escalationAddsOfEvent(event)
+      if (labels.length > 0) {
+        const membership = await teamMembershipAt(client, event.seq)
+        const added = assigneesAddedBy(fired.step, labels, membership)
+        const assignees = await taskAssignees(client, fired.instanceId, fired.step)
+        const merged = mergeAssignees(assignees, added)
+        await client.query(
+          `update tasks set assignees = $3::jsonb, seq = $4
+           where instance_id = $1 and step = $2`,
+          [fired.instanceId, fired.step, JSON.stringify(merged), event.seq]
+        )
       }
     }
     return
@@ -1652,6 +1695,53 @@ async function stepOfInstance(
   return readStoredDefinition(row.definition, `instance ${instanceId}`).steps.find(
     (candidate) => candidate.key === step
   )
+}
+
+/**
+ * The team membership that a task sees at one point on the log (AS-4, SE-4):
+ * the `config.team.changed@1` events up to the firing, folded by the engine's
+ * own team projection. A rebuild replays the same prefix, so the added members
+ * of an escalation do not depend on a second store (I4, I6).
+ */
+async function teamMembershipAt(
+  client: PoolClient,
+  seq: number
+): Promise<ReturnType<typeof teamMembership>> {
+  const result = await client.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>(
+    `select seq, operation_id, type, at, actor, payload from events
+     where type = $1 and seq <= $2 order by seq`,
+    [TEAM_CHANGE_TYPE, seq]
+  )
+  return teamMembership(
+    result.rows.map((row) => ({
+      seq: Number(row.seq),
+      operationId: row.operation_id,
+      type: row.type,
+      at: Number(row.at),
+      actor: row.actor ?? undefined,
+      payload: row.payload,
+    }))
+  )
+}
+
+/** The resolved assignees that a task row holds, or none when the row is absent (SE-4, I4). */
+async function taskAssignees(
+  client: PoolClient,
+  instanceId: string,
+  step: string
+): Promise<readonly Assignee[]> {
+  const result = await client.query<{ assignees: readonly Assignee[] }>(
+    'select assignees from tasks where instance_id = $1 and step = $2',
+    [instanceId, step]
+  )
+  return result.rows[0]?.assignees ?? []
 }
 
 /** Read the start payload that the projection folds (I4, I13, #222). */

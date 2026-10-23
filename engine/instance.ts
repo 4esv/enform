@@ -204,6 +204,43 @@ export function recordAssignees<T extends Instance>(instance: T, entered: readon
 }
 
 /**
+ * Fold added assignees into the set an instance already holds (SE-4, I13). An
+ * entry for a target that the step already has gains the members it does not
+ * have, and a target that is new adds its entry; no existing entry is removed,
+ * because an escalation adds targets and never removes the current owner
+ * (SE-4). The function is pure and deterministic (I6).
+ */
+export function mergeAssignees(
+  existing: readonly Assignee[],
+  added: readonly Assignee[]
+): readonly Assignee[] {
+  const merged: Assignee[] = existing.map((entry) => ({
+    ...entry,
+    members: [...entry.members],
+  }))
+  for (const entry of added) {
+    const key = targetKey(entry.target)
+    const index = merged.findIndex((held) => targetKey(held.target) === key)
+    if (index === -1) {
+      merged.push({ ...entry, members: [...entry.members] })
+      continue
+    }
+    const held = merged[index]
+    if (held === undefined) continue
+    const members = [...held.members]
+    for (const member of entry.members) if (!members.includes(member)) members.push(member)
+    merged[index] = { ...held, members }
+  }
+  return merged
+}
+
+/** The stable identity of one target, so an add merges into the entry it names (AS-1). */
+function targetKey(target: Target): string {
+  const [kind] = Object.keys(target)
+  return `${kind}:${String((target as Record<string, string>)[kind])}`
+}
+
+/**
  * Append one connector call to an instance (I13, I4). The log grows by one
  * entry; the past entries stay as they were.
  */

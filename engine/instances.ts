@@ -31,8 +31,9 @@ import {
 } from './definition.js'
 import { editableKeys } from './editable.js'
 import { publishedByHash } from './flow.js'
-import { type Assignee, type Instance, recordAssignees } from './instance.js'
+import { type Assignee, type Instance, mergeAssignees, recordAssignees } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
+import { assigneesAddedBy, escalationAddsOfEvent, TIMER_FIRED } from './reminders.js'
 import { isLiveTarget } from './resolve.js'
 import type { TargetResolver } from './routing.js'
 import { evaluateRules } from './rules.js'
@@ -48,6 +49,7 @@ import {
 } from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
+import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
@@ -196,7 +198,7 @@ export function instanceOf(log: Log, instanceId: string): ProjectedInstance | un
   let instance = started(start, instanceId)
   for (const event of events) {
     if (event === start) continue
-    instance = fold(instance, event, pinned.definition)
+    instance = fold(instance, event, pinned.definition, log)
   }
   return instance
 }
@@ -351,7 +353,8 @@ function started(event: Event, instanceId: string): ProjectedInstance {
 function fold(
   instance: ProjectedInstance,
   event: Event,
-  definition: FlowDefinition
+  definition: FlowDefinition,
+  log: Log
 ): ProjectedInstance {
   switch (event.type) {
     case INSTANCE_SUBMITTED: {
@@ -383,6 +386,8 @@ function fold(
       return advanced(closed(instance, event, 'cancelled'))
     case INSTANCE_UNDONE:
       return advanced(reopened(instance, event))
+    case TIMER_FIRED:
+      return escalated(instance, event, log)
     default:
       return instance
   }
@@ -396,6 +401,26 @@ function fold(
  */
 function advanced(instance: ProjectedInstance): ProjectedInstance {
   return { ...instance, version: (instance.version ?? 0) + 1 }
+}
+
+/**
+ * Fold an escalation firing: the targets that the escalation adds join the
+ * assignees of its step without removing the current owner (SE-4, I4). The
+ * targets resolve through the team membership that the log holds up to the
+ * firing, so a read and a rebuild reproduce the same principals (I4, I6). The
+ * version does not advance: a timer firing changes no step state and the write
+ * path advances the counter only for the actions that do (I5).
+ */
+function escalated(instance: ProjectedInstance, event: Event, log: Log): ProjectedInstance {
+  const step = optionalString(event.payload.step)
+  if (step === undefined) return instance
+  const labels = escalationAddsOfEvent(event)
+  if (labels.length === 0) return instance
+  const membership = teamMembership(log.filter((candidate) => candidate.seq <= event.seq))
+  return {
+    ...instance,
+    assignees: mergeAssignees(instance.assignees, assigneesAddedBy(step, labels, membership)),
+  }
 }
 
 /** Fold a send back: the instance revisits the target step, and it records the next revision (WF-3). */

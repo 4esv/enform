@@ -112,7 +112,13 @@ export async function cancelStepTimers(
   return result.rowCount ?? 0
 }
 
-/** Insert one timer, keyed by its side effect's I3 key (I3). A duplicate is a no-op. */
+/**
+ * Insert one timer, keyed by its side effect's I3 key (I3). A duplicate insert
+ * of a pending or fired timer is a no-op; a cancelled timer is re-armed from
+ * the new schedule, so an undo or a send back that re-enters a step lets its
+ * reminder and escalation fire again without adding a second row (SE-4, SE-5,
+ * WF-5, I3, I4).
+ */
 async function insertTimer(
   client: PoolClient,
   instanceId: string,
@@ -125,7 +131,13 @@ async function insertTimer(
     `insert into timers
        (id, kind, fire_at, cancelled_at, fired_at, instance_id, step, recipient, payload, seq)
      values ($1, $2, $3, null, null, $4, $5, $6, $7::jsonb, $8)
-     on conflict (id) do nothing`,
+     on conflict (id) do update
+       set fire_at = excluded.fire_at,
+           recipient = excluded.recipient,
+           payload = excluded.payload,
+           cancelled_at = null,
+           seq = excluded.seq
+       where timers.cancelled_at is not null and timers.fired_at is null`,
     [
       sideEffectKey(timer.entry),
       timer.kind,
