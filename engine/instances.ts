@@ -293,7 +293,8 @@ function takeoverView(
     instance.assignees.some(
       (assignee) => assignee.step === step.key && assignee.members.includes(actor)
     )
-  const claimedAt = holder === undefined ? undefined : claimTimeOf(log, step.key, holder)
+  const claimedAt =
+    holder === undefined ? undefined : claimTimeOf(log, instance.instanceId, step.key, holder)
   return {
     canTakeOver,
     ...(idle === 0 || claimedAt === undefined ? {} : { takeoverAvailableAt: claimedAt + idle }),

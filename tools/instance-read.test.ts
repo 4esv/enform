@@ -15,6 +15,7 @@ import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { sendBack } from '../engine/sendBack.js'
 import { startInstance, submitInstance } from '../engine/submission.js'
+import { takeover } from '../engine/takeover.js'
 
 // Issue #76, FM-3, FM-7, VT-4, S14, DF-2, DX-1, I4, I6, I8: the instance as a
 // step sees it. #187 put the instance id on the log; the projection folds the
@@ -347,31 +348,34 @@ test('#76 an instance whose pinned definition is absent is not projected (DF-2)'
 // that resolves through the projection passes what complete() expects rather
 // than an accidental 0.
 
-test('#242 S10 the read names when an assignee may take a claimed task over (AS-3)', () => {
-  const takeoverDefinition: FlowDefinition = parse(`{
-    "schemaVersion": 2,
-    "steps": [
-      {
-        "key": "registrar",
-        "targets": [{ "team": "registrar-office" }],
-        "takeover": "after-idle",
-        "idleMinutes": 4
-      }
-    ]
-  }`)
-  const takeoverFlow: Flow = {
-    slug: 'takeover-flow',
-    versions: [
-      { version: 1, contentHash: contentHash(takeoverDefinition), definition: takeoverDefinition },
-    ],
-  }
-  const teamResolve: TargetResolver = (target) => ('team' in target ? [SAM, PRISCILLA] : [])
-  const takeoverGrants: readonly Grant[] = [
-    { principal: SAM, scopes: ['instance.start'], resource: 'flow:takeover-flow' },
-    { principal: OUTSIDER, scopes: ['instance.read'], resource: 'flow:takeover-flow' },
+/** The registrar step that allows a takeover after four idle minutes (S10, AS-3). */
+const TAKEOVER_SLUG = 'takeover-flow'
+const TAKEOVER_DEFINITION: FlowDefinition = parse(`{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "registrar",
+      "targets": [{ "team": "registrar-office" }],
+      "takeover": "after-idle",
+      "idleMinutes": 4
+    }
   ]
+}`)
+const takeoverFlow: Flow = {
+  slug: TAKEOVER_SLUG,
+  versions: [
+    { version: 1, contentHash: contentHash(TAKEOVER_DEFINITION), definition: TAKEOVER_DEFINITION },
+  ],
+}
+const teamResolve: TargetResolver = (target) => ('team' in target ? [SAM, PRISCILLA] : [])
+const takeoverGrants: readonly Grant[] = [
+  { principal: SAM, scopes: ['instance.start'], resource: `flow:${TAKEOVER_SLUG}` },
+  { principal: OUTSIDER, scopes: ['instance.read'], resource: `flow:${TAKEOVER_SLUG}` },
+]
+
+test('#242 S10 the read names when an assignee may take a claimed task over (AS-3)', () => {
   const sources = deps()
-  const pushed = push(createFlow('takeover-flow'), takeoverDefinition, sources, 'user:dana')
+  const pushed = push(createFlow(TAKEOVER_SLUG), TAKEOVER_DEFINITION, sources, 'user:dana')
   const published = publish(pushed.flow, sources, 'user:dana')
   let state = apply(published.operation, apply(pushed.operation, emptyState))
   const started = startInstance(
@@ -390,8 +394,8 @@ test('#242 S10 the read names when an assignee may take a claimed task over (AS-
   const instance = projected(state)
   const view = (actor: string): InstanceView => {
     const read = readInstance(actor, instance, {
-      flow: 'takeover-flow',
-      definition: takeoverDefinition,
+      flow: TAKEOVER_SLUG,
+      definition: TAKEOVER_DEFINITION,
       log: state.log,
       grants: takeoverGrants,
     })
@@ -408,6 +412,61 @@ test('#242 S10 the read names when an assignee may take a claimed task over (AS-
   // read but is not an assignee of the step cannot either.
   expect(view(SAM).canTakeOver).toBe(false)
   expect(view(OUTSIDER).canTakeOver).toBe(false)
+})
+
+test('#242 S10 the idle period counts from the claim on this instance (AS-3, I4)', () => {
+  let now = 1_700_000_000_000
+  let next = 0
+  const sources: OperationDeps = {
+    clock: () => now,
+    ids: () => {
+      next += 1
+      return `takeover-${next}`
+    },
+  }
+  const pushed = push(createFlow(TAKEOVER_SLUG), TAKEOVER_DEFINITION, sources, 'user:dana')
+  const published = publish(pushed.flow, sources, 'user:dana')
+  let state = apply(published.operation, apply(pushed.operation, emptyState))
+  const claimAt = (id: string): number => {
+    const started = startInstance(takeoverFlow, id, {}, SAM, sources, teamResolve, takeoverGrants)
+    state = apply(started.operation, state)
+    const instance = projected(state, id)
+    const claimed = claim(instance, SAM, instance.version ?? 0, sources)
+    if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
+    state = apply(claimed.operation, state)
+    return now
+  }
+
+  // Two instances at the same step are claimed by Sam at different times. The
+  // later claim must not move the first instance's idle period (I4).
+  const firstClaimAt = claimAt('inst-a')
+  now += 10 * 60_000
+  claimAt('inst-b')
+  const instance = projected(state, 'inst-a')
+  const view = readInstance(PRISCILLA, instance, {
+    flow: TAKEOVER_SLUG,
+    definition: TAKEOVER_DEFINITION,
+    log: state.log,
+    grants: takeoverGrants,
+  })
+  expect(view?.takeoverAvailableAt, 'the other claim does not move this one').toBe(
+    firstClaimAt + 4 * 60_000
+  )
+
+  // The engine measures the same way: the takeover at the first claim's idle
+  // limit succeeds even though the log holds a later claim for another
+  // instance.
+  const taken = takeover(
+    instance,
+    PRISCILLA,
+    'Sam is out until 10/19',
+    firstClaimAt + 4 * 60_000,
+    4 * 60_000,
+    instance.version ?? 0,
+    state.log,
+    sources
+  )
+  expect(taken.accepted, taken.reason).toBe(true)
 })
 
 test('#191 the projected version counts the accepted actions the write path kept', () => {
