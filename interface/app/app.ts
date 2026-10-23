@@ -534,13 +534,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
         item.append(activity)
       }
       // The step's due time comes from its deadline (VT-2, SE-4, S12). The
-      // engine computes it, and the page only renders the read.
+      // engine computes it, and the page only renders the read. The relative
+      // label uses the page clock, and the absolute time stays in the tooltip
+      // and the `datetime` attribute (VT-2).
       if (step.dueAt !== undefined) {
         const due = document.createElement('time')
         due.className = 'tracker-due'
         due.dataset.trackerDue = ''
         due.dateTime = new Date(step.dueAt).toISOString()
-        due.textContent = `due ${due.dateTime}`
+        due.title = due.dateTime
+        due.textContent = relativeDue(step.dueAt, clock())
         item.append(due)
       }
       if (step.condition !== undefined) {
@@ -1114,6 +1117,15 @@ export async function mountApp(options: AppOptions): Promise<void> {
         holder.textContent = item.holder
         link.appendChild(holder)
       }
+      if (item.dueAt !== undefined) {
+        const due = document.createElement('time')
+        due.className = 'due'
+        due.dataset.inboxDue = ''
+        due.dateTime = new Date(item.dueAt).toISOString()
+        due.title = due.dateTime
+        due.textContent = relativeDue(item.dueAt, clock())
+        link.appendChild(due)
+      }
       if (item.lastActivityAt !== undefined) {
         const activity = document.createElement('time')
         activity.className = 'activity'
@@ -1479,6 +1491,35 @@ const TRACKER_STATES: Readonly<Record<string, string>> = {
 /** The plain-language state that the tracker shows (VT-2, S14). */
 function trackerLabel(state: string): string {
   return TRACKER_STATES[state] ?? state
+}
+
+/**
+ * The relative label of a due time (VT-2, S14): how long remains until the
+ * deadline, or how long it is past. The server read carries the absolute
+ * `dueAt`; the page compares it with its own clock and keeps the absolute time
+ * in the tooltip and the `datetime` attribute.
+ */
+function relativeDue(dueAt: number, now: number): string {
+  const delta = dueAt - now
+  const label = durationLabel(Math.abs(delta))
+  return delta < 0 ? `overdue by ${label}` : `due in ${label}`
+}
+
+/** A coarse duration in plain words: seconds, minutes, hours or days. */
+function durationLabel(milliseconds: number): string {
+  const seconds = Math.round(milliseconds / 1000)
+  if (seconds < 60) return durationUnit(seconds, 'second')
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return durationUnit(minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return durationUnit(hours, 'hour')
+  return durationUnit(Math.round(hours / 24), 'day')
+}
+
+/** One duration unit with its singular or plural noun. */
+function durationUnit(value: number, noun: string): string {
+  const amount = Math.max(1, value)
+  return `${amount} ${noun}${amount === 1 ? '' : 's'}`
 }
 
 /** The plain-language label of one timeline event (S15, VT-5). */
