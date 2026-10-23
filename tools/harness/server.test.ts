@@ -345,6 +345,15 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
         state: 'waiting',
         skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
       },
+      tracker: [
+        {
+          key: 'triage',
+          state: 'skipped',
+          condition: { '==': [{ var: 'urgent' }, false] },
+        },
+        { key: 'advisor', state: 'unopened' },
+        { key: 'registrar', state: 'not-reached' },
+      ],
       visible: [],
       editable: [],
       required: [],

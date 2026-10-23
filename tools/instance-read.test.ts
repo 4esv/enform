@@ -154,6 +154,12 @@ test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', (
     'a hidden field and its label are absent'
   ).toBe(false)
   expect(view?.outcomes).toEqual(['submit'])
+  // The read carries the per-step tracker (VT-2, S14, #244): the current step
+  // waits to be opened and the later step is not reached.
+  expect(view?.tracker).toEqual([
+    { key: 'request', state: 'unopened' },
+    { key: 'review', state: 'not-reached' },
+  ])
 
   // A principal that may read the instance but is not an assignee of the step
   // gets the visible fields and no editable field (FM-3, I8).

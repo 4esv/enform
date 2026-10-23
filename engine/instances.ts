@@ -48,6 +48,7 @@ import {
 } from './status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
+import { type TrackerStep, trackerOf } from './tracker.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -92,6 +93,12 @@ export type InstanceView = {
   readonly instanceId: string
   /** The status line of the instance (VT-1, VT-2, S14), reused from status.ts. */
   readonly status: Status
+  /**
+   * The per-step tracker, one entry per definition step in definition order
+   * (VT-2, S14, #244): the state of every step, the holder of the open step,
+   * the condition that skipped a step and the comment that sent one back.
+   */
+  readonly tracker: readonly TrackerStep[]
   /** The field keys the current step makes visible, in definition order (FM-3, FM-2). */
   readonly visible: readonly string[]
   /** The field keys the actor may edit on the current step (FM-3, FM-2); empty when the actor is not an assignee. */
@@ -249,6 +256,7 @@ export function readInstance(
   return {
     instanceId: current.instanceId,
     status: status(current, context.definition, context.log),
+    tracker: trackerOf(current, context.definition, context.log),
     visible,
     editable,
     required,
