@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { CONTROL_TYPES, parse, serialize } from '../engine/definition.js'
+import { CONTROL_TYPES, parse, serialize, takeoverIdleMs } from '../engine/definition.js'
 
 // Issue #170, DF-1, I9, MVP.md 9.3: definition schema version 2. The engine
 // reads a v1 file and migrates it forward to v2, and reads and writes a v2
@@ -207,6 +207,84 @@ test('#238 the flow undo period round trips through the canonical form (DF-1, I9
     minimum: 1,
   })
   expect(schema.required, 'the undo period is optional').toEqual(['schemaVersion', 'steps'])
+})
+
+/** A canonical v2 file with the registrar step's takeover setting (S10, AS-3). */
+const V2_TAKEOVER_FILE = `{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "registrar",
+      "targets": [
+        {
+          "team": "registrar-office"
+        }
+      ],
+      "outcomes": [
+        "approve"
+      ],
+      "takeover": "after-idle",
+      "idleMinutes": 4
+    }
+  ]
+}
+`
+
+// Issue #242, S10, AS-3, DF-1, I9: a step sets when an assignee may take over
+// a claimed task. The canonical form writes the setting after the outcomes and
+// the idle period after the setting; an absent setting is never written, and
+// the v2 schema validates the setting and a positive idle period.
+test('#242 the step takeover setting round trips through the canonical form (DF-1, I9)', () => {
+  const firstStep = (definition: ReturnType<typeof parse>) => {
+    const [first] = definition.steps
+    if (first === undefined) throw new Error('the fixture has no step')
+    return first
+  }
+  const once = parse(V2_TAKEOVER_FILE)
+  expect(once.steps[0]?.takeover).toBe('after-idle')
+  expect(once.steps[0]?.idleMinutes).toBe(4)
+  expect(takeoverIdleMs(firstStep(once))).toBe(4 * 60_000)
+  expect(serialize(once)).toBe(V2_TAKEOVER_FILE)
+  expect(parse(serialize(once)).steps[0]?.takeover).toBe('after-idle')
+
+  // An absent setting is absent, not `never`: the step opts in (AS-3).
+  expect(parse(V2_FILE).steps[0]?.takeover).toBeUndefined()
+  expect(takeoverIdleMs(firstStep(parse(V2_FILE)))).toBeUndefined()
+
+  const step = (body: string): string =>
+    `{ "schemaVersion": 2, "steps": [ { "key": "s", "targets": [ { "user": "user:sam" } ], ${body} } ] }`
+  expect(() => parse(step('"takeover": "sometimes"'))).toThrow(/not a takeover setting/)
+  expect(() => parse(step('"takeover": "after-idle", "idleMinutes": 0'))).toThrow(
+    /positive integer/
+  )
+  expect(() => parse(step('"takeover": "after-idle", "idleMinutes": 1.5'))).toThrow(
+    /positive integer/
+  )
+  expect(() => parse(step('"takeover": "after-idle", "idleMinutes": "4"'))).toThrow(
+    /positive integer/
+  )
+
+  // `always` measures no idle period and `never` allows none (AS-3).
+  const always = firstStep(parse(step('"takeover": "always"')))
+  expect(takeoverIdleMs(always)).toBe(0)
+  const never = firstStep(parse(step('"takeover": "never"')))
+  expect(takeoverIdleMs(never)).toBeUndefined()
+  // `after-idle` without an explicit period uses the 60 minute default (AS-3).
+  const defaulted = firstStep(parse(step('"takeover": "after-idle"')))
+  expect(takeoverIdleMs(defaulted)).toBe(60 * 60_000)
+
+  const schema = JSON.parse(readFileSync(join(repo, 'schemas', 'flow', 'v2.json'), 'utf8'))
+  expect(schema.$defs.step.properties.takeover).toEqual({
+    description:
+      'When an assignee may take over a claimed task (AS-3, S10): always at once, after-idle after idleMinutes since the claim, or never. Absent means never.',
+    enum: ['always', 'after-idle', 'never'],
+  })
+  expect(schema.$defs.step.properties.idleMinutes).toEqual({
+    description:
+      'The idle period in minutes that after-idle waits before a takeover (AS-3, S10). Absent means 60 minutes.',
+    type: 'integer',
+    minimum: 1,
+  })
 })
 
 // Issue #230, DF-1, FM-1, I9: the field label is part of the definition

@@ -72,6 +72,15 @@ export type ControlType = (typeof CONTROL_TYPES)[number]
 /** The six effects of a rule (FM-2, FM-5). */
 export const RULE_EFFECTS = ['show', 'hide', 'collapse', 'require', 'lock', 'skip'] as const
 
+/** The three takeover settings of a step (AS-3, S10): always, after an idle period, or never. */
+export const TAKEOVER_SETTINGS = ['always', 'after-idle', 'never'] as const
+
+/** One takeover setting of a step (AS-3, S10). */
+export type TakeoverSetting = (typeof TAKEOVER_SETTINGS)[number]
+
+/** The idle minutes that `after-idle` uses when the step does not set `idleMinutes` (AS-3). */
+export const DEFAULT_IDLE_MINUTES = 60
+
 /**
  * The reserved root that a rule condition reads the current step and the
  * acting principal from (FM-2): the condition data is the instance's values
@@ -135,6 +144,8 @@ export type Section = {
  * an actor can choose (WF-2). `skipWhen` is a JSON Logic expression; when it
  * is true the step is skipped (WF-1, S05). `rules` are the conditions that
  * show, hide, collapse, require, lock or skip fields and sections (FM-2, FM-5).
+ * `takeover` and `idleMinutes` set when an assignee may take over a claimed
+ * task (AS-3, S10).
  */
 export type FlowStep = {
   readonly key: string
@@ -144,6 +155,17 @@ export type FlowStep = {
   readonly visible?: readonly string[]
   readonly editable?: readonly string[]
   readonly outcomes?: readonly string[]
+  /**
+   * When an assignee may take over a claimed task (AS-3, S10): `always` at
+   * once, `after-idle` after `idleMinutes` since the claim, or `never`. An
+   * absent setting means `never`, so a step opts in.
+   */
+  readonly takeover?: TakeoverSetting
+  /**
+   * The idle period in minutes that `after-idle` waits before a takeover
+   * (AS-3, S10). It is a positive integer; an absent setting means 60 minutes.
+   */
+  readonly idleMinutes?: number
   readonly skipWhen?: JsonValue
   readonly rules?: readonly Rule[]
 }
@@ -425,6 +447,8 @@ function readV2Step(body: unknown): FlowStep {
     visible?: readonly string[]
     editable?: readonly string[]
     outcomes?: readonly string[]
+    takeover?: TakeoverSetting
+    idleMinutes?: number
     skipWhen?: JsonValue
     rules?: readonly Rule[]
   } = { key: body.key, targets: readTargets(body.targets) }
@@ -445,6 +469,10 @@ function readV2Step(body: unknown): FlowStep {
 
   const outcomes = readOutcomes(body.outcomes)
   if (outcomes !== undefined) step.outcomes = outcomes
+  const takeover = readTakeover(body.takeover)
+  if (takeover !== undefined) step.takeover = takeover
+  const idleMinutes = readIdleMinutes(body.idleMinutes)
+  if (idleMinutes !== undefined) step.idleMinutes = idleMinutes
   if (body.skipWhen !== undefined) step.skipWhen = body.skipWhen as JsonValue
   const rules = readRules(body.rules, fieldKeys, sectionKeys)
   if (rules !== undefined) step.rules = rules
@@ -649,6 +677,46 @@ function refuseReservedKey(key: string): void {
   }
 }
 
+/**
+ * Read the optional takeover setting of a step (AS-3, S10). An absent setting
+ * means `never`; a present one is `always`, `after-idle` or `never`.
+ */
+function readTakeover(body: unknown): TakeoverSetting | undefined {
+  if (body === undefined) return undefined
+  if (!TAKEOVER_SETTINGS.includes(body as TakeoverSetting)) {
+    throw new Error(
+      `flow definition: ${String(body)} is not a takeover setting (AS-3), expected always, after-idle or never`
+    )
+  }
+  return body as TakeoverSetting
+}
+
+/**
+ * Read the optional idle period of an `after-idle` takeover (AS-3, S10). An
+ * absent setting means 60 minutes; a present one is a positive number of
+ * minutes.
+ */
+function readIdleMinutes(body: unknown): number | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'number' || !Number.isInteger(body) || body < 1) {
+    throw new Error('flow definition: idleMinutes must be a positive integer (AS-3)')
+  }
+  return body
+}
+
+/**
+ * The idle period in milliseconds that a step allows before a takeover (AS-3,
+ * S10): 0 for `always`, `idleMinutes` minutes for `after-idle` (60 when the
+ * step does not set it), and undefined for `never` or an absent setting. The
+ * engine takes the period as an injected number; this function is the one
+ * place that reads it from the flow. It is pure and deterministic (I6).
+ */
+export function takeoverIdleMs(step: FlowStep): number | undefined {
+  if (step.takeover === undefined || step.takeover === 'never') return undefined
+  if (step.takeover === 'always') return 0
+  return (step.idleMinutes ?? DEFAULT_IDLE_MINUTES) * 60_000
+}
+
 /** Read the optional outcomes of a step (WF-2). */
 function readOutcomes(body: unknown): readonly string[] | undefined {
   if (body === undefined) return undefined
@@ -669,8 +737,8 @@ function canonicalDefinition(definition: FlowDefinition): JsonValue {
 
 /**
  * The canonical value of one step: key, targets, then the optional flat
- * fields, sections, visible and editable keys, outcomes, skip condition and
- * rules.
+ * fields, sections, visible and editable keys, outcomes, takeover setting,
+ * idle period, skip condition and rules.
  */
 function canonicalStep(step: FlowStep): JsonValue {
   const canonical: Record<string, JsonValue> = {
@@ -682,6 +750,8 @@ function canonicalStep(step: FlowStep): JsonValue {
   if (step.visible !== undefined) canonical.visible = [...step.visible]
   if (step.editable !== undefined) canonical.editable = [...step.editable]
   if (step.outcomes !== undefined) canonical.outcomes = [...step.outcomes]
+  if (step.takeover !== undefined) canonical.takeover = step.takeover
+  if (step.idleMinutes !== undefined) canonical.idleMinutes = step.idleMinutes
   if (step.skipWhen !== undefined) canonical.skipWhen = canonicalJson(step.skipWhen)
   if (step.rules !== undefined) canonical.rules = step.rules.map(canonicalRule)
   return canonical
