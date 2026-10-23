@@ -72,6 +72,20 @@ services:
     networks:
       - enform
 
+  mailpit:
+    # Issue #240, SE-1: a real SMTP sink for local development and CI. The
+    # worker sends to it exactly as it sends to a production SMTP server; the
+    # HTTP interface at :8025 shows the messages the integration suite reads.
+    image: axllent/mailpit:v1.27.8
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_HTTP_PORT:-8025}:8025"
+    networks:
+      - enform
+
   server:
     # The enform engine. It answers under /api/v1 (MVP.md 9.1).
     image: ${ENFORM_SERVER_IMAGE:-ghcr.io/enform/enform-server:0.1.0}
@@ -87,6 +101,8 @@ services:
         ${ENFORM_OIDC_ISSUER_URL:-http://keycloak:8080/realms/enform-local}
       ENFORM_OIDC_CLIENT_ID: ${ENFORM_OIDC_CLIENT_ID:-enform}
       ENFORM_OIDC_CLIENT_SECRET: ${ENFORM_OIDC_CLIENT_SECRET:-enform-dev-secret}
+      ENFORM_SMTP_URL: ${ENFORM_SMTP_URL:-smtp://mailpit:1025}
+      ENFORM_MAIL_FROM: ${ENFORM_MAIL_FROM:-enform@localhost}
       ENFORM_LOG_LEVEL: ${ENFORM_LOG_LEVEL:-info}
     ports:
       - "${ENFORM_HTTP_PORT:-8080}:8080"
@@ -116,11 +132,16 @@ services:
       ENFORM_DATABASE_URL: >-
         ${ENFORM_DATABASE_URL:-postgres://enform:enform@postgres:5432/enform}
       ENFORM_SERVER_URL: ${ENFORM_SERVER_URL:-http://server:8080}
+      ENFORM_PUBLIC_URL: ${ENFORM_PUBLIC_URL:-http://localhost:8080}
+      ENFORM_SMTP_URL: ${ENFORM_SMTP_URL:-smtp://mailpit:1025}
+      ENFORM_MAIL_FROM: ${ENFORM_MAIL_FROM:-enform@localhost}
       ENFORM_LOG_LEVEL: ${ENFORM_LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
       server:
+        condition: service_started
+      mailpit:
         condition: service_started
     networks:
       - enform

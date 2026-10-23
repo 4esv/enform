@@ -16,6 +16,9 @@ export type TestConfig = {
   readonly keycloakAdminPassword: string
   readonly clientId: string
   readonly clientSecret: string
+  readonly smtpUrl: string
+  readonly mailFrom: string
+  readonly mailpitUrl: string
 }
 
 /** Read the test environment, or name the variable that is missing. */
@@ -28,6 +31,9 @@ export function testConfig(): TestConfig {
     keycloakAdminPassword: optional('ENFORM_TEST_KEYCLOAK_ADMIN_PASSWORD', 'admin'),
     clientId: optional('ENFORM_TEST_CLIENT_ID', 'enform'),
     clientSecret: optional('ENFORM_TEST_CLIENT_SECRET', 'enform-dev-secret'),
+    smtpUrl: optional('ENFORM_TEST_SMTP_URL', 'smtp://127.0.0.1:1025'),
+    mailFrom: optional('ENFORM_TEST_MAIL_FROM', optional('ENFORM_MAIL_FROM', 'enform@test.local')),
+    mailpitUrl: optional('ENFORM_TEST_MAILPIT_URL', 'http://127.0.0.1:8025'),
   }
 }
 
