@@ -230,26 +230,58 @@ export function readInstance(
   context: StatusContext,
   resolve?: TargetResolver
 ): InstanceView | undefined {
+  return viewForStep(actor, instance, context, instance.currentStep, resolve)
+}
+
+/**
+ * Read the instance as one actor and one earlier or current step see it (OU-1,
+ * FM-3, FM-7, I8). The authorization is the same `mayRead` rule as the
+ * instance read, so a principal that may not read the instance answers
+ * undefined. The form is the named definition step with the instance's values
+ * and the same rules; the status, the tracker and the history stay the
+ * instance's current state (I4). The caller names a step that the pinned
+ * definition has; an absent step renders no form, exactly as a finished
+ * instance does.
+ */
+export function readInstanceStep(
+  actor: ActorId,
+  instance: ProjectedInstance,
+  context: StatusContext,
+  stepKey: string | undefined,
+  resolve?: TargetResolver
+): InstanceView | undefined {
+  return viewForStep(actor, instance, context, stepKey, resolve)
+}
+
+/** The shared read of one step's form with the instance's status and history. */
+function viewForStep(
+  actor: ActorId,
+  instance: ProjectedInstance,
+  context: StatusContext,
+  formStepKey: string | undefined,
+  resolve?: TargetResolver
+): InstanceView | undefined {
   const current = resolve === undefined ? instance : refreshLive(instance, resolve)
   if (!mayRead(actor, current, context)) return undefined
-  const step = stepOf(context.definition, current.currentStep)
+  const formStep = stepOf(context.definition, formStepKey)
+  const currentStep = stepOf(context.definition, current.currentStep)
   let visible: readonly string[] = []
   let editable: readonly string[] = []
   let required: readonly string[] = []
   let collapsed: readonly string[] = []
   let fields: readonly InstanceViewField[] = []
   let outcomes: readonly string[] = []
-  if (step !== undefined) {
-    const state = evaluateRules(step, current.values ?? {}, actor)
-    visible = fieldKeys(step).filter(
+  if (formStep !== undefined) {
+    const state = evaluateRules(formStep, current.values ?? {}, actor)
+    visible = fieldKeys(formStep).filter(
       (key) => state.fields[key].visible && !state.fields[key].skipped
     )
-    editable = editableKeys(actor, current, step).filter((key) => !state.fields[key].locked)
-    required = fieldKeys(step).filter((key) => state.fields[key].required)
-    collapsed = (step.sections ?? [])
+    editable = editableKeys(actor, current, formStep).filter((key) => !state.fields[key].locked)
+    required = fieldKeys(formStep).filter((key) => state.fields[key].required)
+    collapsed = (formStep.sections ?? [])
       .filter((section) => state.sections[section.key].collapsed)
       .map((section) => section.key)
-    fields = fieldsOf(step)
+    fields = fieldsOf(formStep)
       .filter((field) => visible.includes(field.key))
       .map((field) => ({
         key: field.key,
@@ -257,9 +289,9 @@ export function readInstance(
         ...(field.label === undefined ? {} : { label: field.label }),
         ...(field.options === undefined ? {} : { options: [...field.options] }),
       }))
-    outcomes = step.outcomes ?? []
+    outcomes = formStep.outcomes ?? []
   }
-  const takeover = takeoverView(current, actor, step, context.log)
+  const takeover = takeoverView(current, actor, currentStep, context.log)
   return {
     instanceId: current.instanceId,
     status: status(current, context.definition, context.log),
