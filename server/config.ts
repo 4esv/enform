@@ -30,6 +30,19 @@ export type SessionConfig = {
   readonly encryptionKey: string
 }
 
+/** The mail settings of an installation (SE-1, SE-2, #240). */
+export type MailConfig = {
+  /**
+   * The SMTP URL that the worker sends through (`smtp://host:port`, with
+   * credentials and TLS options in the URL). An empty value disables email:
+   * the worker leaves the outbox queued and sends nothing, so a small
+   * installation runs without a mail server.
+   */
+  readonly smtpUrl: string
+  /** The envelope sender of every enform email (`ENFORM_MAIL_FROM`). */
+  readonly from: string
+}
+
 /** The configuration that `serve`, `migrate`, `worker`, `admin` and `doctor` read. */
 export type Config = {
   readonly publicUrl: string
@@ -37,6 +50,7 @@ export type Config = {
   readonly databaseUrl: string
   readonly keycloak: KeycloakConfig
   readonly session: SessionConfig
+  readonly mail: MailConfig
   readonly logLevel: string
 }
 
@@ -62,6 +76,10 @@ export const defaultConfig: Config = {
     absoluteHours: 12,
     encryptionKey: '',
   },
+  mail: {
+    smtpUrl: '',
+    from: 'enform@localhost',
+  },
   logLevel: 'info',
 }
 
@@ -81,6 +99,8 @@ const FLAG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   '--session-idle-minutes': ['session', 'idleMinutes'],
   '--session-absolute-hours': ['session', 'absoluteHours'],
   '--session-encryption-key': ['session', 'encryptionKey'],
+  '--smtp-url': ['mail', 'smtpUrl'],
+  '--mail-from': ['mail', 'from'],
 }
 
 /** The environment variables that name a configuration value, and the key they set. */
@@ -99,6 +119,8 @@ const ENV_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ENFORM_SESSION_IDLE_MINUTES: ['session', 'idleMinutes'],
   ENFORM_SESSION_ABSOLUTE_HOURS: ['session', 'absoluteHours'],
   ENFORM_SESSION_ENCRYPTION_KEY: ['session', 'encryptionKey'],
+  ENFORM_SMTP_URL: ['mail', 'smtpUrl'],
+  ENFORM_MAIL_FROM: ['mail', 'from'],
 }
 
 /** The deprecated OIDC names that an existing Compose file and unit may still carry. */
@@ -127,6 +149,10 @@ type Draft = {
     idleMinutes: number
     absoluteHours: number
     encryptionKey: string
+  }
+  mail: {
+    smtpUrl: string
+    from: string
   }
 }
 
@@ -295,6 +321,12 @@ function applyValues(draft: Draft, values: Record<string, unknown>): void {
     draft.session.absoluteHours = numberValue(session.absoluteHours, draft.session.absoluteHours)
     draft.session.encryptionKey = text(session.encryptionKey, draft.session.encryptionKey)
   }
+
+  const mail = section(values.mail)
+  if (mail !== undefined) {
+    draft.mail.smtpUrl = text(mail.smtpUrl, draft.mail.smtpUrl)
+    draft.mail.from = text(mail.from, draft.mail.from)
+  }
 }
 
 /** A string field, or the value already in the draft. */
@@ -326,6 +358,7 @@ function draftOf(config: Config): Draft {
     logLevel: config.logLevel,
     keycloak: { ...config.keycloak },
     session: { ...config.session },
+    mail: { ...config.mail },
   }
 }
 
@@ -350,6 +383,10 @@ function finalize(draft: Draft): Config {
       absoluteHours: positiveNumber(draft.session.absoluteHours, 'session.absoluteHours'),
       encryptionKey: String(draft.session.encryptionKey),
     },
+    mail: {
+      smtpUrl: String(draft.mail.smtpUrl),
+      from: String(draft.mail.from),
+    },
   }
 }
 
@@ -371,5 +408,6 @@ function tomlOf(config: Config): Record<string, unknown> {
     logLevel: config.logLevel,
     keycloak: { ...config.keycloak },
     session: { ...config.session },
+    mail: { ...config.mail },
   }
 }

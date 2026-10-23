@@ -33,6 +33,7 @@ import { newEncryptionKey, validEncryptionKey } from '../server/crypto.js'
 import { createPool, migrationStatus, rebuild, runMigrations } from '../server/db.js'
 import { serveHttp } from '../server/http.js'
 import { oidcConfiguration } from '../server/keycloak.js'
+import { checkMail } from '../server/mail.js'
 import { clearDemo, seedDemo } from '../server/seed.js'
 import { versionLine } from '../server/version.js'
 import { startWorker } from '../server/worker.js'
@@ -402,7 +403,7 @@ function printHelp(): void {
       '  init      write the configuration, create the database, migrate, create the first administrator and serve',
       '  serve     serve the configured public URL',
       '  migrate   apply the schema migrations; --status reports them',
-      '  worker    run the outbox and timer loop',
+      '  worker    deliver the outbox through SMTP',
       '  admin     create the first administrator, or rebuild the projections (admin rebuild)',
       '  seed      load a demo seed (seed demo) or remove only its records (seed clear)',
       '  doctor    check the configuration, the database and the identity provider',
@@ -435,7 +436,8 @@ function runServiceCommand(
 
 /** `enform init`: the walking skeleton of DE-1. */
 async function commandInit(args: Args, json: boolean): Promise<number> {
-  const usage = 'enform init --admin-email <email> --admin-password <password> [--config <path>]'
+  const usage =
+    'enform init --admin-email <email> --admin-password <password> [--smtp-url <url>] [--mail-from <address>] [--config <path>]'
   const path = configPath(args.flags)
   const loaded = loadConfig(args.flags)
   // The refresh-token cipher needs one key per installation (#218). `init`
@@ -505,7 +507,7 @@ async function commandMigrate(args: Args, json: boolean): Promise<number> {
 async function commandWorker(args: Args): Promise<number> {
   const config = loadConfig(args.flags)
   const worker = startWorker(config)
-  process.stderr.write('enform worker: polling the outbox and timers\n')
+  process.stderr.write('enform worker: delivering the outbox\n')
   await waitForSignal(async () => worker.stop())
   return 0
 }
@@ -617,7 +619,7 @@ function clearText(result: Awaited<ReturnType<typeof clearDemo>>): string {
   return lines.join('\n')
 }
 
-/** `enform doctor`: check the configuration, the database and the identity provider (DE-5). */
+/** `enform doctor`: check the configuration, the database, the identity provider and email (DE-5). */
 async function commandDoctor(args: Args, json: boolean): Promise<number> {
   const config = loadConfig(args.flags)
   const keyOk = validEncryptionKey(config.session.encryptionKey)
@@ -656,6 +658,9 @@ async function commandDoctor(args: Args, json: boolean): Promise<number> {
   } catch (error) {
     checks.push({ name: 'identity provider', ok: false, detail: messageOf(error) })
   }
+
+  const mail = await checkMail(config)
+  checks.push({ name: 'email', ok: mail.ok, detail: mail.detail })
 
   const ok = checks.every((check) => check.ok)
   if (json) {

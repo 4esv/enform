@@ -73,6 +73,12 @@ systemctl enable --now enform.service enform-worker.service
 command-line flag wins over the environment, which wins over the file, which
 wins over the default (ADR 0011).
 
+Add `--smtp-url smtp://mail.example.com:587 --mail-from enform@example.com` to
+`enform init` to let the worker send email. Without an SMTP URL the worker
+logs the queued side effects once and sends nothing, so an installation
+without a mail server still runs; `enform doctor` reports the check as
+optional.
+
 ## Container
 
 `deploy/Dockerfile` is a multi-stage Node 26 build. It runs `pnpm build`, copies
@@ -88,6 +94,25 @@ docker run --rm -p 8080:8080 enform:local version
 The image entry point is `node dist/cli/main.js`, so the same image runs
 `serve`, `worker`, `migrate` and `admin`.
 
+## Email
+
+The engine records each side effect in the outbox (SE-1, SE-2). The `worker`
+claims the due rows, sends them through the SMTP URL and records `queued`,
+`sent` or `failed` with the attempt count, the last error and an exponential
+backoff. PostgreSQL is the only queue (ADR 0003), so a side effect and its
+state change commit together.
+
+Compose runs Mailpit as a real SMTP sink for development and CI. It is not a
+fake in the product path: the worker opens an SMTP connection to it exactly as
+it opens one to a production server. Open `http://localhost:8025` to read the
+messages.
+
+```sh
+docker compose -f deploy/compose.yaml up -d --wait postgres keycloak mailpit
+enform init ... --smtp-url smtp://127.0.0.1:1025 --mail-from enform@test.local
+enform worker --config /etc/enform/enform.toml
+```
+
 ## Services
 
 | Service | Image | Purpose |
@@ -95,7 +120,8 @@ The image entry point is `node dist/cli/main.js`, so the same image runs
 | `postgres` | `postgres:17` | The store and job queue of ADR 0003. |
 | `keycloak` | `quay.io/keycloak/keycloak:26.0` | The broker of ADR 0005. |
 | `server` | `ENFORM_SERVER_IMAGE` | The engine. It answers under `/api/v1`. |
-| `worker` | `ENFORM_WORKER_IMAGE` | Runs side effects from the outbox. |
+| `worker` | `ENFORM_WORKER_IMAGE` | Delivers the outbox through SMTP, with retries and backoff. |
+| `mailpit` | `axllent/mailpit:v1.27.8` | A real SMTP sink for development and CI. SMTP on 1025, HTTP on 8025. |
 
 The server and the worker images are the release images that the build
 pipeline publishes. Until then, override `ENFORM_SERVER_IMAGE` and
@@ -117,7 +143,7 @@ pipeline publishes. Until then, override `ENFORM_SERVER_IMAGE` and
 | `ENFORM_WORKER_IMAGE` | `ghcr.io/enform/enform-worker:0.1.0` | The worker image. |
 | `ENFORM_HTTP_ADDR` | `0.0.0.0:8080` | The server listen address. |
 | `ENFORM_HTTP_PORT` | `8080` | The published server port. |
-| `ENFORM_PUBLIC_URL` | `http://localhost:8080` | The public server URL. |
+| `ENFORM_PUBLIC_URL` | `http://localhost:8080` | The public server URL, and the base of the flow/instance link in every email. |
 | `ENFORM_DATABASE_URL` | `postgres://enform:enform@postgres:5432/enform` | The store URL. |
 | `ENFORM_OIDC_ISSUER_URL` | `http://keycloak:8080/realms/enform-local` | The realm issuer (legacy name for `ENFORM_KEYCLOAK_URL` and `ENFORM_KEYCLOAK_REALM`). |
 | `ENFORM_OIDC_CLIENT_ID` | `enform` | The OIDC client id (legacy name). |
@@ -132,6 +158,11 @@ pipeline publishes. Until then, override `ENFORM_SERVER_IMAGE` and
 | `ENFORM_SESSION_IDLE_MINUTES` | `30` | The idle timeout of a session. |
 | `ENFORM_SESSION_ABSOLUTE_HOURS` | `12` | The absolute lifetime of a session. |
 | `ENFORM_SESSION_ENCRYPTION_KEY` | none | The base64 32-byte key that encrypts the refresh token at rest. `enform init` writes one when the configuration has none, and `enform doctor` checks it. |
+| `ENFORM_SMTP_URL` | `smtp://mailpit:1025` in Compose, none otherwise | The SMTP URL the worker sends through. An empty value disables email and leaves the outbox queued. `enform init` writes it when given `--smtp-url`, and `enform doctor` checks it when configured. |
+| `ENFORM_MAIL_FROM` | `enform@localhost` | The envelope sender of every enform email. `enform init` writes it when given `--mail-from`. |
+| `MAILPIT_SMTP_PORT` | `1025` | The published Mailpit SMTP port. |
+| `MAILPIT_HTTP_PORT` | `8025` | The published Mailpit HTTP port. |
+| `MAILPIT_MAX_MESSAGES` | `5000` | How many messages Mailpit keeps. |
 | `ENFORM_SERVER_URL` | `http://server:8080` | The server URL the worker uses. |
 | `ENFORM_LOG_LEVEL` | `info` | The log level. |
 

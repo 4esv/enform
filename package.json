@@ -30,6 +30,7 @@
   "dependencies": {
     "@hono/node-server": "2.1.5",
     "hono": "4.13.13",
+    "nodemailer": "10.2.1",
     "openid-client": "6.8.8",
     "pg": "8.23.1",
     "smol-toml": "1.9.1"

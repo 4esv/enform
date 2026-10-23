@@ -16,14 +16,16 @@ enform is a self-hosted system for forms with steps, approvals and routing. Peop
 
 ```sh
 make setup      # Node 26 and pnpm 10; installs the pinned dependencies
-make stack      # the local PostgreSQL and Keycloak of deploy/compose.yaml
+make stack      # the local PostgreSQL, Keycloak and Mailpit of deploy/compose.yaml
 make init       # writes the configuration, migrates, creates the administrator and serves
 make seed       # loads the DE-4 demo organization and prints its credentials once
 make seed-clear # removes only the records that the seed created
 ```
 
 `make init` serves `http://localhost:8080` until you stop it, so run `make seed`
-and `make seed-clear` from a second terminal. The configuration path, the
+and `make seed-clear` from a second terminal. `enform worker` delivers the
+outbox through the configured SMTP URL; the Compose stack runs Mailpit as a
+real SMTP sink at `http://localhost:8025` for development and CI. The configuration path, the
 database URL and the administrator values are the `ENFORM_*` variables in
 [`deploy/README.md`](deploy/README.md). The demo seed creates six users, two
 teams, their grants, a published course-overload flow and four in-flight
