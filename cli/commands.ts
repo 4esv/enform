@@ -610,10 +610,10 @@ function clearText(result: Awaited<ReturnType<typeof clearDemo>>): string {
   const { cleared, operationId } = result
   if (operationId === '') return 'demo seed: no live records to clear'
   const lines = [
-    `cleared demo seed: ${cleared.users.length} user(s), ${cleared.teams.length} team(s), ${cleared.flows.length} flow(s), ${cleared.instances.length} instance(s), ${cleared.grants.length} grant(s)`,
+    `cleared demo seed: ${cleared.users.length} user(s), ${cleared.groups.length} group(s), ${cleared.teams.length} team(s), ${cleared.flows.length} flow(s), ${cleared.instances.length} instance(s), ${cleared.grants.length} grant(s)`,
     `seed.cleared@1 ${operationId}`,
   ]
-  for (const kind of ['users', 'teams', 'flows', 'instances', 'grants'] as const) {
+  for (const kind of ['users', 'groups', 'teams', 'flows', 'instances', 'grants'] as const) {
     for (const record of cleared[kind]) lines.push(`  ${record.kind} ${record.id}`)
   }
   return lines.join('\n')

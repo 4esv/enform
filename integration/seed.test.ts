@@ -55,11 +55,17 @@ type SeedOutput = {
   readonly flow?: { readonly slug: string; readonly title: string; readonly url: string }
   readonly users?: readonly DemoUser[]
   readonly teams?: readonly { readonly name: string; readonly members: readonly string[] }[]
+  readonly groups?: readonly {
+    readonly id: string
+    readonly name: string
+    readonly members: readonly string[]
+  }[]
   readonly instances?: readonly DemoInstance[]
   readonly records?: number
   readonly cleared?: {
     readonly users: readonly { readonly id: string }[]
     readonly teams: readonly { readonly id: string }[]
+    readonly groups: readonly { readonly id: string }[]
     readonly flows: readonly { readonly id: string }[]
     readonly instances: readonly { readonly id: string }[]
     readonly grants: readonly { readonly id: string }[]
@@ -398,6 +404,7 @@ test('#234 I4 seed clear removes only the demo records and the demo tokens stop 
   expect(cleared.ok).toBe(true)
   expect(cleared.cleared?.users).toHaveLength(6)
   expect(cleared.cleared?.teams).toHaveLength(2)
+  expect(cleared.cleared?.groups).toHaveLength(1)
   expect(cleared.cleared?.flows.map((record) => record.id)).toEqual([slug])
   expect(cleared.cleared?.instances).toHaveLength(4)
   expect(cleared.cleared?.grants.length, 'the seeded grants are removed').toBeGreaterThan(5)

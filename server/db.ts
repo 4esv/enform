@@ -115,7 +115,7 @@ export type AppendResult = { readonly inserted: boolean; readonly seq: number | 
 export const SEED_CLEARED_TYPE = 'seed.cleared@1'
 
 /** One kind of record that a seed profile created (DE-4). */
-export type SeedRecordKind = 'user' | 'team' | 'flow' | 'instance' | 'grant'
+export type SeedRecordKind = 'user' | 'group' | 'team' | 'flow' | 'instance' | 'grant'
 
 /** One record that a seed profile created, marked in `seed_records` (DE-4). */
 export type SeedRecord = {
@@ -1632,6 +1632,11 @@ async function deleteClearedSeedProjections(client: PoolClient): Promise<void> {
     if (record.kind === 'team') {
       await client.query('delete from team_members where team_slug = $1', [record.id])
       await client.query('delete from teams where slug = $1', [record.id])
+      continue
+    }
+    if (record.kind === 'group') {
+      // A directory group has no local projection; the caller deletes it from
+      // Keycloak, as it deletes a user (DE-4, ID-6).
       continue
     }
     if (record.kind === 'flow') {

@@ -31,7 +31,13 @@ import {
   type SeedRecord,
 } from './db.js'
 import { newOperationId } from './ids.js'
-import { createDirectoryUser, deleteDirectoryUser } from './keycloak.js'
+import {
+  addGroupMember,
+  createDirectoryGroup,
+  createDirectoryUser,
+  deleteDirectoryGroup,
+  deleteDirectoryUser,
+} from './keycloak.js'
 
 /** The profile name that every demo record carries (DE-4). */
 export const DEMO_PROFILE = 'demo'
@@ -66,6 +72,11 @@ export type SeedDemoResult = {
   readonly flow?: { readonly slug: string; readonly title: string; readonly url: string }
   readonly users?: readonly DemoUser[]
   readonly teams?: readonly { readonly name: string; readonly members: readonly string[] }[]
+  readonly groups?: readonly {
+    readonly id: string
+    readonly name: string
+    readonly members: readonly string[]
+  }[]
   readonly instances?: readonly DemoInstance[]
   readonly records?: number
 }
@@ -76,6 +87,7 @@ export type ClearDemoResult = {
   readonly cleared: {
     readonly users: readonly SeedRecord[]
     readonly teams: readonly SeedRecord[]
+    readonly groups: readonly SeedRecord[]
     readonly flows: readonly SeedRecord[]
     readonly instances: readonly SeedRecord[]
     readonly grants: readonly SeedRecord[]
@@ -134,6 +146,11 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
   const lin = requireUser(users, 'chair')
   const priya = requireUser(users, 'reader')
 
+  // The directory group of the chairs (ID-6, AS-1): a group target names its
+  // id, and the group's members are the people it holds now.
+  const chairGroup = await createDirectoryGroup(config, `CS-Chairs-${run}`)
+  await addGroupMember(config, chairGroup.id, lin.id)
+
   const slug = `demo-course-overload-${run}`
   const registrarTeam = `registrar-office-${run}`
   const chairsTeam = `chairs-${run}`
@@ -159,6 +176,12 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     },
     { principal: chairsTeam, resource: flowResource, scopes: ['flow.read'] },
     { principal: chairsTeam, resource: stepResource('chair'), scopes: ['step.outcome:approve'] },
+    { principal: `group:${chairGroup.id}`, resource: flowResource, scopes: ['flow.read'] },
+    {
+      principal: `group:${chairGroup.id}`,
+      resource: stepResource('chair'),
+      scopes: ['step.outcome:approve'],
+    },
     {
       principal: priya.id,
       resource: flowResource,
@@ -178,7 +201,7 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     steps: [
       {
         key: 'chair',
-        targets: [{ team: chairsTeam }],
+        targets: [{ group: chairGroup.id }],
         outcomes: ['approve'],
         skipWhen: { '<=': [{ var: 'credits' }, 2] },
       },
@@ -240,12 +263,14 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     [registrarTeam, [ana.id, lee.id]],
     [chairsTeam, [lin.id]],
   ])
+  const groupMembers = new Map<string, readonly string[]>([[chairGroup.id, [lin.id]]])
   const resolveFor =
     (starter: string): TargetResolver =>
     (target) => {
       if ('user' in target) return [target.user]
       if ('starter' in target) return [starter]
       if ('team' in target) return teamMembers.get(target.team) ?? []
+      if ('group' in target) return groupMembers.get(target.group) ?? []
       return []
     }
 
@@ -341,6 +366,7 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
   const records: NewSeedRecord[] = [
     ...users.map((user) => record('user', user.id, baseAt)),
     ...teamRecords([registrarTeam, chairsTeam], baseAt),
+    record('group', chairGroup.id, baseAt),
     record('flow', slug, baseAt),
     ...instances.map((instance) => record('instance', instance.id, baseAt)),
     ...grants.map((grant) => record('grant', grantRecordId(grant), baseAt)),
@@ -361,6 +387,7 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
       { name: registrarTeam, members: [ana.id, lee.id] },
       { name: chairsTeam, members: [lin.id] },
     ],
+    groups: [{ id: chairGroup.id, name: chairGroup.name, members: [lin.id] }],
     instances,
     records: records.length,
   }
@@ -371,6 +398,8 @@ export async function clearDemo(config: Config, pool: Pool): Promise<ClearDemoRe
   const live = await readSeedRecords(pool, DEMO_PROFILE, true)
   const users = live.filter((record) => record.kind === 'user')
   for (const user of users) await deleteDirectoryUser(config, user.id)
+  const groups = live.filter((record) => record.kind === 'group')
+  for (const group of groups) await deleteDirectoryGroup(config, group.id)
   const cleared = await clearSeedRecords(pool, DEMO_PROFILE, Date.now(), SEED_ACTOR)
   const records = cleared.records.length > 0 ? cleared.records : live
   return {
@@ -378,6 +407,7 @@ export async function clearDemo(config: Config, pool: Pool): Promise<ClearDemoRe
     cleared: {
       users: records.filter((record) => record.kind === 'user'),
       teams: records.filter((record) => record.kind === 'team'),
+      groups: records.filter((record) => record.kind === 'group'),
       flows: records.filter((record) => record.kind === 'flow'),
       instances: records.filter((record) => record.kind === 'instance'),
       grants: records.filter((record) => record.kind === 'grant'),

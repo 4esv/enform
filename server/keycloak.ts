@@ -39,6 +39,21 @@ export class DirectoryUserExistsError extends Error {
   }
 }
 
+/** One member of a directory group, as the admin API lists it (ID-6, AS-1). */
+export type DirectoryGroupMember = {
+  readonly id: string
+  readonly displayName: string
+  readonly email: string
+}
+
+/** One group of the built-in directory and the members it holds (ID-6, AS-1). */
+export type DirectoryGroup = {
+  readonly id: string
+  readonly name: string
+  readonly path?: string
+  readonly members: readonly DirectoryGroupMember[]
+}
+
 /** One user of the built-in directory, as the admin API lists it (ID-6). */
 export type DirectoryUser = {
   readonly id: string
@@ -69,8 +84,22 @@ type KeycloakUser = {
   readonly credentials?: readonly Record<string, unknown>[]
 }
 
+/** A Keycloak group representation, narrowed to the fields this slice reads. */
+type KeycloakGroup = {
+  readonly id?: string
+  readonly name?: string
+  readonly path?: string
+  readonly subGroups?: readonly KeycloakGroup[]
+}
+
 /** The discovery of one realm, cached per issuer (ADR 0012). */
 const configurations = new Map<string, Promise<Configuration>>()
+
+/** The administrator tokens, cached until shortly before they expire (ID-6). */
+const administratorTokens = new Map<
+  string,
+  { readonly token: string; readonly expiresAt: number }
+>()
 
 /** The OIDC configuration of the configured realm (ADR 0012). */
 export function oidcConfiguration(config: Config): Promise<Configuration> {
@@ -104,7 +133,14 @@ export async function principalFromToken(config: Config, token: string): Promise
   >
   const id = stringClaim(info, 'sub')
   if (id === undefined) throw new Error('the access token carries no sub claim')
-  const groups = groupIds(info.groups)
+  // The local realm configures no group-membership mapper, so the token may
+  // carry no `groups` claim. The Admin API is then the directory read that
+  // names the groups of the principal, by id, which is the principal a grant
+  // to a group names (ID-6, AS-1, I8). A directory that answers no groups
+  // contributes none.
+  const claimed = groupIds(info.groups)
+  const groups =
+    claimed.length > 0 ? claimed : await directoryGroupsOfUser(config, id).catch(() => [])
   const email = stringClaim(info, 'email')
   return {
     id,
@@ -131,6 +167,9 @@ export function tokenExpiry(token: string): number | undefined {
 
 /** The Keycloak bootstrap administrator token in the master realm (ID-6). */
 export async function adminToken(config: Config): Promise<string> {
+  const key = `${baseUrl(config)}|${config.keycloak.adminUser}`
+  const cached = administratorTokens.get(key)
+  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.token
   const response = await fetch(`${baseUrl(config)}/realms/master/protocol/openid-connect/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -148,6 +187,11 @@ export async function adminToken(config: Config): Promise<string> {
   if (typeof parsed.access_token !== 'string') {
     throw new Error('keycloak: the administrator sign-in returned no access token')
   }
+  // The token's own `exp` is the only safe lifetime: the master realm's
+  // lifespan may be shorter than the realm default. Renew five seconds before
+  // it, so a request never signs in with a token that just lapsed.
+  const expiresAt = tokenExpiry(parsed.access_token) ?? Date.now() + 60_000
+  administratorTokens.set(key, { token: parsed.access_token, expiresAt: expiresAt - 5_000 })
   return parsed.access_token
 }
 
@@ -292,6 +336,162 @@ export async function listDirectoryUsers(config: Config): Promise<readonly Direc
           ? 'invited'
           : 'active',
     groups: [],
+  }))
+}
+
+/**
+ * Every group of the configured realm and the members it holds, for the
+ * administrator surface and the target resolver (ID-6, AS-1). A group's
+ * members are the Keycloak users it holds directly; subgroups are listed as
+ * groups of their own, so a target names the group whose id it carries.
+ */
+export async function listDirectoryGroups(config: Config): Promise<readonly DirectoryGroup[]> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/groups?max=1000&briefRepresentation=false`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  const body = await response.text()
+  if (!response.ok)
+    throw new Error(`keycloak: listing the groups failed: ${response.status} ${body}`)
+  const represented = flattenGroups(JSON.parse(body) as KeycloakGroup[])
+  const groups: DirectoryGroup[] = []
+  for (const group of represented) {
+    const members = await groupMembers(config, token, group.id)
+    groups.push({
+      id: group.id,
+      name: group.name,
+      ...(group.path === undefined ? {} : { path: group.path }),
+      members,
+    })
+  }
+  return groups
+}
+
+/**
+ * The ids of the groups that one directory user holds (ID-6, AS-1). The local
+ * realm configures no group-membership mapper, so this Admin API read is the
+ * directory answer that a group grant and a group target authorize on.
+ */
+export async function directoryGroupsOfUser(
+  config: Config,
+  userId: string
+): Promise<readonly string[]> {
+  const token = await adminToken(config)
+  const response = await fetch(
+    `${adminBase(config)}/users/${encodeURIComponent(userId)}/groups?max=1000&briefRepresentation=true`,
+    { headers: { authorization: `Bearer ${token}` } }
+  )
+  const body = await response.text()
+  if (!response.ok)
+    throw new Error(`keycloak: reading the groups of ${userId} failed: ${response.status} ${body}`)
+  const groups = JSON.parse(body) as KeycloakGroup[]
+  return groups
+    .map((group) => group.id)
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+}
+
+/** Create one group in the local realm and return its immutable id (ID-6, DE-4). */
+export async function createDirectoryGroup(
+  config: Config,
+  name: string
+): Promise<{ readonly id: string; readonly name: string }> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/groups`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  const body = await response.text()
+  if (response.status !== 201) {
+    throw new Error(`keycloak: creating the group ${name} failed: ${response.status} ${body}`)
+  }
+  const location = response.headers.get('location')
+  const id = location?.split('/').pop()
+  if (id !== undefined && id !== '') return { id, name }
+  const groups = await listDirectoryGroups(config)
+  const found = groups.find((group) => group.name === name)
+  if (found === undefined) throw new Error(`keycloak: the created group ${name} has no id`)
+  return { id: found.id, name }
+}
+
+/** Add one directory user to one group (ID-6, DE-4). A second add is a no-op. */
+export async function addGroupMember(
+  config: Config,
+  groupId: string,
+  userId: string
+): Promise<void> {
+  const token = await adminToken(config)
+  const response = await fetch(
+    `${adminBase(config)}/users/${encodeURIComponent(userId)}/groups/${encodeURIComponent(groupId)}`,
+    { method: 'PUT', headers: { authorization: `Bearer ${token}` } }
+  )
+  if (!response.ok && response.status !== 204) {
+    throw new Error(
+      `keycloak: adding ${userId} to group ${groupId} failed: ${response.status} ${await response.text()}`
+    )
+  }
+}
+
+/** Delete one group from the local realm (DE-4). A group that is gone is success. */
+export async function deleteDirectoryGroup(config: Config, id: string): Promise<void> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/groups/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!response.ok && response.status !== 404) {
+    throw new Error(
+      `keycloak: deleting the group ${id} failed: ${response.status} ${await response.text()}`
+    )
+  }
+}
+
+/** Flatten a group tree into the groups that it holds, parents first (ID-6). */
+function flattenGroups(groups: readonly KeycloakGroup[]): readonly {
+  readonly id: string
+  readonly name: string
+  readonly path?: string
+}[] {
+  const flat: { readonly id: string; readonly name: string; readonly path?: string }[] = []
+  for (const group of groups) {
+    if (typeof group.id !== 'string' || typeof group.name !== 'string') continue
+    flat.push({
+      id: group.id,
+      name: group.name,
+      ...(typeof group.path === 'string' ? { path: group.path } : {}),
+    })
+    if (Array.isArray(group.subGroups)) flat.push(...flattenGroups(group.subGroups))
+  }
+  return flat
+}
+
+/** The direct members of one group, as the Admin API lists them (AS-1, ID-6). */
+async function groupMembers(
+  config: Config,
+  token: string,
+  groupId: string
+): Promise<readonly DirectoryGroupMember[]> {
+  const response = await fetch(
+    `${adminBase(config)}/groups/${encodeURIComponent(groupId)}/members?max=1000&briefRepresentation=true`,
+    { headers: { authorization: `Bearer ${token}` } }
+  )
+  const body = await response.text()
+  if (!response.ok)
+    throw new Error(
+      `keycloak: listing the members of ${groupId} failed: ${response.status} ${body}`
+    )
+  const users = JSON.parse(body) as KeycloakUser[]
+  return users.map((user) => ({
+    id: user.id ?? '',
+    displayName:
+      [user.firstName, user.lastName]
+        .filter((part) => part !== undefined && part !== '')
+        .join(' ') ||
+      user.username ||
+      user.email ||
+      user.id ||
+      '',
+    email: user.email ?? '',
   }))
 }
 

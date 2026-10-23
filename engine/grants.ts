@@ -42,6 +42,26 @@ export function grantsOf(log: Log): readonly Grant[] {
     .map((event) => readGrant(event.payload))
 }
 
+/**
+ * The flow owner of one flow (I10, MVP.md 3): the first principal with the
+ * scope `task.reassign` on `flow:<slug>`, read from the log in log order. A
+ * grant on `*` is the fallback when the flow names no owner of its own, so the
+ * bootstrap administrator never hides a flow-specific owner. The function is a
+ * pure function of the log (I4, I6).
+ */
+export function flowOwner(log: Log, flow: string): ActorId | undefined {
+  const resource = `flow:${flow}`
+  let wildcard: ActorId | undefined
+  for (const event of log) {
+    if (event.type !== GRANT_CHANGE_TYPE) continue
+    const grant = readGrant(event.payload)
+    if (!grant.scopes.includes('task.reassign')) continue
+    if (grant.resource === resource) return grant.principal
+    if (grant.resource === '*' && wildcard === undefined) wildcard = grant.principal
+  }
+  return wildcard
+}
+
 /** Read one grant from a `config.grant.changed@1` payload. A malformed payload throws. */
 function readGrant(payload: Readonly<Record<string, unknown>>): Grant {
   const { principal, scopes, resource } = payload
