@@ -266,6 +266,101 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/instances/{instanceId}/timeline:
+    get:
+      operationId: readInstanceTimeline
+      summary: Read an instance's timeline
+      description: >-
+        The instance's own events in log order (I4, VT-5): the instance
+        started, the submit, the claims, the completions, the send backs and
+        the closes, each with its actor and time. The read authorizes the
+        instance events with `mayRead` (I8), the same rule as the instance
+        read. With `includeChanges` it adds the configuration changes of the
+        instance's flow, in the same order, and only when the actor holds
+        `instance.timeline` on that flow; without the scope the request is
+        refused with 403, so a subscriber never sees an event it may not see
+        (I8). The response is `TimelineEntry[]` in the one global order of I4.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          description: The id of the instance (DX-1, #187).
+          schema:
+            type: string
+        - name: includeChanges
+          in: query
+          required: false
+          description: >-
+            `1` adds the configuration changes of the instance's flow beside
+            the instance's own events (VT-5). It requires `instance.timeline`
+            on the flow (I8).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The instance's timeline, in log order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TimelineEntry'
+        '403':
+          description: >-
+            The actor may not read the instance, or asked for the flow's
+            configuration changes without `instance.timeline` on the flow (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: The log holds no such instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/timeline:
+    get:
+      operationId: readTimeline
+      summary: Read the global change feed
+      description: >-
+        The change feed of VT-6: the log in one global order (I4), filterable
+        by flow slug and by event type. It requires `instance.timeline` on the
+        named flow or `org.grants` on the organization, so an administrator or
+        a flow owner reads it and a requester without the scope answers 403
+        (I8). An entry carries its actor (I14), the flow when the event names
+        one, the step and the comment when the payload carries them, and the
+        operation, time and outcome of a connector call (I13).
+      parameters:
+        - name: flow
+          in: query
+          required: false
+          description: Keep the entries of this flow slug (VT-6).
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: false
+          description: Keep the entries of this versioned event type (VT-6).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The change feed, in log order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TimelineEntry'
+        '403':
+          description: >-
+            The principal does not hold `instance.timeline` on the flow or
+            `org.grants` on the organization (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/auth/login:
     get:
       operationId: login
@@ -1253,6 +1348,63 @@ components:
         definition:
           type: object
           description: The frozen flow definition (DF-1, DF-2).
+    TimelineCall:
+      type: object
+      description: >-
+        One connector call as the timeline shows it (I13): the operation that
+        ran, the time and the outcome. It never carries a response body.
+      required: [operation, time, outcome]
+      properties:
+        operation:
+          type: string
+          description: The connector operation that ran (I13).
+        time:
+          type: integer
+          description: The time of the call, from the injected clock (I6).
+        outcome:
+          type: string
+          description: >-
+            What the call resulted in, an outcome and never a response body
+            (I13).
+    TimelineEntry:
+      type: object
+      description: >-
+        One entry of the timeline (VT-5, S15, #246). It is one event of the log
+        in the one global order (I4): instance events and configuration changes
+        share it, so no two entries have an ambiguous order and `seq` is the
+        position. The entry carries the actor of the change (I14), the flow
+        when the event names one (VT-6), the step and comment when the payload
+        carries them, and the connector call when the event records one (I13).
+      required: [seq, at, type]
+      properties:
+        seq:
+          type: integer
+          description: The position of the event in the log (I4).
+        at:
+          type: integer
+          description: The time of the event, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        type:
+          type: string
+          description: The versioned event type (MVP.md 9.1).
+        flow:
+          type: string
+          description: >-
+            The slug of the flow that the entry belongs to, when the event
+            names one (VT-6).
+        step:
+          type: string
+          description: >-
+            The step key that the payload carries, when it carries one (VT-5,
+            VT-6). A send back names the step it reopens.
+        comment:
+          type: string
+          description: >-
+            The comment that the payload carries, for a note or a send back
+            (VT-5, VT-6).
+        call:
+          $ref: '#/components/schemas/TimelineCall'
     Status:
       type: object
       description: >-

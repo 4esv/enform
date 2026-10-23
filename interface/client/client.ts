@@ -198,6 +198,34 @@ export interface PublishedFlow {
 }
 
 /**
+ * One connector call as the timeline shows it (I13): the operation that ran, the time and the
+ * outcome. It never carries a response body.
+ */
+export interface TimelineCall {
+  readonly operation: string
+  readonly time: number
+  readonly outcome: string
+}
+
+/**
+ * One entry of the timeline (VT-5, S15, #246). It is one event of the log in the one global
+ * order (I4): instance events and configuration changes share it, so no two entries have an
+ * ambiguous order and `seq` is the position. The entry carries the actor of the change (I14),
+ * the flow when the event names one (VT-6), the step and comment when the payload carries them,
+ * and the connector call when the event records one (I13).
+ */
+export interface TimelineEntry {
+  readonly seq: number
+  readonly at: number
+  readonly actor?: ActorId
+  readonly type: string
+  readonly flow?: string
+  readonly step?: string
+  readonly comment?: string
+  readonly call?: TimelineCall
+}
+
+/**
  * The status line of an instance (VT-1, VT-2, S14): the position of the active step and the
  * total, the current step and its holder, the state in plain language, and the steps a
  * condition skipped.
@@ -670,6 +698,22 @@ export async function readInstance(instanceId: string, actor?: string): Promise<
   return (await response.json()) as InstanceView
 }
 
+export async function readInstanceTimeline(
+  instanceId: string,
+  includeChanges?: string
+): Promise<readonly TimelineEntry[]> {
+  const query = new URLSearchParams()
+  if (includeChanges !== undefined) query.set('includeChanges', String(includeChanges))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}/timeline${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly TimelineEntry[]
+}
+
 export async function readLog(): Promise<Log> {
   const url = `${configured().baseUrl}/api/v1/log`
   const response = await fetch(url, {
@@ -698,6 +742,23 @@ export async function readState(): Promise<State> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as State
+}
+
+export async function readTimeline(
+  flow?: string,
+  type?: string
+): Promise<readonly TimelineEntry[]> {
+  const query = new URLSearchParams()
+  if (flow !== undefined) query.set('flow', String(flow))
+  if (type !== undefined) query.set('type', String(type))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/timeline${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly TimelineEntry[]
 }
 
 export async function writeDraft(draftWrite: DraftWrite, slug: string): Promise<DraftFlow> {

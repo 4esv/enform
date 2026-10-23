@@ -68,11 +68,11 @@ test('#52 the timeline merges instance events and configuration changes, attribu
     expect(entry.actor, `${entry.type} has no author`).toBe(DANA)
   }
 
-  // (c) VT-6: the change feed filters by flow. The publication names its slug
-  // and the grant names its resource `flow:<slug>`, so both stay; a flow that
-  // the log does not name returns nothing.
+  // (c) VT-6: the change feed filters by flow. The publication names its slug,
+  // the grant names its resource `flow:<slug>` and the start names its flow, so
+  // all three stay; a flow that the log does not name returns nothing.
   const byFlow = timelineFor(investigationLog(), { flow: SLUG })
-  expect(byFlow.map((entry) => entry.type)).toEqual([PUBLISHED_TYPE, GRANT_TYPE])
+  expect(byFlow.map((entry) => entry.type)).toEqual([PUBLISHED_TYPE, GRANT_TYPE, INSTANCE_STARTED])
   expect(byFlow.every((entry) => entry.flow === SLUG)).toBe(true)
   expect(timelineFor(investigationLog(), { flow: 'other-flow' })).toEqual([])
 

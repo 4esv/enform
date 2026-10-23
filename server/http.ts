@@ -53,6 +53,7 @@ import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import { teamsOf } from '../engine/teams.js'
+import { flowOf, isConfigChange, timeline, timelineFor } from '../engine/timeline.js'
 import {
   cancel,
   INSTANCE_CANCELLED,
@@ -604,6 +605,94 @@ export function createApp(config: Config, pool: Pool): Hono {
       view.closedAt === undefined
         ? view
         : { ...view, undoUntil: view.closedAt + undoHours * HOUR_MS }
+    )
+  })
+
+  // Issue #246, S15, VT-5, VT-6, I4, I8, I12: the instance timeline and the
+  // global change feed. Both are projections of the one log (I4), never a
+  // second store. The server filters and authorizes; the engine maps the
+  // entries. The instance timeline authorizes the instance's own events with
+  // the same rule as the instance read, and adds the flow's configuration
+  // changes only to an actor that holds `instance.timeline` on the flow. The
+  // global feed requires that scope on the named flow or `org.grants` on the
+  // organization, so a requester without it reads nothing (I8).
+  app.get('/api/v1/instances/:instanceId/timeline', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const instanceId = c.req.param('instanceId')
+    // A cleared demo instance is absent from the live surface (DE-4), exactly
+    // as the instance read answers 404 for it.
+    if (await isClearedSeedRecord(pool, 'instance', instanceId)) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const log = await readLog(pool)
+    const instance = instanceOf(log, instanceId)
+    if (instance === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const published = publishedByHash(log, instance.definitionVersion)
+    if (published === undefined) {
+      return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    const grants = grantsFor(log, auth.principal)
+    if (
+      !mayRead(auth.principal.id, instance, {
+        flow: instance.flow,
+        definition: published.definition,
+        log,
+        grants,
+      })
+    ) {
+      return c.json({ error: 'the principal may not read the instance' }, 403)
+    }
+    const includeChanges = includesChanges(c.req.query('includeChanges'))
+    if (includeChanges && !authorize(grants, 'instance.timeline', `flow:${instance.flow}`)) {
+      return c.json(
+        {
+          error: `reading the flow's configuration changes requires the scope instance.timeline on flow:${instance.flow}`,
+        },
+        403
+      )
+    }
+    const events = log.filter(
+      (event) =>
+        event.payload.instanceId === instanceId ||
+        (includeChanges && isConfigChange(event.type) && flowOf(event) === instance.flow)
+    )
+    return c.json(timeline(events))
+  })
+
+  // Issue #246, VT-6, S15, I4, I8: the global change feed. It answers the log
+  // in the one global order, filtered by flow and by event type. An actor
+  // without `instance.timeline` on the flow and without `org.grants` on the
+  // organization reads nothing, so a normal requester answers 403.
+  app.get('/api/v1/timeline', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const flow = nonEmpty(c.req.query('flow'))
+    const type = nonEmpty(c.req.query('type'))
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const allowed = authorize(grants, 'org.grants', 'org')
+    if (!allowed && flow === undefined) {
+      return c.json(
+        { error: 'the change feed requires instance.timeline on a flow or org.grants on org' },
+        403
+      )
+    }
+    if (!allowed && flow !== undefined && !authorize(grants, 'instance.timeline', `flow:${flow}`)) {
+      return c.json(
+        {
+          error: `the change feed requires instance.timeline on flow:${flow} or org.grants on org`,
+        },
+        403
+      )
+    }
+    const log = await readLog(pool)
+    return c.json(
+      timelineFor(log, {
+        ...(flow === undefined ? {} : { flow }),
+        ...(type === undefined ? {} : { type }),
+      })
     )
   })
 
@@ -1578,6 +1667,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** One 401 body, the same shape for every credential (ADR 0012). */
 function unauthorized(c: Context) {
   return c.json({ error: 'there is no session; sign in first' }, 401)
+}
+
+/** Whether a read asked for the flow's configuration changes (VT-5). */
+function includesChanges(value: string | undefined): boolean {
+  return value === '1' || value === 'true'
+}
+
+/** A query value that names something, or undefined for an absent or empty one. */
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === undefined || value === '' ? undefined : value
 }
 
 /** The message of an unknown error. */

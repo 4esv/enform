@@ -42,6 +42,8 @@ const operations = [
   ['/api/v1/flows/{slug}/draft', 'put'],
   ['/api/v1/flows/{slug}/publish', 'post'],
   ['/api/v1/inbox', 'get'],
+  ['/api/v1/instances/{instanceId}/timeline', 'get'],
+  ['/api/v1/timeline', 'get'],
 ] as const
 
 test('#91 DX-1 api/openapi.yaml is valid OpenAPI 3.1 for /api/v1', async () => {
