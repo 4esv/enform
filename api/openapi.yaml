@@ -577,6 +577,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/instances/{instanceId}/mail:
+    get:
+      operationId: readInstanceMail
+      summary: Read the messages of an instance with their delivery status
+      description: >-
+        The outbox rows of the instance (SE-1): each message the engine
+        recorded for it, with its effect, the status the worker recorded
+        (queued, sending, sent or failed), the attempts, the last error and
+        when it was sent. The read authorizes the instance with `mayRead`
+        (I8), the same rule as the instance read.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          description: The id of the instance (DX-1, #187).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The messages of the instance, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MailRow'
+        '403':
+          description: The actor may not read the instance (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: The log holds no such instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/instances/{instanceId}/mail/{mailId}/resend:
+    post:
+      operationId: resendInstanceMail
+      summary: Send one message of an instance again
+      description: >-
+        A flow owner (`task.reassign` on the flow, or `org.grants`) sends a
+        message again (SE-1): the row is queued once more with its attempts
+        reset, the worker delivers it, and the log records one attributed
+        `mail.resent@1` event (I14). The answer is the row as queued.
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          description: The id of the instance (DX-1, #187).
+          schema:
+            type: string
+        - name: mailId
+          in: path
+          required: true
+          description: The id of the message, as the mail read lists it.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The message, queued again
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailRow'
+        '403':
+          description: The actor is not a flow owner (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: The instance or the message does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/timeline:
     get:
       operationId: readTimeline
@@ -2081,6 +2160,39 @@ components:
           description: >-
             What the call resulted in, an outcome and never a response body
             (I13).
+    MailRow:
+      type: object
+      description: One message of an instance with its delivery status (SE-1).
+      required: [id, effect, status, attempts, createdAt]
+      properties:
+        id:
+          type: string
+          description: The id of the outbox row, the side-effect key (I3).
+        effect:
+          type: string
+          description: The effect, such as send-assignment or send-reminder (SE-2).
+        to:
+          type: string
+          description: The target the message goes to, when the payload names one.
+        step:
+          type: string
+          description: The step the message is about, when the payload names one.
+        status:
+          type: string
+          enum: [queued, sending, sent, failed]
+          description: The delivery status the worker recorded (SE-1).
+        attempts:
+          type: integer
+          description: How many deliveries the worker attempted.
+        lastError:
+          type: string
+          description: The error of the last failed attempt, when there was one.
+        createdAt:
+          type: integer
+          description: When the engine recorded the message, in milliseconds since the epoch.
+        sentAt:
+          type: integer
+          description: When the worker sent it, in milliseconds since the epoch.
     TimelineEntry:
       type: object
       description: >-

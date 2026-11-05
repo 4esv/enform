@@ -35,15 +35,18 @@ import {
   listUsers,
   loginUrl,
   logout,
+  type MailRow,
   type Note,
   type Operation,
   RequestRefused,
   readFlow,
   readInbox,
   readInstance,
+  readInstanceMail,
   readInstanceTimeline,
   readSession,
   readTimeline,
+  resendInstanceMail,
   type Session,
   setClient,
   type Team,
@@ -1026,6 +1029,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     renderTracker(view.tracker, view.status.currentStep, view.names)
     renderNotes(view.notes, view.names)
     await renderTimeline(slug, instanceId, view)
+    await renderMail(slug, instanceId, view)
     main.dataset.pageReady = ''
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
@@ -1654,6 +1658,68 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * 403 shows the server's reason and leaves the instance events in place.
    * The timeline is read-only; the task controls stay below it.
    */
+  /**
+   * The messages of the instance with their delivery status (SE-1, A4): one
+   * row per message the engine recorded, the status the worker recorded, and
+   * for a flow owner the control to send one again. The server authorizes
+   * the resend and records it (I8, I14).
+   */
+  const renderMail = async (
+    slug: string,
+    instanceId: string,
+    view: InstanceView
+  ): Promise<void> => {
+    let rows: readonly MailRow[]
+    try {
+      rows = await readInstanceMail(instanceId)
+    } catch {
+      return
+    }
+    if (rows.length === 0) return
+    const section = document.createElement('section')
+    section.dataset.mail = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Messages'
+    section.appendChild(heading)
+    const list = document.createElement('ul')
+    list.className = 'mail'
+    for (const row of rows) {
+      const item = document.createElement('li')
+      item.dataset.mailRow = row.id
+      item.dataset.mailStatus = row.status
+      const what = document.createElement('span')
+      what.textContent = `${mailLabel(row.effect)}${row.step === undefined ? '' : ` (${row.step})`}`
+      const state = document.createElement('span')
+      state.className = `mail-status mail-${row.status}`
+      state.textContent =
+        row.status === 'sent' && row.sentAt !== undefined
+          ? `sent ${dayLabel(row.sentAt, now())}`
+          : row.status === 'failed'
+            ? `failed after ${row.attempts} attempt${row.attempts === 1 ? '' : 's'}${row.lastError === undefined ? '' : `: ${row.lastError}`}`
+            : row.status
+      item.append(what, state)
+      if (view.canReassign) {
+        const resend = document.createElement('button')
+        resend.type = 'button'
+        resend.textContent = 'Send again'
+        resend.dataset.mailResend = ''
+        resend.addEventListener('click', () => {
+          resend.disabled = true
+          void resendInstanceMail(instanceId, row.id)
+            .then(() => renderTask(slug, instanceId, 'Message queued again'))
+            .catch((error: unknown) => {
+              resend.disabled = false
+              state.textContent = messageOf(error)
+            })
+        })
+        item.appendChild(resend)
+      }
+      list.appendChild(item)
+    }
+    section.appendChild(list)
+    main.appendChild(section)
+  }
+
   const renderTimeline = async (
     slug: string,
     instanceId: string,
@@ -2795,6 +2861,22 @@ function statusLine(view: InstanceView): string {
 /** The display name of a principal when the read carries one (ID-4, VT-3), else its id. */
 function nameOf(id: string, names?: Readonly<Record<string, string>>): string {
   return names?.[id] ?? id
+}
+
+/** What a message is for, in words (SE-2): "Task assigned", "Reminder", else the effect. */
+function mailLabel(effect: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    'send-assignment': 'Task assigned',
+    'send-sent-back': 'Sent back',
+    'send-completed': 'Completed',
+    'send-reminder': 'Reminder',
+    'send-escalation': 'Escalation',
+    'send-unroutable': 'Unroutable',
+    'send-taken-over': 'Taken over',
+    'send-withdrawn': 'Withdrawn or cancelled',
+    'send-undone': 'Undone',
+  }
+  return labels[effect] ?? effect
 }
 
 /** The reason the notification's Undo records (S16, WF-5). */

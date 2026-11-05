@@ -584,33 +584,39 @@ test('#240 SE-1 a refused connection records the attempt, the error and the back
 // Send again control to the owner. Expected to fail until the route and the
 // page exist.
 
-test.fails('#269 SE-1 a flow owner sends a delivered message again, and the page shows each message', async () => {
+test('#269 SE-1 a flow owner sends a delivered message again, and the page shows each message', async () => {
   const { configPath, publicUrl, config } = requireSetup()
-  const instanceId = seededInstance('advisor').id
+  // The registrar instance: its assignment went to the registrar team, whose
+  // members may read it and hold no task.reassign (I8).
+  const instanceId = seededInstance('registrar').id
   const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
-  const advisorToken = await signIn(castMember('advisor'))
+  const registrarToken = await signIn(castMember('registrar'))
   const headers = (token: string) => ({ authorization: `Bearer ${token}` })
 
   // The messages of the instance, with their status (SE-1).
   const listed = await fetch(`${publicUrl}/api/v1/instances/${instanceId}/mail`, {
-    headers: headers(advisorToken),
+    headers: headers(registrarToken),
   })
   expect(listed.status, await listed.clone().text()).toBe(200)
   const rows = (await listed.json()) as readonly {
     id: string
     effect: string
+    step?: string
     status: string
     attempts: number
   }[]
-  const assignment = rows.find((row) => row.effect === 'send-assignment')
-  expect(assignment, 'the assignment email is listed').toBeDefined()
-  expect(assignment?.status).toBe('sent')
-  if (assignment === undefined) throw new Error('no assignment row')
+  // The instance passed the advisor step first; the registrar assignment is
+  // the one whose second delivery the count below watches.
+  const assignment = rows.find(
+    (row) => row.effect === 'send-assignment' && row.step === 'registrar' && row.status === 'sent'
+  )
+  expect(assignment, 'a sent registrar assignment email is listed').toBeDefined()
+  if (assignment === undefined) throw new Error('no sent assignment row')
 
-  // The advisor is not a flow owner: refused (I8).
+  // The registrar is not a flow owner: refused (I8).
   const refused = await fetch(
     `${publicUrl}/api/v1/instances/${instanceId}/mail/${assignment.id}/resend`,
-    { method: 'POST', headers: headers(advisorToken) }
+    { method: 'POST', headers: headers(registrarToken) }
   )
   expect(refused.status).toBe(403)
 
@@ -630,15 +636,17 @@ test.fails('#269 SE-1 a flow owner sends a delivered message again, and the page
 
   // The worker sends it again: a second assignment email for the instance.
   const before = (await mailpitMessages()).filter((message) =>
-    message.Subject.includes('task assigned (advisor)')
+    message.Subject.includes('task assigned (registrar)')
   ).length
   const worker = startWorker(configPath)
   try {
-    const row = await waitForStatus('send-assignment', 'sent')
-    expect(row.id).toBe(assignment.id)
+    await waitFor('the resent row to be sent again', async () => {
+      const row = outboxRows().find((candidate) => candidate.id === assignment.id)
+      return row?.status === 'sent' ? row : undefined
+    })
     await waitFor('a second assignment email', async () => {
       const count = (await mailpitMessages()).filter((message) =>
-        message.Subject.includes('task assigned (advisor)')
+        message.Subject.includes('task assigned (registrar)')
       ).length
       return count > before ? count : undefined
     })

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/mail.resent@1.json",
+  "title": "enform mail.resent@1 event payload",
+  "description": "The payload of a mail.resent@1 event (#269, SE-1, I14). A flow owner sent one message of an instance again: the event names the instance, the outbox row the worker re-delivers and the effect it carries. The delivery itself is the worker's record on the row (SE-1); the event is the attributed manual action.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "mailId", "effect"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance whose message is sent again (DX-1).",
+      "type": "string"
+    },
+    "mailId": {
+      "description": "The id of the outbox row, the engine's side-effect key (I3).",
+      "type": "string"
+    },
+    "effect": {
+      "description": "The effect of the message, such as send-assignment or send-reminder (SE-2).",
+      "type": "string"
+    }
+  }
+}

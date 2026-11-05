@@ -49,7 +49,12 @@ import {
   STARTER_DEFINITION,
 } from '../engine/flow.js'
 import { contentHash } from '../engine/instance.js'
-import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
+import {
+  instanceOf,
+  type ProjectedInstance,
+  readInstance,
+  readInstanceStep,
+} from '../engine/instances.js'
 import { readableLog } from '../engine/logRead.js'
 import { definitionByHash, mergeDefinitions } from '../engine/merge.js'
 import {
@@ -86,9 +91,11 @@ import {
   readEventByOperation,
   readFlowProjection,
   readInboxRows,
+  readInstanceMail,
   readLog,
   readTeamMembers,
   readUnroutableRows,
+  requeueMail,
   revokeSession,
   type SessionRow,
   sessionById,
@@ -1162,6 +1169,88 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
         (includeChanges && isConfigChange(event.type) && flowOf(event) === instance.flow)
     )
     return c.json(timeline(events))
+  })
+
+  // Issue #269, SE-1, I8, I14: the messages of an instance with their
+  // delivery status, and a flow owner's resend. The read is authorized like
+  // the instance read; the resend needs task.reassign on the flow or
+  // org.grants, queues the row again and records one attributed event.
+  const mailInstance = async (
+    c: Context,
+    instanceId: string
+  ): Promise<
+    | {
+        readonly kind: 'ok'
+        readonly instance: ProjectedInstance
+        readonly grants: readonly Grant[]
+        readonly principal: string
+      }
+    | { readonly kind: 'answer'; readonly response: Response }
+  > => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return { kind: 'answer', response: unauthorized(c) }
+    if (await isClearedSeedRecord(pool, 'instance', instanceId)) {
+      return { kind: 'answer', response: c.json({ error: 'the log holds no such instance' }, 404) }
+    }
+    const log = await readLog(pool)
+    const instance = instanceOf(log, instanceId)
+    const published =
+      instance === undefined ? undefined : publishedByHash(log, instance.definitionVersion)
+    if (instance === undefined || published === undefined) {
+      return { kind: 'answer', response: c.json({ error: 'the log holds no such instance' }, 404) }
+    }
+    const grants = grantsFor(log, auth.principal)
+    if (
+      !mayRead(auth.principal.id, instance, {
+        flow: instance.flow,
+        definition: published.definition,
+        log,
+        grants,
+      })
+    ) {
+      return {
+        kind: 'answer',
+        response: c.json({ error: 'the principal may not read the instance' }, 403),
+      }
+    }
+    return { kind: 'ok', instance, grants, principal: auth.principal.id }
+  }
+
+  app.get('/api/v1/instances/:instanceId/mail', async (c) => {
+    const instanceId = c.req.param('instanceId')
+    const checked = await mailInstance(c, instanceId)
+    if (checked.kind === 'answer') return checked.response
+    return c.json(await readInstanceMail(pool, instanceId))
+  })
+
+  app.post('/api/v1/instances/:instanceId/mail/:mailId/resend', async (c) => {
+    const instanceId = c.req.param('instanceId')
+    const mailId = c.req.param('mailId')
+    const checked = await mailInstance(c, instanceId)
+    if (checked.kind === 'answer') return checked.response
+    const owner =
+      authorize(checked.grants, 'task.reassign', `flow:${checked.instance.flow}`) ||
+      authorize(checked.grants, 'org.grants', 'org')
+    if (!owner) {
+      return c.json(
+        {
+          error: `sending a message again requires the scope task.reassign on flow:${checked.instance.flow}`,
+        },
+        403
+      )
+    }
+    const row = await requeueMail(pool, instanceId, mailId)
+    if (row === undefined) return c.json({ error: 'the instance has no such message' }, 404)
+    await appendOperation(
+      pool,
+      createOperation(
+        'mail.resent@1',
+        { instanceId, mailId, effect: row.effect },
+        operationDeps,
+        checked.principal
+      )
+    )
+    return c.json(row)
   })
 
   // Issue #246, VT-6, S15, I4, I8: the global change feed. It answers the log

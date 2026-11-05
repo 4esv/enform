@@ -2772,3 +2772,94 @@ async function readLogWith(client: PoolClient): Promise<readonly Event[]> {
     payload: row.payload,
   }))
 }
+
+// Issue #269, SE-1, I3, I14: the messages of an instance and a resend. The
+// outbox rows are derived state (I4) and their delivery columns the worker's
+// record (SE-1); a resend queues a row again with its attempts reset, and the
+// route that calls it records the attributed `mail.resent@1` event.
+
+/** One message of an instance with its delivery status, as the API lists it (SE-1). */
+export type MailRow = {
+  readonly id: string
+  readonly effect: string
+  readonly to?: string
+  readonly step?: string
+  readonly status: string
+  readonly attempts: number
+  readonly lastError?: string
+  readonly createdAt: number
+  readonly sentAt?: number
+}
+
+/** The messages the engine recorded for one instance, oldest first (SE-1). */
+export async function readInstanceMail(
+  pool: Pool,
+  instanceId: string
+): Promise<readonly MailRow[]> {
+  const result = await pool.query<{
+    id: string
+    effect: string
+    payload: Record<string, unknown>
+    status: string
+    attempts: number
+    last_error: string | null
+    created_at: string
+    sent_at: string | null
+  }>(
+    `select id, effect, payload, status, attempts, last_error, created_at, sent_at
+     from outbox where instance_id = $1 order by created_at, seq, id`,
+    [instanceId]
+  )
+  return result.rows.map((row) => mailRowOf(row))
+}
+
+/** Queue one message again with its attempts reset (SE-1); undefined when the row is not the instance's. */
+export async function requeueMail(
+  pool: Pool,
+  instanceId: string,
+  mailId: string
+): Promise<MailRow | undefined> {
+  const result = await pool.query<{
+    id: string
+    effect: string
+    payload: Record<string, unknown>
+    status: string
+    attempts: number
+    last_error: string | null
+    created_at: string
+    sent_at: string | null
+  }>(
+    `update outbox
+     set status = 'queued', attempts = 0, next_attempt_at = 0, last_error = null
+     where id = $1 and instance_id = $2
+     returning id, effect, payload, status, attempts, last_error, created_at, sent_at`,
+    [mailId, instanceId]
+  )
+  const row = result.rows[0]
+  return row === undefined ? undefined : mailRowOf(row)
+}
+
+function mailRowOf(row: {
+  id: string
+  effect: string
+  payload: Record<string, unknown>
+  status: string
+  attempts: number
+  last_error: string | null
+  created_at: string
+  sent_at: string | null
+}): MailRow {
+  const to = row.payload.target ?? row.payload.to
+  const step = row.payload.step
+  return {
+    id: row.id,
+    effect: row.effect,
+    ...(typeof to === 'string' ? { to } : {}),
+    ...(typeof step === 'string' ? { step } : {}),
+    status: row.status,
+    attempts: row.attempts,
+    ...(row.last_error === null ? {} : { lastError: row.last_error }),
+    createdAt: Number(row.created_at),
+    ...(row.sent_at === null ? {} : { sentAt: Number(row.sent_at) }),
+  }
+}
