@@ -614,6 +614,33 @@ export interface DryRunTimer {
 }
 
 /**
+ * The attributed difference between two points of a flow's history (DF-6, S03): the net
+ * field-level changes from `from` to `to`, each with the author and the time of the push that
+ * made it. A point is a published version number as a string, or `draft`.
+ */
+export interface DefinitionDiff {
+  readonly slug: string
+  readonly from: string
+  readonly to: string
+  readonly changes: readonly AttributedChange[]
+}
+
+/**
+ * One difference between two points, as the engine classifies it (DF-5, DF-6), with the author
+ * and the time of the push that made it (S03, I14). The author is absent when no push between
+ * the two points changed the path, for example on the first version.
+ */
+export interface AttributedChange {
+  readonly class: string
+  readonly message: string
+  readonly path: string
+  readonly before?: Record<string, unknown>
+  readonly after?: Record<string, unknown>
+  readonly actor?: ActorId
+  readonly at?: number
+}
+
+/**
  * What a dry run shows (DR-1, DR-3, DR-4, S05, S08): the flow and the version it ran, the
  * person it ran as, the simulated start time, the route with the skipped steps and their
  * conditions, who each active step resolves to and why, the step a submit routes to, the
@@ -966,6 +993,24 @@ export async function readFlow(slug: string, version?: number): Promise<Publishe
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as PublishedFlow
+}
+
+export async function readFlowDiff(
+  slug: string,
+  from?: string,
+  to?: string
+): Promise<DefinitionDiff> {
+  const query = new URLSearchParams()
+  if (from !== undefined) query.set('from', String(from))
+  if (to !== undefined) query.set('to', String(to))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/diff${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DefinitionDiff
 }
 
 export async function readFlowGrants(slug: string): Promise<readonly Grant[]> {

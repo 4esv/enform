@@ -34,6 +34,7 @@ import type { Pool } from 'pg'
 import { STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { type FlowDefinition, type JsonValue, parse } from '../engine/definition.js'
+import { definitionDiff, type VersionRef } from '../engine/diff.js'
 import { dryRun } from '../engine/dryrun.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
 import {
@@ -820,6 +821,39 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
       version: published.version,
       contentHash: published.contentHash,
       definition: published.definition,
+    })
+  })
+
+  // Issue #264, DF-6, S03, S04, I8, I14: the attributed difference between
+  // two points of a flow's history. The engine reads it from the log; the
+  // route only parses the points and authorizes the read: a version needs a
+  // flow read scope, the draft a draft scope.
+  app.get('/api/v1/flows/:slug/diff', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const slug = c.req.param('slug')
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!mayReadFlow(grants, slug)) {
+      return c.json({ error: `reading the flow requires a scope on flow:${slug}` }, 403)
+    }
+    const from = versionRefOf(c.req.query('from'))
+    const toRef = versionRefOf(c.req.query('to'))
+    if (from === null || toRef === null) {
+      return c.json({ error: 'a point is a positive version number or draft' }, 400)
+    }
+    const to = toRef === undefined ? 'draft' : toRef
+    if ((from === 'draft' || to === 'draft') && !mayReadDraft(grants, slug)) {
+      return c.json({ error: `reading the draft requires a flow scope on flow:${slug}` }, 403)
+    }
+    const diff = definitionDiff(await readLog(pool), slug, from, to)
+    if (diff === undefined) {
+      return c.json({ error: `the flow ${slug} has no such version` }, 404)
+    }
+    return c.json({
+      slug,
+      from: String(diff.from),
+      to: String(diff.to),
+      changes: diff.changes,
     })
   })
 
@@ -1642,6 +1676,19 @@ function includesChanges(value: string | undefined): boolean {
 /** A query value that names something, or undefined for an absent or empty one. */
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value
+}
+
+/**
+ * One point of a flow's history from a query parameter (DF-6, #264): a
+ * positive version number or `draft`; absent gives undefined, anything else
+ * gives null.
+ */
+function versionRefOf(value: string | undefined): VersionRef | undefined | null {
+  const text = nonEmpty(value)
+  if (text === undefined) return undefined
+  if (text === 'draft') return 'draft'
+  const number = Number(text)
+  return Number.isInteger(number) && number >= 1 ? number : null
 }
 
 /** The filename of an instance PDF: the flow, the instance and the step, ASCII and safe (OU-1). */
