@@ -50,6 +50,10 @@ An undo of a completed step restores the step and its holder. A side effect that
 
 Who may undo: the actor of the event, a flow owner, and for a takeover also the person it took the task from.
 
+## Messages
+
+Below the timeline, the task page lists each email the engine recorded for the submission with the status the worker gave it: queued, sent, or failed with the last error. A flow owner sends one again with **Send again**; the log records who did. An administrator reads what each kind of message says, with its variables and a preview, on the templates page.
+
 ## The timeline and the change feed
 
 Each instance has a timeline: every event in order, with the actor and the time, and a toggle that adds the changes to the flow's definition and configuration in the same order. The global change feed (`/?changes=1`) shows every attributed change across flows, filtered by flow and by type. Both read the one log, so they never disagree with the status line or the tracker.

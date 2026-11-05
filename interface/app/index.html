@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>enform</title>
+    <link rel="stylesheet" href="/app/app.css" />
   </head>
   <body>
     <main id="app"></main>
@@ -29,6 +30,8 @@
       const inbox = params.get('inbox') === '1'
       const users = params.get('users') === '1'
       const groups = params.get('groups') === '1'
+      const teams = params.get('teams') === '1'
+      const templates = params.get('templates') === '1'
       const queue = params.get('queue') === '1'
       const changes = params.get('changes') === '1'
       mountApp({
@@ -42,6 +45,8 @@
         ...(inbox ? { inbox: true, inboxTab: params.get('tab') ?? 'my' } : {}),
         ...(users ? { users: true } : {}),
         ...(groups ? { groups: true } : {}),
+        ...(teams ? { teams: true } : {}),
+        ...(templates ? { templates: true } : {}),
         ...(queue ? { queue: true } : {}),
         ...(changes ? { changes: true } : {}),
         ...(sources

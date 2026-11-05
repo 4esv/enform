@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { chromium, type Page } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { json, passwordToken } from './auth.js'
 import { databaseUrlForRun, freePort, type TestConfig, testConfig } from './config.js'
@@ -269,3 +270,79 @@ test('#256 AC-2 a revoke removes the named scopes and a rebuild agrees', async (
   expect((await api(tokens.lee, `/api/v1/instances/${instanceId}`)).status).toBe(403)
   expect(await apiJson(tokens.admin, `/api/v1/flows/${slug}/grants`)).toEqual(grants)
 }, 120_000)
+
+/** Sign in through the real Keycloak page and wait for the app's header (ID-1, ID-2). */
+async function signIn(
+  page: Page,
+  publicUrl: string,
+  email: string,
+  password: string
+): Promise<void> {
+  const session = await page.request.get(`${publicUrl}/api/v1/session`)
+  await page.goto(publicUrl)
+  if (session.status() === 401) {
+    await page.locator('#username').waitFor({ timeout: 30_000 })
+    await page.fill('#username', email)
+    await page.fill('#password', password)
+    await page.click('#kc-login')
+  }
+  await page.locator('.app-header').waitFor({ timeout: 30_000 })
+}
+
+// Issue #269, AS-6, AC-1, I14: the teams page. A holder of `org.teams`
+// creates a team, adds a member and removes one from the page, each as one
+// attributed operation the API lists back; a person without the scope sees
+// the page refuse the change.
+
+test('#269 AS-6 the teams page creates a team and maintains its members, and a peer is refused', async () => {
+  const { config, publicUrl } = requireSetup()
+  const ana = demoUser('registrar', 0)
+  const team = `desk-${RUN}`
+  const browser = await chromium.launch()
+  try {
+    const admin = await (await browser.newContext()).newPage()
+    await signIn(admin, publicUrl, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await admin.goto(`${publicUrl}/?teams=1`)
+    await admin.locator('[data-team-list]').waitFor({ timeout: 30_000 })
+
+    // Create: the team appears with no member (AS-6).
+    await admin.fill('[data-team-name]', team)
+    await admin.click('[data-team-create]')
+    const row = admin.locator(`[data-team-row="${team}"]`)
+    await row.waitFor({ timeout: 30_000 })
+    expect(await row.locator('[data-team-member]').count()).toBe(0)
+
+    // Add Ana by her directory id; the row lists her (ID-4).
+    await row.locator('[data-team-member-id]').fill(ana.id)
+    await row.locator('[data-team-add]').click()
+    await row.locator(`[data-team-member="${ana.id}"]`).waitFor({ timeout: 30_000 })
+    const token = await passwordToken(config, ana.email, ana.password)
+    const listed = await apiJson<readonly { name: string; members: string[] }[]>(
+      token,
+      '/api/v1/teams'
+    )
+    expect(listed.find((entry) => entry.name === team)?.members).toEqual([ana.id])
+
+    // Remove her: the row is empty again, and the API agrees.
+    await row.locator(`[data-team-member="${ana.id}"] [data-team-remove]`).click()
+    await row
+      .locator(`[data-team-member="${ana.id}"]`)
+      .waitFor({ state: 'detached', timeout: 30_000 })
+    const after = await apiJson<readonly { name: string; members: string[] }[]>(
+      token,
+      '/api/v1/teams'
+    )
+    expect(after.find((entry) => entry.name === team)?.members).toEqual([])
+
+    // Ana holds no org.teams: the page shows the server's refusal (AC-1, I8).
+    const peer = await (await browser.newContext()).newPage()
+    await signIn(peer, publicUrl, ana.email, ana.password)
+    await peer.goto(`${publicUrl}/?teams=1`)
+    await peer.locator('[data-team-list]').waitFor({ timeout: 30_000 })
+    await peer.fill('[data-team-name]', `peer-${RUN}`)
+    await peer.click('[data-team-create]')
+    await peer.locator('[data-team-status]', { hasText: 'org.teams' }).waitFor({ timeout: 30_000 })
+  } finally {
+    await browser.close()
+  }
+}, 180_000)

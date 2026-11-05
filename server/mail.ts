@@ -266,3 +266,71 @@ function redactUrl(value: string): string {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+/** One email template with its variables and a preview rendered from a sample (SE-2). */
+export type MailTemplate = {
+  readonly effect: string
+  readonly label: string
+  readonly variables: readonly string[]
+  readonly preview: { readonly subject: string; readonly text: string; readonly html: string }
+}
+
+/** The eight effects that SE-2 names, each with its label and the variables its template reads. */
+const TEMPLATE_CATALOG: readonly {
+  readonly effect: string
+  readonly label: string
+  readonly variables: readonly string[]
+}[] = [
+  { effect: ASSIGNMENT_EMAIL, label: 'Task assigned', variables: ['step', 'link'] },
+  {
+    effect: SENT_BACK_NOTIFICATION,
+    label: 'Sent back',
+    variables: ['step', 'comment', 'actor', 'link'],
+  },
+  {
+    effect: TAKEOVER_NOTIFICATION,
+    label: 'Taken over',
+    variables: ['step', 'reason', 'actor', 'link'],
+  },
+  {
+    effect: WITHDRAW_CANCEL_NOTIFICATION,
+    label: 'Withdrawn or cancelled',
+    variables: ['step', 'reason', 'actor', 'link'],
+  },
+  { effect: UNDO_NOTIFICATION, label: 'Undone', variables: ['step', 'reason', 'link'] },
+  { effect: REMINDER_EMAIL, label: 'Reminder', variables: ['step', 'link'] },
+  { effect: ESCALATION_EMAIL, label: 'Escalation', variables: ['step', 'link'] },
+  { effect: UNROUTABLE_ALERT, label: 'Unroutable', variables: ['step', 'link'] },
+]
+
+/**
+ * The catalog of the templates, one per event type that SE-2 names (#269):
+ * each with its variables and a preview rendered from one sample entry at
+ * the `review` step, so an administrator reads what a message says before
+ * it is sent. A template reads no form value (SE-2), so the sample carries
+ * none; the catalog is a pure function of the public URL (I6).
+ */
+export function templateCatalog(publicUrl: string): readonly MailTemplate[] {
+  return TEMPLATE_CATALOG.map(({ effect, label, variables }) => {
+    const sample: MailEntry = {
+      id: 'sample',
+      effect,
+      recipient: 'you@example.test',
+      instanceId: 'sample-instance',
+      flowSlug: 'sample-flow',
+      payload: {
+        step: 'review',
+        ...(variables.includes('comment') ? { comment: 'Please add the missing attachment.' } : {}),
+        ...(variables.includes('reason') ? { reason: 'A sample reason.' } : {}),
+        ...(variables.includes('actor') ? { actor: 'user:sample' } : {}),
+      },
+    }
+    const rendered = renderMail(sample, publicUrl)
+    return {
+      effect,
+      label,
+      variables,
+      preview: { subject: rendered.subject, text: rendered.text, html: rendered.html },
+    }
+  })
+}

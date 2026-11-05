@@ -87,7 +87,7 @@ Truncates every projection and folds the log again, in one transaction. It keeps
 
 ## The worker
 
-`enform worker` runs beside the server and does three things on a schedule: delivers the outbox through SMTP with retries and exponential backoff, recording `queued`, `sent` or `failed` with the attempt count and the last error on each message; fires the timers that are due, exactly once each; and synchronizes group membership from the identity provider. More than one worker may run; the store is the only queue, and a row is claimed in a transaction. Sending a failed message again from the interface is not there yet; a failed row is retried by the worker with backoff and its last error stays on the timeline.
+`enform worker` runs beside the server and does three things on a schedule: delivers the outbox through SMTP with retries and exponential backoff, recording `queued`, `sent` or `failed` with the attempt count and the last error on each message; fires the timers that are due, exactly once each; and synchronizes group membership from the identity provider. A flow owner sends a message again from the task page ("Send again"), or through `POST /api/v1/instances/{id}/mail/{mailId}/resend`: the row is queued again and the log records the resend. More than one worker may run; the store is the only queue, and a row is claimed in a transaction.
 
 ## Directory sync and deprovisioning
 

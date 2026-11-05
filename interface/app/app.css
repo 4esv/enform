@@ -1,0 +1,412 @@
+/* Issue #269, ADR 0009, A4: the one stylesheet of the interface. Plain CSS,
+   system fonts, readable on a phone, a dark scheme that follows the device.
+   The markup stays semantic and the tests select by data attributes, so the
+   stylesheet changes nothing a test reads. */
+
+:root {
+  --ink: #1b1f24;
+  --muted: #5a6470;
+  --paper: #ffffff;
+  --panel: #f5f7fa;
+  --line: #d9dee5;
+  --brand: #1f3a5f;
+  --accent: #0b6e4f;
+  --warn: #9a3412;
+  --warn-bg: #fff4e5;
+  --ok-bg: #eaf7f0;
+  --focus: #2563eb;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6e9ee;
+    --muted: #9aa5b1;
+    --paper: #111418;
+    --panel: #181c22;
+    --line: #2a313a;
+    --brand: #9cc4f5;
+    --accent: #7fd1b5;
+    --warn: #fdba74;
+    --warn-bg: #3a2512;
+    --ok-bg: #163123;
+    --focus: #60a5fa;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--brand);
+}
+
+/* The header: the brand, the pages and the connection mode (RT-1). */
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+header a {
+  text-decoration: none;
+  color: var(--ink);
+}
+
+header a:first-child {
+  font-weight: 700;
+}
+
+[data-connection] {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+[data-connection][data-mode="offline"] {
+  color: var(--warn);
+}
+
+#app,
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.2;
+  margin: 0.5rem 0 1rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+/* Forms (FM-1): one control per row, the label above, the error beside. */
+form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 44rem;
+}
+
+.field,
+form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="number"],
+input[type="date"],
+input[type="password"],
+textarea,
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  max-width: 100%;
+}
+
+textarea {
+  min-height: 5rem;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+input[disabled],
+textarea[disabled],
+select[disabled],
+button[disabled] {
+  opacity: 0.6;
+}
+
+[data-required="true"] > label::after,
+[data-required="true"] > span:first-child::after {
+  content: " *";
+  color: var(--warn);
+}
+
+[data-new-required="true"],
+[data-misfit="true"] {
+  border-left: 3px solid var(--warn);
+  padding-left: 0.5rem;
+}
+
+[data-error-for] {
+  color: var(--warn);
+  font-size: 0.9rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button[data-submit],
+button[data-claim],
+button[data-outcome],
+button[type="submit"] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  button[data-submit],
+  button[data-claim],
+  button[data-outcome],
+  button[type="submit"] {
+    color: #0b1220;
+  }
+}
+
+/* Status lines, notifications and refusals (VT-3, S16, FM-4). */
+.status,
+.instance-status {
+  margin: 0.5rem 0;
+}
+
+.instance-status {
+  font-weight: 600;
+}
+
+.status:empty {
+  display: none;
+}
+
+.toast,
+[data-toast] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  background: var(--ok-bg);
+  border: 1px solid var(--line);
+}
+
+.warning,
+[data-form-changed],
+[data-flow-changed],
+[data-anonymous] {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+[data-sync-for]::after {
+  content: attr(data-sync);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.presence {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.empty {
+  color: var(--muted);
+}
+
+/* The step tracker (VT-2): one row per step with its state and its people. */
+.tracker {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.tracker-step {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.tracker-key {
+  font-weight: 600;
+}
+
+.tracker-state {
+  text-transform: capitalize;
+}
+
+.tracker-step[data-tracker-state="completed"] {
+  background: var(--ok-bg);
+}
+
+.tracker-step[data-tracker-state="opened"] {
+  border-color: var(--brand);
+}
+
+.tracker-step[data-tracker-state="skipped"],
+.tracker-step[data-tracker-state="not reached"] {
+  color: var(--muted);
+}
+
+.tracker-queue {
+  color: var(--warn);
+}
+
+/* The timeline (VT-5) and the change feed (VT-6). */
+.timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.timeline-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-at {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.timeline-type {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.timeline-already-sent {
+  color: var(--warn);
+}
+
+.undo-form {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* Lists of things: the flows, the inbox, the users, the groups, the teams. */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0 1rem;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  background: var(--panel);
+}
+
+ul[data-inbox],
+ul.users,
+ul.versions {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+
+ul[data-inbox] > li,
+ul.users > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+nav[data-inbox-tabs],
+.timeline-toggle {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+nav[data-inbox-tabs] a[aria-current="page"] {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* The builder and its panels (S01 to S05): sections, steps and fields as cards. */
+[data-builder] section,
+[data-builder-step],
+[data-sharing],
+[data-diff],
+[data-dry-panel] {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  background: var(--panel);
+}
+
+[data-dry-state="skipped"],
+.skipped {
+  color: var(--muted);
+}
+
+.close {
+  float: right;
+}
+
+@media (max-width: 40rem) {
+  #app,
+  main {
+    padding: 0.75rem;
+  }
+  .tracker-step,
+  .timeline-entry {
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+}

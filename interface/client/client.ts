@@ -313,6 +313,21 @@ export interface TimelineCall {
 }
 
 /**
+ * One message of an instance with its delivery status (SE-1).
+ */
+export interface MailRow {
+  readonly id: string
+  readonly effect: string
+  readonly to?: string
+  readonly step?: string
+  readonly status: string
+  readonly attempts: number
+  readonly lastError?: string
+  readonly createdAt: number
+  readonly sentAt?: number
+}
+
+/**
  * One entry of the timeline (VT-5, S15, #246). It is one event of the log in the one global
  * order (I4): instance events and configuration changes share it, so no two entries have an
  * ambiguous order and `seq` is the position. The entry carries the actor of the change (I14),
@@ -783,6 +798,25 @@ export interface DirectoryGroupMember {
 }
 
 /**
+ * One email template with its variables and a preview (SE-2).
+ */
+export interface MailTemplate {
+  readonly effect: string
+  readonly label: string
+  readonly variables: readonly string[]
+  readonly preview: MailPreview
+}
+
+/**
+ * A rendered sample of a template (SE-2).
+ */
+export interface MailPreview {
+  readonly subject: string
+  readonly text: string
+  readonly html: string
+}
+
+/**
  * One group of the built-in directory and the members it holds now (ID-6, AS-1). A `group`
  * target names the group id, and the resolver reads the members through the identity provider's
  * admin API (AS-4).
@@ -975,6 +1009,16 @@ export async function listGroups(): Promise<readonly DirectoryGroup[]> {
   return (await response.json()) as readonly DirectoryGroup[]
 }
 
+export async function listMailTemplates(): Promise<readonly MailTemplate[]> {
+  const url = `${configured().baseUrl}/api/v1/admin/templates`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly MailTemplate[]
+}
+
 export async function listTeams(): Promise<readonly Team[]> {
   const url = `${configured().baseUrl}/api/v1/teams`
   const response = await fetch(url, {
@@ -1122,6 +1166,16 @@ export async function readInstance(instanceId: string, actor?: string): Promise<
   return (await response.json()) as InstanceView
 }
 
+export async function readInstanceMail(instanceId: string): Promise<readonly MailRow[]> {
+  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}/mail`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly MailRow[]
+}
+
 export async function readInstanceTimeline(
   instanceId: string,
   includeChanges?: string,
@@ -1202,6 +1256,16 @@ export async function readTimeline(
 
 export function realtimeUrl(): string {
   return `${configured().baseUrl}/api/v1/realtime`
+}
+
+export async function resendInstanceMail(instanceId: string, mailId: string): Promise<MailRow> {
+  const url = `${configured().baseUrl}/api/v1/instances/${instanceId}/mail/${mailId}/resend`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as MailRow
 }
 
 export function streamEventsUrl(instance?: string, flow?: string): string {

@@ -69,3 +69,5 @@ The engine runs **live** and **dry** on one code path. Live, side effects (email
 | Changes (`/?changes=1`) | The global change feed, filtered by flow and by type. |
 | Unroutable (`/?queue=1`) | The tasks nobody can receive. |
 | Users and groups (`/?users=1`, `/?groups=1`) | The built-in directory. |
+| Teams (`/?teams=1`) | The teams and their members; a holder of `org.teams` maintains them. |
+| Templates (`/?templates=1`) | The email templates with their variables and a preview, for an administrator. |

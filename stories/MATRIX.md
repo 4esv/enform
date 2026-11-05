@@ -179,14 +179,14 @@ Refs: SE-3, SE-4, SE-5, DR-3, DR-4, I2, I3, I7
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S13: Withdraw or cancel a submission (`withdraw-cancel`)
 
@@ -224,14 +224,14 @@ Refs: DF-6, VT-5, VT-6, I4, I13, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S16: Undo a mistake (`undo`)
 

@@ -30,21 +30,28 @@ import {
   instancePdfUrl,
   listFlows,
   listGroups,
+  listMailTemplates,
+  listTeams,
   listUnroutable,
   listUsers,
   loginUrl,
   logout,
+  type MailRow,
+  type MailTemplate,
   type Note,
   type Operation,
   RequestRefused,
   readFlow,
   readInbox,
   readInstance,
+  readInstanceMail,
   readInstanceTimeline,
   readSession,
   readTimeline,
+  resendInstanceMail,
   type Session,
   setClient,
+  type Team,
   type TimelineEntry,
   type TrackerStep,
   type UnroutableItem,
@@ -93,6 +100,9 @@ const INSTANCE_UNDONE = 'instance.undone@1'
 /** The versioned event type of a takeover (S10, AS-3). */
 const STEP_TAKEN_OVER = 'step.taken-over@1'
 
+/** The versioned event type of a team change (AS-6, I14). */
+const TEAM_CHANGED = 'config.team.changed@1'
+
 /** The versioned event type of a release to the pool (WF-5, AS-2). */
 const TASK_RELEASED = 'task.released@1'
 
@@ -124,6 +134,10 @@ export interface AppOptions {
   readonly users?: boolean
   /** Whether the URL asks for the directory groups page (ID-6, AS-1). */
   readonly groups?: boolean
+  /** Whether the URL asks for the teams page (AS-6). */
+  readonly teams?: boolean
+  /** Whether the URL asks for the email templates page (SE-2). */
+  readonly templates?: boolean
   /** Whether the URL asks for the Unroutable queue (I10, AS-5). */
   readonly queue?: boolean
   /** Whether the URL asks for the global change feed (VT-6). */
@@ -220,6 +234,19 @@ export async function mountApp(options: AppOptions): Promise<void> {
   groups.textContent = 'Groups'
   groups.dataset.groups = ''
   header.appendChild(groups)
+  // Issue #269, AS-6: the teams page. A holder of org.teams creates and
+  // maintains teams; everyone reads them (AS-4).
+  const teams = document.createElement('a')
+  teams.href = '/?teams=1'
+  teams.textContent = 'Teams'
+  teams.dataset.teams = ''
+  header.appendChild(teams)
+  // Issue #269, SE-2: the email templates, for an administrator.
+  const templates = document.createElement('a')
+  templates.href = '/?templates=1'
+  templates.textContent = 'Templates'
+  templates.dataset.templates = ''
+  header.appendChild(templates)
   // Issue #252, I10, AS-5: the Unroutable queue. The flow owner reads the
   // tasks that resolved to nobody; the server authorizes every row (I8).
   const queue = document.createElement('a')
@@ -462,7 +489,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
   ): { submit: () => void; post: (operation: Operation, key?: string) => Promise<void> } => {
     const instancePath = instanceUrl(slug, instanceId)
     let navigateAfterFlush = false
+    // The first refusal of a send is the one the person reads (A4): a start
+    // the server refused takes the submit queued behind it down with it, and
+    // the page keeps the reason instead of a later, derived one.
+    let refusal: RequestRefused | undefined
     onRefused = (operation, error) => {
+      if (refusal === undefined) refusal = error
       showRefusal(status, form, error)
       if (operation.type === INSTANCE_SUBMITTED) navigateAfterFlush = false
     }
@@ -492,11 +524,18 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
       await store.enqueue(operation as unknown as Record<string, unknown>)
       await showQueued()
+      refusal = undefined
       let flushed = await flushQueue()
       while (flushed && store !== undefined && (await store.pending()).length > 0) {
         flushed = await flushQueue()
       }
       await showQueued()
+      if (refusal !== undefined) {
+        // The server refused this send: the reason stays on the status line,
+        // and nothing of it is marked synced (I16).
+        showRefusal(status, form, refusal)
+        return
+      }
       if (!flushed) {
         markSync(key, 'saved')
         status.textContent = navigateAfterFlush
@@ -733,6 +772,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const heading = document.createElement('h1')
     heading.textContent = flow.slug
     main.appendChild(heading)
+    // Anonymous access is an explicit setting of the flow, and the form says
+    // so where the person fills it in, not only in the builder (ID-3).
+    if (flow.definition.anonymous === true) {
+      const anonymous = document.createElement('p')
+      anonymous.className = 'warning'
+      anonymous.dataset.anonymous = ''
+      anonymous.textContent =
+        'Anonymous access: this flow can be started without signing in, and a submission made that way names no person.'
+      main.appendChild(anonymous)
+    }
 
     const stepKey = stepKeys(flow.definition)[0]
     if (stepKey === undefined) throw new Error('the flow has no step to show')
@@ -990,6 +1039,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     renderTracker(view.tracker, view.status.currentStep, view.names)
     renderNotes(view.notes, view.names)
     await renderTimeline(slug, instanceId, view)
+    await renderMail(slug, instanceId, view)
     main.dataset.pageReady = ''
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
@@ -1618,6 +1668,68 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * 403 shows the server's reason and leaves the instance events in place.
    * The timeline is read-only; the task controls stay below it.
    */
+  /**
+   * The messages of the instance with their delivery status (SE-1, A4): one
+   * row per message the engine recorded, the status the worker recorded, and
+   * for a flow owner the control to send one again. The server authorizes
+   * the resend and records it (I8, I14).
+   */
+  const renderMail = async (
+    slug: string,
+    instanceId: string,
+    view: InstanceView
+  ): Promise<void> => {
+    let rows: readonly MailRow[]
+    try {
+      rows = await readInstanceMail(instanceId)
+    } catch {
+      return
+    }
+    if (rows.length === 0) return
+    const section = document.createElement('section')
+    section.dataset.mail = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Messages'
+    section.appendChild(heading)
+    const list = document.createElement('ul')
+    list.className = 'mail'
+    for (const row of rows) {
+      const item = document.createElement('li')
+      item.dataset.mailRow = row.id
+      item.dataset.mailStatus = row.status
+      const what = document.createElement('span')
+      what.textContent = `${mailLabel(row.effect)}${row.step === undefined ? '' : ` (${row.step})`}`
+      const state = document.createElement('span')
+      state.className = `mail-status mail-${row.status}`
+      state.textContent =
+        row.status === 'sent' && row.sentAt !== undefined
+          ? `sent ${dayLabel(row.sentAt, now())}`
+          : row.status === 'failed'
+            ? `failed after ${row.attempts} attempt${row.attempts === 1 ? '' : 's'}${row.lastError === undefined ? '' : `: ${row.lastError}`}`
+            : row.status
+      item.append(what, state)
+      if (view.canReassign) {
+        const resend = document.createElement('button')
+        resend.type = 'button'
+        resend.textContent = 'Send again'
+        resend.dataset.mailResend = ''
+        resend.addEventListener('click', () => {
+          resend.disabled = true
+          void resendInstanceMail(instanceId, row.id)
+            .then(() => renderTask(slug, instanceId, 'Message queued again'))
+            .catch((error: unknown) => {
+              resend.disabled = false
+              state.textContent = messageOf(error)
+            })
+        })
+        item.appendChild(resend)
+      }
+      list.appendChild(item)
+    }
+    section.appendChild(list)
+    main.appendChild(section)
+  }
+
   const renderTimeline = async (
     slug: string,
     instanceId: string,
@@ -1981,6 +2093,19 @@ export async function mountApp(options: AppOptions): Promise<void> {
         step.className = 'timeline-step'
         step.textContent = entry.step
         item.append(step)
+      }
+      // A definition change links to its difference (S15, DF-6): the diff
+      // view below the builder shows what the version changed and who did it.
+      if (
+        entry.type === 'config.definition.published@1' ||
+        entry.type === 'config.definition.changed@1'
+      ) {
+        const diff = document.createElement('a')
+        diff.className = 'timeline-diff'
+        diff.dataset.timelineDiff = ''
+        diff.href = `/?flow=${encodeURIComponent(entry.flow ?? '')}&builder=1#diff`
+        diff.textContent = 'Difference'
+        item.append(diff)
       }
       if (entry.comment !== undefined) {
         const comment = document.createElement('p')
@@ -2360,6 +2485,174 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   /**
+   * Render the email templates page (SE-2, #269): each event type's template
+   * with its variables and a preview rendered by the server from a sample,
+   * for an administrator. The server authorizes the read (I8).
+   */
+  const renderTemplates = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Email templates'
+    main.appendChild(heading)
+    let templates: readonly MailTemplate[]
+    try {
+      templates = await listMailTemplates()
+    } catch (error: unknown) {
+      const refusal = document.createElement('p')
+      refusal.className = 'status'
+      refusal.dataset.templatesRefused = ''
+      refusal.textContent = messageOf(error)
+      main.appendChild(refusal)
+      return
+    }
+    for (const template of templates) {
+      const section = document.createElement('section')
+      section.dataset.template = template.effect
+      const title = document.createElement('h2')
+      title.textContent = `${template.label} (${template.effect})`
+      const variables = document.createElement('p')
+      variables.className = 'template-variables'
+      variables.textContent = `Variables: ${template.variables.join(', ')}`
+      const subject = document.createElement('p')
+      subject.dataset.templateSubject = ''
+      subject.textContent = `Subject: ${template.preview.subject}`
+      const body = document.createElement('pre')
+      body.dataset.templateText = ''
+      body.textContent = template.preview.text
+      section.append(title, variables, subject, body)
+      main.appendChild(section)
+    }
+  }
+
+  /**
+   * Render the teams page (AS-6, AS-4, ID-4, I14, #269). Everyone reads the
+   * teams the log records; a holder of `org.teams` creates a team and adds or
+   * removes a member, each as one attributed `config.team.changed@1`
+   * operation. The engine authorizes the change and the page shows its
+   * answer (A9, I8).
+   */
+  const renderTeams = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Teams'
+    main.appendChild(heading)
+    const status = document.createElement('p')
+    status.className = 'status'
+    status.dataset.teamStatus = ''
+    main.appendChild(status)
+
+    const change = async (payload: Record<string, JsonValue>): Promise<boolean> => {
+      const operation: Operation = {
+        id: ids(),
+        type: TEAM_CHANGED,
+        at: clock(),
+        actor,
+        payload,
+      }
+      try {
+        await appendOperation(operation)
+        status.textContent = ''
+        return true
+      } catch (error: unknown) {
+        status.textContent = messageOf(error)
+        return false
+      }
+    }
+
+    const createForm = document.createElement('form')
+    createForm.dataset.teamForm = ''
+    const nameLabel = document.createElement('label')
+    nameLabel.textContent = 'New team'
+    const nameInput = document.createElement('input')
+    nameInput.type = 'text'
+    nameInput.name = 'team'
+    nameInput.required = true
+    nameInput.dataset.teamName = ''
+    nameLabel.appendChild(nameInput)
+    const createControl = document.createElement('button')
+    createControl.type = 'submit'
+    createControl.textContent = 'Create team'
+    createControl.dataset.teamCreate = ''
+    createForm.append(nameLabel, createControl)
+    createForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const team = nameInput.value.trim()
+      if (team === '') return
+      void change({ team, change: 'created' }).then((done) => {
+        if (done) void renderRoute()
+      })
+    })
+    main.appendChild(createForm)
+
+    let teams: readonly Team[]
+    try {
+      teams = await listTeams()
+    } catch (error: unknown) {
+      status.dataset.teamsRefused = ''
+      status.textContent = messageOf(error)
+      return
+    }
+    const list = document.createElement('ul')
+    list.className = 'teams'
+    list.dataset.teamList = ''
+    main.appendChild(list)
+    if (teams.length === 0) {
+      const empty = document.createElement('li')
+      empty.className = 'empty'
+      empty.textContent = 'No team yet.'
+      list.appendChild(empty)
+    }
+    for (const team of teams) {
+      const item = document.createElement('li')
+      item.className = 'team'
+      item.dataset.teamRow = team.name
+      const name = document.createElement('strong')
+      name.dataset.teamTitle = ''
+      name.textContent = team.name
+      const members = document.createElement('ul')
+      members.dataset.teamMembers = ''
+      for (const member of team.members) {
+        const row = document.createElement('li')
+        row.dataset.teamMember = member
+        const id = document.createElement('code')
+        id.textContent = member
+        const remove = document.createElement('button')
+        remove.type = 'button'
+        remove.textContent = 'Remove'
+        remove.dataset.teamRemove = ''
+        remove.addEventListener('click', () => {
+          void change({ team: team.name, change: 'member-removed', member }).then((done) => {
+            if (done) void renderRoute()
+          })
+        })
+        row.append(id, remove)
+        members.appendChild(row)
+      }
+      const addForm = document.createElement('form')
+      addForm.dataset.teamAddForm = ''
+      const memberInput = document.createElement('input')
+      memberInput.type = 'text'
+      memberInput.name = 'member'
+      memberInput.placeholder = 'user:<id> or group:<id>'
+      memberInput.required = true
+      memberInput.dataset.teamMemberId = ''
+      const add = document.createElement('button')
+      add.type = 'submit'
+      add.textContent = 'Add member'
+      add.dataset.teamAdd = ''
+      addForm.append(memberInput, add)
+      addForm.addEventListener('submit', (event) => {
+        event.preventDefault()
+        const member = memberInput.value.trim()
+        if (member === '') return
+        void change({ team: team.name, change: 'member-added', member }).then((done) => {
+          if (done) void renderRoute()
+        })
+      })
+      item.append(name, members, addForm)
+      list.appendChild(item)
+    }
+  }
+
+  /**
    * Render the Unroutable queue (I10, AS-5, #252). The flow owner sees the
    * open tasks whose targets resolved to nobody; the server authorizes every
    * row, so a principal without `task.reassign` reads nothing (I8).
@@ -2411,6 +2704,14 @@ export async function mountApp(options: AppOptions): Promise<void> {
     }
     if (options.groups === true) {
       await renderGroups()
+      return
+    }
+    if (options.teams === true) {
+      await renderTeams()
+      return
+    }
+    if (options.templates === true) {
+      await renderTemplates()
       return
     }
     if (options.queue === true) {
@@ -2626,6 +2927,22 @@ function statusLine(view: InstanceView): string {
 /** The display name of a principal when the read carries one (ID-4, VT-3), else its id. */
 function nameOf(id: string, names?: Readonly<Record<string, string>>): string {
   return names?.[id] ?? id
+}
+
+/** What a message is for, in words (SE-2): "Task assigned", "Reminder", else the effect. */
+function mailLabel(effect: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    'send-assignment': 'Task assigned',
+    'send-sent-back': 'Sent back',
+    'send-completed': 'Completed',
+    'send-reminder': 'Reminder',
+    'send-escalation': 'Escalation',
+    'send-unroutable': 'Unroutable',
+    'send-takeover': 'Taken over',
+    'send-withdrawn-cancelled': 'Withdrawn or cancelled',
+    'send-undone': 'Undone',
+  }
+  return labels[effect] ?? effect
 }
 
 /** The reason the notification's Undo records (S16, WF-5). */

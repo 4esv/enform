@@ -10,6 +10,7 @@ import { instanceOf, readInstance } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import { mayRead } from '../../engine/status.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../../engine/timeline.js'
 import { isClientIntent, resolveClientOperation } from '../../server/intents.js'
 import {
@@ -284,7 +285,9 @@ function serveInstanceTimeline(
   const events = state.log.filter(
     (event) =>
       event.payload.instanceId === instanceId ||
-      (includeChanges && isConfigChange(event.type) && flowOf(event) === instance.flow)
+      (includeChanges &&
+        isConfigChange(event.type) &&
+        (flowOf(event) === instance.flow || event.type === TEAM_CHANGE_TYPE))
   )
   json(res, 200, timeline(events))
 }

@@ -44,12 +44,9 @@ the [CLI](docs/cli.md) and [API](docs/api.md) references, [deployment](docs/depl
 
 The engine, the release server, the CLI and the web interface implement the
 scope of `MVP.md`, except the Active Directory and Entra ID federation and the
-connectors, which are configured per installation, and a few interface pieces
-that are still open: sending a failed email again, the email templates page,
-the teams page, and the interface paths of S12 and S15. Every story of
+connectors, which are configured per installation. Every story of
 `STORIES.md` runs through the engine path in api, cli and dry mode under the
-variation operators, and the interface paths of the other stories run in
-Chromium; the evidence table in `STORIES.md` and the matrix in
+variation operators, and its interface path runs in Chromium; the evidence table in `STORIES.md` and the matrix in
 `stories/MATRIX.md` record where. The version is in `package.json` and the
 changes by release in `CHANGELOG.md`.
 
