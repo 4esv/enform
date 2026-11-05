@@ -716,17 +716,18 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     const teamMembers = await teamMembersFor(pool, log)
     const groupMembers = await groupMembersFor(config)
     const resolve = resolverFor(undefined, {}, teamMembers, groupMembers)
-    const readable = readableLog(
-      after === undefined ? log : log.filter((event) => event.seq > after),
-      auth.principal.id,
-      {
-        grants: grantsFor(log, auth.principal),
-        resolve,
-        ...(instanceId === undefined ? {} : { instanceId }),
-        ...(limit === undefined ? {} : { limit }),
-      }
+    // The read is authorized over the whole log (I8): an instance's events
+    // are readable through the instance the log holds, so the position
+    // filter applies to the answer, not to what the authorization reads.
+    const readable = readableLog(log, auth.principal.id, {
+      grants: grantsFor(log, auth.principal),
+      resolve,
+      ...(instanceId === undefined ? {} : { instanceId }),
+    })
+    const since = after === undefined ? readable : readable.filter((event) => event.seq > after)
+    return c.json(
+      limit === undefined || limit >= since.length ? since : since.slice(since.length - limit)
     )
-    return c.json(readable)
   })
 
   // The whole derived state is the organization's (I8): org.grants on org.

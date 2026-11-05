@@ -232,7 +232,8 @@ test('#260 RT-1 a write through the API reaches a WebSocket subscriber as a chan
   const events = (await polled.json()) as { seq: number; type: string }[]
   expect(events.map((entry) => entry.type)).toEqual(['instance.submitted@1'])
 
-  // The Server-Sent Events fallback opens for Sam and not for Okafor (I8).
+  // The Server-Sent Events fallback opens for Sam and not for Lee, whose
+  // registrar step the instance has not reached (I8).
   const stream = await fetch(
     `${requireSetup().publicUrl}/api/v1/realtime/events?instance=${instanceId}`,
     { headers: { authorization: `Bearer ${samToken}` } }
@@ -243,9 +244,11 @@ test('#260 RT-1 a write through the API reaches a WebSocket subscriber as a chan
   const first = await reader.read()
   expect(new TextDecoder().decode(first.value)).toContain('event: welcome')
   await reader.cancel()
+  const lee = demoUser('registrar', 1)
+  const leeToken = await passwordToken(config, lee.email, lee.password)
   const refused = await fetch(
     `${requireSetup().publicUrl}/api/v1/realtime/events?instance=${instanceId}`,
-    { headers: { authorization: `Bearer ${okaforToken}` } }
+    { headers: { authorization: `Bearer ${leeToken}` } }
   )
   expect(refused.status).toBe(403)
 })
