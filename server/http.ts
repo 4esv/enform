@@ -74,6 +74,7 @@ import {
   flowExists,
   grantsOfFlow,
   grantsOfPrincipal,
+  groupMembersFromPrincipals,
   type InboxTab,
   isClearedSeedRecord,
   listFlowSummaries,
@@ -660,7 +661,11 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     const data = body.data as Record<string, JsonValue>
     const log = await readLog(pool)
     const teamMembers = await teamMembersFor(pool, log)
-    const groupMembers = await groupMembersFor(config)
+    // A dry run resolves the live targets through the directory, like a live
+    // run (AS-4); when the identity provider cannot be reached it answers
+    // from the membership the profile cache recorded at the last sign-in or
+    // sync (ID-5), so a rehearsal never depends on the directory being up.
+    const groupMembers = await groupMembersFor(config).catch(() => groupMembersFromPrincipals(pool))
     const now = Date.now()
     const result = dryRun({
       definition,

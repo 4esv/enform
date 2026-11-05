@@ -1,10 +1,15 @@
 import type { Pool } from 'pg'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { apply, emptyState } from '../engine/apply.js'
 import { parse } from '../engine/definition.js'
 import { createFlow, publish, push } from '../engine/flow.js'
 import { defaultConfig } from './config.js'
 import { createApp } from './http.js'
+
+// The unit test has no identity provider: the directory read of the route
+// fails like it does in CI, and the dry run answers from the profile cache
+// (ID-5) instead of a 500.
+vi.stubGlobal('fetch', () => Promise.reject(new Error('the directory is not reachable')))
 
 // Issue #264, DR-1, DR-3, DR-4, DR-5, DR-6, I8, I14, S05, S08: the dry-run
 // route. A person with a dry-run scope runs a published version or the

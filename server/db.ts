@@ -489,6 +489,29 @@ export async function rebuild(pool: Pool): Promise<number> {
   }
 }
 
+/**
+ * The group membership the profile cache holds (ID-5, ADR 0012): each
+ * principal's groups as recorded at its last sign-in or sync, inverted to
+ * group id -> member ids. It stands in for the directory when the identity
+ * provider cannot be reached, such as in a dry run (DR-1).
+ */
+export async function groupMembersFromPrincipals(
+  pool: Pool
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const result = await pool.query<{ id: string; groups: string[] | null }>(
+    'select id, groups from principals'
+  )
+  const members = new Map<string, string[]>()
+  for (const row of result.rows) {
+    for (const group of row.groups ?? []) {
+      const list = members.get(group) ?? []
+      list.push(row.id)
+      members.set(group, list)
+    }
+  }
+  return members
+}
+
 /** Read the append-only log, in order (I4). It is the engine's `Log`. */
 export async function readLog(pool: Pool): Promise<readonly Event[]> {
   const result = await pool.query<{
