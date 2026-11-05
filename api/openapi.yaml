@@ -54,8 +54,12 @@ paths:
         `event.undone@1`) names the instance, the seq of the event it undoes,
         the reason and the version it read, and the engine undoes the latest
         action only, within the flow's undo period, by its actor or a flow
-        owner, and never past the flow's final step (S16, WF-5, D6). The
-        server resolves the
+        owner, and never past the flow's final step (S16, WF-5, D6); a
+        release (`ReleaseIntent`, `task.released@1`) returns the task the
+        holder holds, or any task for a flow owner with `task.reassign`, to
+        the pool, and a reassign (`ReassignIntent`, `task.reassigned@1`) gives
+        any task to a principal with a reason, for a flow owner only (WF-5,
+        MVP.md 5.6). The server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
         told apart by `type` and by their payload shape. The server refuses a
@@ -1248,6 +1252,84 @@ components:
               type: integer
               minimum: 0
               description: The instance version the client read (I5).
+    ReleaseIntent:
+      type: object
+      description: >-
+        A release (WF-5, AS-2, I5): the holder returns the task of the current
+        step to the pool, or a flow owner with `task.reassign` on the flow
+        returns anyone's with a reason. It carries the operation ID (I1), the
+        type `task.released@1`, the actor, the instance and the version read.
+        A principal who neither holds the task nor owns the flow answers 403;
+        a task nobody holds or a stale view answers 409.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `task.released@1`.
+          examples:
+            - task.released@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [instanceId, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance whose task is released (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
+            reason:
+              type: string
+              description: Why a flow owner releases the task; optional for the holder.
+    ReassignIntent:
+      type: object
+      description: >-
+        A reassign (WF-5, MVP.md 5.6, I2, I5): a flow owner with
+        `task.reassign` on the flow gives the task of the current step to a
+        principal, with a reason. The principal becomes the holder and an
+        assignee of the step and is told in the same operation (SE-2). It
+        carries the operation ID (I1), the type `task.reassigned@1`, the actor,
+        the instance, the version read, the principal and the reason. A
+        principal without `task.reassign` answers 403; a stale view answers
+        409; a missing reason or principal answers 400.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `task.reassigned@1`.
+          examples:
+            - task.reassigned@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [instanceId, version, to, reason]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance whose task is reassigned (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
+            to:
+              $ref: '#/components/schemas/ActorId'
+            reason:
+              type: string
+              description: Why the owner reassigns the task (WF-5).
     CompletionIntent:
       type: object
       description: >-

@@ -23,7 +23,7 @@ import { MINUTE_MS } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
-import { standingEvents } from './undo.js'
+import { standingEvents, TASK_REASSIGNED, TASK_RELEASED } from './undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 import { STEP_SKIPPED } from './workflow.js'
 
@@ -171,6 +171,26 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       states.set(step, 'opened')
       activities.set(step, event.at)
       holder = stringField(event.payload, 'to') ?? event.actor
+      currentStep = step
+      queue = undefined
+      continue
+    }
+    if (event.type === TASK_RELEASED) {
+      // The task is back in the pool: the step waits to be opened again (AS-2).
+      const step = stringField(event.payload, 'step')
+      if (step === undefined) continue
+      states.set(step, 'unopened')
+      activities.set(step, event.at)
+      holder = undefined
+      currentStep = step
+      continue
+    }
+    if (event.type === TASK_REASSIGNED) {
+      const step = stringField(event.payload, 'step')
+      if (step === undefined) continue
+      states.set(step, 'opened')
+      activities.set(step, event.at)
+      holder = stringField(event.payload, 'to')
       currentStep = step
       queue = undefined
       continue

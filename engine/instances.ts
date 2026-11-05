@@ -56,7 +56,7 @@ import { DRAFT_EDITED, INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
-import { EVENT_UNDONE, standingEvents, undoneSeqs } from './undo.js'
+import { EVENT_UNDONE, standingEvents, TASK_REASSIGNED, TASK_RELEASED, undoneSeqs } from './undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -469,6 +469,21 @@ function fold(
     }
     case STEP_TAKEN_OVER:
       return advanced({ ...instance, holder: optionalString(event.payload.to), queue: undefined })
+    case TASK_RELEASED:
+      return advanced({ ...instance, holder: undefined })
+    case TASK_REASSIGNED: {
+      // The named principal holds the task and joins the step's assignees
+      // (WF-5, AS-2), so the read and the completion authorize them.
+      const moved = advanced({
+        ...instance,
+        holder: optionalString(event.payload.to),
+        queue: undefined,
+      })
+      const entered = optionalAssignees(event.payload.assignees)
+      return entered === undefined
+        ? moved
+        : { ...moved, assignees: mergeAssignees(moved.assignees, entered) }
+    }
     case STEP_SENT_BACK:
       return advanced(sentBack(instance, event, definition))
     case INSTANCE_WITHDRAWN:

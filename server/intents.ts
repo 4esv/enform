@@ -23,6 +23,7 @@ import { publishedByHash } from '../engine/flow.js'
 import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import { instanceOf } from '../engine/instances.js'
 import type { ActorId, Log, Operation } from '../engine/operation.js'
+import { reassign, release } from '../engine/reassign.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
 import {
@@ -36,7 +37,7 @@ import {
 } from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import { teamsOf } from '../engine/teams.js'
-import { EVENT_UNDONE, undoAction } from '../engine/undo.js'
+import { EVENT_UNDONE, TASK_REASSIGNED, TASK_RELEASED, undoAction } from '../engine/undo.js'
 import {
   cancel,
   INSTANCE_CANCELLED,
@@ -105,6 +106,8 @@ export const INTENT_TYPES: readonly string[] = [
   INSTANCE_UNDONE,
   STEP_TAKEN_OVER,
   EVENT_UNDONE,
+  TASK_RELEASED,
+  TASK_REASSIGNED,
 ]
 
 /**
@@ -132,6 +135,8 @@ export function isClientIntent(body: Record<string, unknown>): boolean {
   }
   if (type === INSTANCE_UNDONE) return !hasEngineUndoField(payload)
   if (type === EVENT_UNDONE) return !('notified' in payload) && !('alreadySent' in payload)
+  if (type === TASK_RELEASED) return !('holder' in payload)
+  if (type === TASK_REASSIGNED) return !('assignees' in payload)
   return !hasEngineTakeoverField(payload)
 }
 
@@ -231,6 +236,9 @@ export function resolveClientOperation(
     }
     if (body.type === EVENT_UNDONE) {
       return undoActionOperation(context, body)
+    }
+    if (body.type === TASK_RELEASED || body.type === TASK_REASSIGNED) {
+      return reassignOperation(context, body)
     }
     return { status: 400, error: `the operation type ${String(body.type)} is not served` }
   } catch (error) {
@@ -644,6 +652,60 @@ function undoActionOperation(context: IntentContext, body: Record<string, unknow
   )
   if (!result.accepted || result.operation === undefined) {
     return { status: result.status ?? 409, error: result.reason ?? 'the undo was refused' }
+  }
+  return { operation: result.operation }
+}
+
+/**
+ * Apply a release or a reassign through the engine (WF-5, AS-2, I5, I8,
+ * #256). The client posts the instance and the version it read, a reason, and
+ * for a reassign the principal that takes the task; the engine decides who
+ * may release or reassign (the holder, or a flow owner with `task.reassign`),
+ * refuses a stale view, and records the assignee and the task-assigned email.
+ */
+function reassignOperation(context: IntentContext, body: Record<string, unknown>): IntentResult {
+  const { log, principal, grants } = context
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const instanceId = stringValue(payload?.instanceId)
+  const version = payload?.version
+  const reason = typeof payload?.reason === 'string' ? payload.reason : undefined
+  const to = stringValue(payload?.to)
+  const reassigning = body.type === TASK_REASSIGNED
+  if (
+    instanceId === undefined ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number' ||
+    (reassigning && (to === undefined || to === '' || reason === undefined || reason.trim() === ''))
+  ) {
+    return {
+      status: 400,
+      error: reassigning
+        ? 'a reassign needs an id, a time, an instance, a version, a principal and a reason'
+        : 'a release needs an id, a time, an instance and a version',
+    }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const deps = { clock: () => body.at as number, ids: () => body.id as string }
+  const result = reassigning
+    ? reassign(
+        instance,
+        principal.id,
+        to ?? '',
+        reason ?? '',
+        version,
+        { flow: instance.flow, grants },
+        deps
+      )
+    : release(instance, principal.id, reason, version, { flow: instance.flow, grants }, deps)
+  if (!result.accepted || result.operation === undefined) {
+    const why = result.reason ?? 'the request was refused'
+    return { status: why.includes('task.reassign') ? 403 : 409, error: why }
   }
   return { operation: result.operation }
 }

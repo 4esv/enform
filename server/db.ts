@@ -48,7 +48,7 @@ import {
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
 import { trackerOf } from '../engine/tracker.js'
-import { EVENT_UNDONE } from '../engine/undo.js'
+import { EVENT_UNDONE, TASK_REASSIGNED, TASK_RELEASED } from '../engine/undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 import {
@@ -1342,6 +1342,41 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         ...(to === undefined ? {} : { to }),
       })
     }
+    return
+  }
+  if (event.type === TASK_RELEASED) {
+    const released = readStepAndHolder(event)
+    // The task returns to the pool (WF-5, AS-2): the row loses its holder
+    // and waits to be opened again, and the version advances (I5).
+    await client.query(
+      `update instances set holder = null, status = 'waiting', version = version + 1, seq = $2
+       where id = $1`,
+      [released.instanceId, event.seq]
+    )
+    await client.query(
+      `update tasks set holder = null, state = 'available', last_activity_at = $3, seq = $4
+       where instance_id = $1 and step = $2`,
+      [released.instanceId, released.step, event.at, event.seq]
+    )
+    return
+  }
+  if (event.type === TASK_REASSIGNED) {
+    const moved = readStepAndHolder(event)
+    const to = typeof event.payload.to === 'string' ? event.payload.to : null
+    // The named principal holds the task and joins its assignees (WF-5).
+    await client.query(
+      `update instances set holder = $2, status = 'in-progress', queue = null, version = version + 1, seq = $3
+       where id = $1`,
+      [moved.instanceId, to, event.seq]
+    )
+    const assignees = await taskAssignees(client, moved.instanceId, moved.step)
+    const merged = mergeAssignees(assignees, readAssignees(event.payload.assignees))
+    await client.query(
+      `update tasks
+       set holder = $3, state = 'opened', assignees = $5::jsonb, queue = null, last_activity_at = $4, seq = $6
+       where instance_id = $1 and step = $2`,
+      [moved.instanceId, moved.step, to, event.at, JSON.stringify(merged), event.seq]
+    )
     return
   }
   if (event.type === STEP_TAKEN_OVER) {

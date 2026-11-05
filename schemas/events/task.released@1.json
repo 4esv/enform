@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/task.released@1.json",
+  "title": "enform task.released@1 event payload",
+  "description": "The payload of a task.released@1 event (#256, WF-5, AS-2, I5, I14). The holder, or a flow owner with task.reassign, returned the task of a step to the pool: the event names the instance, the step and the holder it took the task from, and the reason an owner gave.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "step", "holder"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance (DX-1).",
+      "type": "string"
+    },
+    "step": {
+      "description": "The step whose task was released (WF-1).",
+      "type": "string"
+    },
+    "holder": {
+      "description": "The principal that held the task before the release (AS-2).",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Why a flow owner released the task; absent when the holder released their own.",
+      "type": "string"
+    }
+  }
+}

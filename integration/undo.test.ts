@@ -300,3 +300,82 @@ test('#256 S16 the actor undoes an approval, a flow owner undoes the claim, and 
   expect(again).toEqual(pooled)
   expect(await inboxIds(tokens.okafor, 'available')).toContain(instanceId)
 }, 120_000)
+
+test('#256 WF-5 a flow owner reassigns and releases a task, and a rebuild keeps the holder', async () => {
+  const { config, seed, configPath } = requireSetup()
+  const ana = demoUser('registrar', 0)
+  const lee = demoUser('registrar', 1)
+  const priya = demoUser('reader')
+  const tokens = {
+    ana: await passwordToken(config, ana.email, ana.password),
+    lee: await passwordToken(config, lee.email, lee.password),
+    priya: await passwordToken(config, priya.email, priya.password),
+  }
+  const instanceId = seed.instances?.find((instance) => instance.step === 'registrar')?.id ?? ''
+  expect(instanceId, 'the seed has a registrar instance').not.toBe('')
+
+  // Ana claims the registrar task; Lee may not release it (I8).
+  const probe = await api(tokens.priya, `/api/v1/instances/${instanceId}`)
+  console.log('DEBUG priya read', probe.status, await probe.text())
+  console.log('DEBUG ana available', await inboxIds(tokens.ana, 'available'))
+  const open = await readInstance(tokens.ana, instanceId)
+  const claimed = await postIntent(tokens.ana, {
+    type: 'step.claimed@1',
+    actor: ana.id,
+    payload: { instanceId, expectedVersion: open.version },
+  })
+  expect(claimed.status, await claimed.text()).toBe(201)
+  const held = await readInstance(tokens.ana, instanceId)
+  const peer = await postIntent(tokens.lee, {
+    type: 'task.released@1',
+    actor: lee.id,
+    payload: { instanceId, version: held.version },
+  })
+  expect(peer.status, await peer.text()).toBe(403)
+
+  // Priya, the flow owner since the first test, reassigns it to Lee with a
+  // reason: Lee holds it, it is in his My tasks and gone from Ana's.
+  const reassigned = await postIntent(tokens.priya, {
+    type: 'task.reassigned@1',
+    actor: priya.id,
+    payload: { instanceId, version: held.version, to: lee.id, reason: 'Ana is on leave' },
+  })
+  expect(reassigned.status, await reassigned.text()).toBe(201)
+  const lees = await readInstance(tokens.lee, instanceId)
+  expect(lees.status).toMatchObject({
+    currentStep: 'registrar',
+    holder: lee.id,
+    state: 'in-progress',
+  })
+  expect(await inboxIds(tokens.lee, 'my')).toContain(instanceId)
+  expect(await inboxIds(tokens.ana, 'my')).not.toContain(instanceId)
+
+  // Lee releases his own task: it is available to both registrars again.
+  const released = await postIntent(tokens.lee, {
+    type: 'task.released@1',
+    actor: lee.id,
+    payload: { instanceId, version: lees.version },
+  })
+  expect(released.status, await released.text()).toBe(201)
+  const pooled = await readInstance(tokens.ana, instanceId)
+  expect(pooled.status.holder).toBeUndefined()
+  expect(pooled.status.state).toBe('waiting')
+  expect(await inboxIds(tokens.ana, 'available')).toContain(instanceId)
+  expect(await inboxIds(tokens.lee, 'available')).toContain(instanceId)
+
+  // The timeline keeps the claim, the reassign and the release in order, and
+  // a rebuild reproduces the read (I4, I14).
+  const timeline = await apiJson<readonly TimelineEntry[]>(
+    tokens.ana,
+    `/api/v1/instances/${instanceId}/timeline`
+  )
+  expect(timeline.slice(-3).map((entry) => [entry.type, entry.actor])).toEqual([
+    ['step.claimed@1', ana.id],
+    ['task.reassigned@1', priya.id],
+    ['task.released@1', lee.id],
+  ])
+  const rebuilt = runCli(['admin', 'rebuild', '--config', configPath, '--json'])
+  expect(rebuilt.status, rebuilt.stderr).toBe(0)
+  expect(await readInstance(tokens.ana, instanceId)).toEqual(pooled)
+  expect(await inboxIds(tokens.lee, 'available')).toContain(instanceId)
+}, 120_000)

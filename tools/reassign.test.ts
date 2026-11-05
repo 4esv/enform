@@ -105,7 +105,7 @@ function context(state: State, actor: string) {
   }
 }
 
-test.fails('#256 WF-5 the holder releases the task and a flow owner releases or reassigns any task', async () => {
+test('#256 WF-5 the holder releases the task and a flow owner releases or reassigns any task', async () => {
   const { resolveClientOperation } = await resolverModule()
   const state = heldState()
   const held = instanceOf(state.log, 'inst-1')

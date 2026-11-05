@@ -8,6 +8,8 @@ A type is published when the interface needs it (MVP.md 9.1, ADR 0004). The even
 - `instance.submitted@1`
 - `draft.edited@1` (#256, ADR 0014)
 - `event.undone@1` (#256, S16)
+- `task.released@1` (#256, WF-5)
+- `task.reassigned@1` (#256, WF-5)
 - `instance.withdrawn@1` (#238)
 - `instance.cancelled@1` (#238)
 - `instance.undone@1` (#238)

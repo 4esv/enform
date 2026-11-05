@@ -101,6 +101,37 @@ export interface UndoActionIntent {
 }
 
 /**
+ * A release (WF-5, AS-2, I5): the holder returns the task of the current step to the pool, or a
+ * flow owner with `task.reassign` on the flow returns anyone's with a reason. It carries the
+ * operation ID (I1), the type `task.released@1`, the actor, the instance and the version read.
+ * A principal who neither holds the task nor owns the flow answers 403; a task nobody holds or
+ * a stale view answers 409.
+ */
+export interface ReleaseIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A reassign (WF-5, MVP.md 5.6, I2, I5): a flow owner with `task.reassign` on the flow gives
+ * the task of the current step to a principal, with a reason. The principal becomes the holder
+ * and an assignee of the step and is told in the same operation (SE-2). It carries the
+ * operation ID (I1), the type `task.reassigned@1`, the actor, the instance, the version read,
+ * the principal and the reason. A principal without `task.reassign` answers 403; a stale view
+ * answers 409; a missing reason or principal answers 400.
+ */
+export interface ReassignIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * A completion intent (ADR 0010, FM-3, FM-4): the parts a client can honestly send when the
  * holder completes the current step. It carries the operation ID it chose (I1), the event type
  * `step.completed@1`, the actor, the instance it acts on (DX-1), the version of the instance it
