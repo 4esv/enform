@@ -29,6 +29,7 @@ import {
   randomState,
 } from 'openid-client'
 import type { Pool } from 'pg'
+import { STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
@@ -46,7 +47,9 @@ import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
+import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
+import { INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../engine/timeline.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
@@ -115,6 +118,17 @@ const HOUR_MS = 3_600_000
  * grant lists and reads them all.
  */
 const FLOW_READ_SCOPES = ['flow.read', 'flow.edit', 'flow.build', 'instance.start'] as const
+
+/**
+ * The intents whose resolution routes a step and so reads the directory
+ * (AS-1, AS-4): a submit, a completion and a send back resolve the entered
+ * step's targets; a start resolves the starter only.
+ */
+const ROUTING_INTENTS: ReadonlySet<string> = new Set([
+  INSTANCE_SUBMITTED,
+  STEP_COMPLETED,
+  STEP_SENT_BACK,
+])
 
 /** The running HTTP server and the way to drain it (DE-3). */
 export type ServedHttp = {
@@ -855,11 +869,14 @@ async function serveOperation(
   body: Record<string, unknown>
 ) {
   const log = await readLog(pool)
-  // The directory is read once per request (AS-4, #252): the team projection
-  // and the Keycloak groups, so every resolution in this request reads one
-  // snapshot. The resolver itself is pure (server/intents.ts).
-  const teamMembers = await teamMembersFor(pool, log)
-  const groupMembers = await groupMembersFor(config)
+  // The directory is read once per request (AS-4, #252), and only for an
+  // intent that routes a step: the team projection and the Keycloak groups,
+  // so every resolution in this request reads one snapshot. A grant or a
+  // claim never touches the directory. The resolver itself is pure
+  // (server/intents.ts).
+  const routes = ROUTING_INTENTS.has(String(body.type))
+  const teamMembers = routes ? await teamMembersFor(pool, log) : new Map()
+  const groupMembers = routes ? await groupMembersFor(config) : new Map()
   const resolved = resolveClientOperation(
     {
       log,
@@ -980,6 +997,7 @@ function inboxState(taskState: string | null, instanceStatus: string): string {
     case 'sent-back':
       return 'sent-back'
     default:
+      if (instanceStatus === 'draft') return 'draft'
       return instanceStatus === 'in-progress' ? 'opened' : 'unopened'
   }
 }
