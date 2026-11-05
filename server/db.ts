@@ -275,6 +275,9 @@ async function appendOperationIn(client: PoolClient, operation: Operation): Prom
       actor: operation.actor,
       payload: operation.payload,
     })
+    // Every process that follows the log learns of the append (#260, RT-1):
+    // the notification carries the seq only, and it fires with the commit.
+    await client.query('select pg_notify($1, $2)', [LOG_CHANNEL, String(seq)])
   }
   return { inserted: seq !== undefined, seq: seq === undefined ? null : Number(seq) }
 }
@@ -378,6 +381,31 @@ async function assigneesAtFiring(
   const membership = (principal: string): readonly string[] =>
     groupMembers?.get(principal) ?? teams(principal)
   return assigneesAddedBy(step, labels, membership)
+}
+
+/** The channel that every append notifies (#260, RT-1): a process that follows the log listens here. */
+export const LOG_CHANNEL = 'enform_log'
+
+/** The events after one log position, in order (I4): what a follower or a poll reads (#260, RT-1). */
+export async function readEventsAfter(pool: Pool, after: number): Promise<readonly Event[]> {
+  const result = await pool.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>('select seq, operation_id, type, at, actor, payload from events where seq > $1 order by seq', [
+    after,
+  ])
+  return result.rows.map((row) => ({
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }))
 }
 
 /** Read one event by the client-created operation id (I1), or undefined when it is absent. */

@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Added
 
+- The interface follows an instance or a flow over the realtime channel with the fallback order WebSocket, Server-Sent Events, polling, offline, always shows the transport mode in the header, re-reads a change made elsewhere once no control has the focus, and shows who else is on an instance or in the builder and where (#260, RT-1, RT-2, A4). The generated client gives the URLs of the channel and the stream, and the log read takes a flow filter.
+- The realtime channel: a WebSocket at `/api/v1/realtime` with the published protocol `schemas/realtime/v1.json` (the handshake with the version check, subscriptions authorized when they open, change notifications without a payload, presence), the Server-Sent Events fallback at `/api/v1/realtime/events`, and `GET /api/v1/log?after=<seq>` for polling; every append notifies the log channel so a write by any process reaches the subscribers of every process (#260, RT-1, RT-2, DX-2, I8).
 - The `enform` CLI covers every story operation through the public HTTP API: `grant add|list|revoke`, `instance start|edit|submit|show|timeline|withdraw|cancel|undo`, `task list|show|claim|complete|takeover|release|reassign`, `undo` and `log`, with `--json` on each; `flow push|pull|publish|diff` go to the server once signed in. `GET /api/v1/flows/{slug}` reads a published version by number (#258, DX-3, DX-4, I12).
 - `enform login` signs in through the identity provider's device authorization flow, or with a username and a password of the local directory, and stores the credential per server with its refresh token (#258, DX-3, S01, ID-6).
 - Every story from S02 to S16 runs as a golden path of client intents on one shared example flow, in api, cli and dry mode, under all eight variation operators; the harness predicts each run through the shared resolver and holds a fuzzy path to the deviation the engine predicts (#256, STORIES.md Test method, I6, I8).
@@ -123,6 +125,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- The task page paints once when an action and the realtime change it caused both re-render it: the newest render wins over a read still in flight, so the done control and the outcome buttons no longer appear twice (#260, RT-1, A4).
 - The instance projection folds the worker's connector call records, so an undo through the API marks the side effects that already occurred as "Already sent" (#53, S16, A2, I13).
 - A takeover by the holder of the task is refused, and the person a takeover took the task from may undo it, like its actor and a flow owner (#47, S10, AS-3, WF-5).
 - An intent the engine refuses for what the principal may do (a missing start scope, a claim by a non-assignee, a completion by someone who does not hold the step, an outcome the holder's grants do not cover) answers 403, not 400 or 409 (#256, I8, AC-1, AC-4).

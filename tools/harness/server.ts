@@ -383,8 +383,27 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         current = apply(parsed, current)
         return json(res, 201, current.log[current.log.length - 1])
       }
-      if (method === 'GET' && url === '/api/v1/log') {
-        return json(res, 200, current.log)
+      if (method === 'GET' && new URL(url, 'http://127.0.0.1').pathname === '/api/v1/log') {
+        // The polling fallback of the interface reads after a position
+        // (#260, RT-1); the harness has no session, so it answers the whole
+        // log after it.
+        const query = new URL(url, 'http://127.0.0.1').searchParams
+        const after = Number(query.get('after') ?? '0')
+        const instance = query.get('instance')
+        const flow = query.get('flow')
+        return json(
+          res,
+          200,
+          current.log.filter(
+            (event) =>
+              (!(Number.isInteger(after) && after > 0) || event.seq > after) &&
+              (instance === null || event.payload.instanceId === instance) &&
+              (flow === null ||
+                flowOf(event) === flow ||
+                (typeof event.payload.instanceId === 'string' &&
+                  instanceOf(current.log, event.payload.instanceId)?.flow === flow))
+          )
+        )
       }
       if (method === 'GET' && url === '/api/v1/state') {
         return json(res, 200, { applied: [...current.applied], log: current.log })
