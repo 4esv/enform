@@ -1,164 +1,173 @@
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Grant } from '../../engine/authorize.js'
-import { configOperation } from '../../engine/config.js'
-import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../../engine/definition.js'
-import { DEFINITION_PUBLISHED, type Flow } from '../../engine/flow.js'
+import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { DEFINITION_CHANGED } from '../../engine/definition.js'
+import { createFlow, DEFINITION_PUBLISHED, publish, push } from '../../engine/flow.js'
 import { addGrant, GRANT_CHANGE_TYPE } from '../../engine/grants.js'
-import { type ConnectorCall, contentHash } from '../../engine/instance.js'
 import {
-  type ActorId,
-  createOperation,
-  type Log,
-  type Operation,
-  type OperationDeps,
-} from '../../engine/operation.js'
-import type { TargetResolver } from '../../engine/routing.js'
-import { ASSIGNMENT_EMAIL, startInstance } from '../../engine/submission.js'
-import { CONNECTOR_CALLED } from '../../engine/timeline.js'
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import { resolverFor } from '../../server/intents.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  ANA,
+  bootstrap,
+  CHAIRS_GROUP,
+  DANA,
+  declared,
+  definitionV1,
+  definitionV2,
+  depsFor,
+  directory,
+  FLOW,
+  flow,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
+  LEE,
+  LIN,
+  membership,
+  OKAFOR,
+  REGISTRAR_TEAM,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+  stepResource,
+} from '../example-flow.js'
 
-// S15: investigate a problem (STORIES.md). Dana reads the timeline of the log
-// (I4): the flow edit that she made and the instance event that Sam caused,
-// in one global order (VT-5). The change feed filters by flow and by type
-// (VT-6), and a connector call shows its operation, its time and its outcome
-// and no response body (I13). The path is deterministic (I6): the clock and
-// the ID generator are injected, and it reads no random source.
+// S15: investigate a problem (STORIES.md). Sam's request is in progress when
+// Dana publishes version 2 of the flow, grants Lee a read on it and removes
+// Jordan from the registrar team; Dr. Okafor then approves, so the registrar
+// task resolves to the team as the log holds it now (AS-4, I13). The
+// instance timeline with changes shows the instance events and the
+// configuration changes in one global order, each change with its author
+// (VT-5, VT-6, I4, I14), and the instance in progress stays on version 1
+// (DF-2). Every step after the setup is a client intent that the server
+// resolves (ADR 0010), except the push and the publication, which the server
+// appends as the resolved configuration changes they are. The path is
+// deterministic (I6).
 
-/** The flow slug of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
+/** Sam's request: a two-credit overload, so the chair step is skipped (S05). */
+export const values = samValues(2)
 
-/** The resource of the flow (MVP.md 5.6): a grant on it covers all of its steps. */
-export const FLOW = `flow:${SLUG}`
+/** The grant that Dana records during the investigation: Lee reads the flow's instances (S02, AC-2). */
+export const leeRead = { principal: LEE, scopes: ['instance.read'], resource: FLOW }
 
-/** Dana, the developer who maintains enform at the institution (STORIES.md, Cast). */
-export const DANA: ActorId = 'user:dana'
+/** The team change that Dana records: Jordan leaves the registrar office (AS-6). */
+export const jordanLeaves = { team: REGISTRAR_TEAM, change: 'member-removed', member: JORDAN }
 
-/** Sam, the student who starts the request (S06, AC-5). */
-export const SAM: ActorId = 'user:sam'
+/** The golden path: the setup, Sam's request, Dana's three changes, then Dr. Okafor's approval. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps()]
+  const sam = grantsOfPerson(SAM)
 
-/** The instance id that Sam's start mints (DX-1, #187): deterministic, like every injected source (I6). */
-export const INSTANCE_ID = 'inst-1'
+  // Sam starts and submits (S06, ADR 0014): the request reaches Dr. Okafor.
+  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(6), directory(values), sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionV1, resolve: directory(values), grants: sam, owner: SAM },
+    depsFor(7)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
 
-/** The worker, which records the connector calls that it runs (SE-1, I13). */
-export const SYSTEM: ActorId = 'system'
+  // Dana pushes and publishes version 2 (DF-2, DF-4), grants Lee a read
+  // (AC-2) and removes Jordan from the registrar team (AS-6): four attributed
+  // configuration changes on the one log (I14).
+  const pushedV1 = push(createFlow(SLUG), definitionV1, depsFor(0), DANA)
+  const publishedV1 = publish(pushedV1.flow, depsFor(1), DANA)
+  const pushedV2 = push(publishedV1.flow, definitionV2, depsFor(8), DANA)
+  const publishedV2 = publish(pushedV2.flow, depsFor(9), DANA)
+  steps.push(declared(pushedV2.operation), declared(publishedV2.operation))
+  steps.push(declared(addGrant(leeRead, DANA, depsFor(10)), leeRead))
+  steps.push({ actor: DANA, type: TEAM_CHANGE_TYPE, payload: jordanLeaves, intent: jordanLeaves })
 
-/** The team that holds the registrar task (AS-1, AS-4). */
-export const REGISTRAR_TEAM = 'registrar-office'
-
-/** The time of the first event (I6): the clock is injected and the path reads no random source. */
-export const NOW = 1_700_000_000_000
-
-/** The one-minute step between the events, so the feed reads in time order (S15). */
-export const STEP = 60_000
-
-/** The two steps of the story: the request, then the registrar (WF-1). */
-export const draft: FlowDefinition = parse(`{
-  "schemaVersion": 1,
-  "steps": [
-    { "key": "request", "targets": [{ "starter": "starter" }], "outcomes": ["submit"] },
-    { "key": "registrar", "targets": [{ "team": "${REGISTRAR_TEAM}" }], "outcomes": ["approve", "reject"] }
-  ]
+  // Dr. Okafor claims and approves: the chair step is skipped, and the
+  // registrar task resolves to the team as the log holds it now, Lee and Ana
+  // (AS-4, I13). The instance stays on version 1 (DF-2).
+  const resolve = resolverFor(
+    SAM,
+    values,
+    new Map([[REGISTRAR_TEAM, [LEE, ANA]]]),
+    new Map([[CHAIRS_GROUP, [LIN]]])
+  )
+  const okaforClaim = claim(instanceAfter(steps), OKAFOR, 1, depsFor(12))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const okaforApprove = complete(
+    instanceAfter(steps),
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    depsFor(13)
+  )
+  if (okaforApprove.operation === undefined) throw new Error(okaforApprove.reason)
+  steps.push(
+    declared(okaforApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+  return steps
 }
-`)
 
-/** The event type of one definition change, for the type filter (VT-6, I14). */
-export const EDIT_TYPE = DEFINITION_CHANGED
+export const golden = scenario({
+  slug: 'investigate',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
+})
 
-/** The event type of a publication, for the type filter (VT-6, DF-2). */
-export const PUBLISHED_TYPE = DEFINITION_PUBLISHED
+/** The indexes of the story's steps after the setup, for the requirements and the tests. */
+export const STEP = {
+  start: 6,
+  submit: 7,
+  pushV2: 8,
+  publishV2: 9,
+  grantLee: 10,
+  removeJordan: 11,
+  okaforClaim: 12,
+  okaforApprove: 13,
+} as const
 
-/** The event type of one grant change, for the type filter (VT-6, AC-2). */
-export const GRANT_TYPE = GRANT_CHANGE_TYPE
-
-/** The publication of version 1: the slug, the version, the hash and the frozen definition (DF-2). */
-export const publication = {
-  slug: SLUG,
-  version: 1,
-  contentHash: contentHash(draft),
-  definition: draft,
-}
-
-/** Dana's grant change: the All-Students group may start the flow (S02, AC-2). */
-export const grant: Grant = {
-  principal: 'group:All-Students',
-  scopes: ['instance.start'],
-  resource: FLOW,
-}
-
-/** The published version 1: a start needs a version with a content hash (DF-2). */
-export const flow: Flow = {
-  slug: SLUG,
-  versions: [{ version: 1, contentHash: contentHash(draft), definition: draft }],
-}
-
-/** The directory of the story (AS-1, I13): the team and the starter resolve. */
-export const resolve: TargetResolver = (target) =>
-  'team' in target ? ['user:lee', 'user:ana'] : [SAM]
-
-/** The grants that apply to Sam: the All-Students group may start the flow (S02, AC-1). */
-export const starterGrants: readonly Grant[] = [grant]
-
-/** One connector call: the assignment email that the worker ran (I13). */
-export const call: ConnectorCall = {
-  operation: ASSIGNMENT_EMAIL,
-  time: NOW + 6 * STEP,
-  outcome: 'sent',
-}
-
-/**
- * The injected sources of the story (I6): the clock advances one minute per
- * operation, and the IDs are `op-N`. One shared source gives every operation a
- * distinct ID and a distinct time, in the order of the story.
- */
-function deps(): OperationDeps {
-  let time = 0
-  let id = 0
-  return {
-    clock: () => {
-      const at = NOW + time * STEP
-      time += 1
-      return at
-    },
-    ids: () => {
-      id += 1
-      return `op-${id}`
-    },
+/** What each step requires of its actor (I8), for the Actor operator. */
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case GRANT_CHANGE_TYPE:
+      return { scope: 'org.grants', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      return { actors: [OKAFOR] }
+    case STEP_COMPLETED:
+      return {
+        scope: 'step.outcome:approve',
+        resource: stepResource(ADVISOR_STEP),
+        actors: [OKAFOR],
+      }
+    default:
+      throw new Error(`S15: step ${index + 1} has no requirement (${step.type})`)
   }
-}
-
-/**
- * The log of the story (I4): the changes to the flow, the configuration and
- * the instance, in one global order. Dana makes the configuration changes, Sam
- * causes the instance event, and the worker records the connector call. The
- * timeline projects this log; it reads no other store (VT-5).
- */
-export function investigationLog(): Log {
-  const sources = deps()
-  const operations: readonly Operation[] = [
-    configOperation({ kind: 'definition', actor: DANA, payload: draft }, sources),
-    createOperation(DEFINITION_PUBLISHED, publication, sources, DANA),
-    addGrant(grant, DANA, sources),
-    configOperation(
-      {
-        kind: 'team',
-        actor: DANA,
-        payload: { name: REGISTRAR_TEAM, members: ['user:lee', 'user:ana'] },
-      },
-      sources
-    ),
-    configOperation(
-      {
-        kind: 'connector',
-        actor: DANA,
-        payload: { name: 'connector-smtp', operations: [ASSIGNMENT_EMAIL] },
-      },
-      sources
-    ),
-    configOperation(
-      { kind: 'template', actor: DANA, payload: { name: 'assignment-email' } },
-      sources
-    ),
-    startInstance(flow, INSTANCE_ID, {}, SAM, sources, resolve, starterGrants).operation,
-    createOperation(CONNECTOR_CALLED, { ...call }, sources, SYSTEM),
-  ]
-  return operations.reduce((state: State, operation) => apply(operation, state), emptyState).log
 }
