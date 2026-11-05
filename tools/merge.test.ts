@@ -64,7 +64,7 @@ function changed(
 }
 
 type Doc = {
-  steps: { key: string; fields?: Record<string, unknown>[]; outcomes?: string[] }[]
+  steps: Record<string, unknown>[] & { key: string; fields?: Record<string, unknown>[] }[]
 }
 
 const priyaFixesLabel = changed(base, (doc) => {
@@ -85,7 +85,7 @@ const danaAddsField = changed(base, (doc) => {
   request.fields?.push(reasonField)
 })
 
-test.fails('#264 S03 DF-3 two edits of different places merge, and each lands as its author made it', async () => {
+test('#264 S03 DF-3 two edits of different places merge, and each lands as its author made it', async () => {
   const { mergeDefinitions } = await merge()
   const merged = mergeDefinitions(base, priyaFixesLabel, danaAddsField)
   expect(merged.conflicts).toEqual([])
@@ -104,10 +104,13 @@ test.fails('#264 S03 DF-3 two edits of different places merge, and each lands as
   )
   // Steps each side added both land, ours first.
   const oursStep = changed(base, (doc) =>
-    (doc as unknown as Doc).steps.push({ key: 'chair', outcomes: ['approve'] })
+    (doc as unknown as Doc).steps.push({ key: 'chair', targets: [{ group: 'CS-Chairs' }] })
   )
   const theirsStep = changed(base, (doc) =>
-    (doc as unknown as Doc).steps.push({ key: 'registrar', outcomes: ['approve'] })
+    (doc as unknown as Doc).steps.push({
+      key: 'registrar',
+      targets: [{ team: 'registrar-office' }],
+    })
   )
   const both = mergeDefinitions(base, oursStep, theirsStep)
   expect(both.conflicts).toEqual([])
@@ -119,7 +122,7 @@ test.fails('#264 S03 DF-3 two edits of different places merge, and each lands as
   ])
 })
 
-test.fails('#264 S03 DF-3 the same place changed differently on both sides is a conflict that names its path', async () => {
+test('#264 S03 DF-3 the same place changed differently on both sides is a conflict that names its path', async () => {
   const { mergeDefinitions } = await merge()
   const danaRenames = changed(base, (doc) => {
     const request = (doc as unknown as Doc).steps[0]
@@ -159,7 +162,7 @@ test.fails('#264 S03 DF-3 the same place changed differently on both sides is a 
   })
 })
 
-test.fails('#264 I4 the base of a write is read back from the log by its content hash', async () => {
+test('#264 I4 the base of a write is read back from the log by its content hash', async () => {
   const { definitionByHash } = await merge()
   const deps = (id: string) => ({ clock: () => 1, ids: () => id })
   const pushed = push(createFlow('course-overload'), base, deps('push-1'), 'user:dana')
