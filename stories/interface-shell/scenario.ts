@@ -12,8 +12,9 @@ import type { TargetResolver } from '../../engine/routing.js'
 // seed publishes one anonymous flow; Sam may start it and nobody else holds
 // a grant.
 
-/** The flow slug that the browser opens. */
+/** The anonymous flow the browser opens, and the one that needs a grant to start. */
 export const SLUG = 'open-door'
+export const CLOSED_SLUG = 'closed-door'
 
 /** The person who may start the flow, and one who may not (AC-1). */
 export const SAM = 'user:sam'
@@ -33,9 +34,22 @@ export const definition: FlowDefinition = parse(`{
 }
 `)
 
-/** Sam may start the flow; nobody else holds a grant (AC-1). */
+/** The same form without anonymous access: a start needs `instance.start` (AC-1). */
+export const closedDefinition: FlowDefinition = parse(`{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "request",
+      "targets": [{ "starter": "starter" }],
+      "fields": [{ "key": "summary", "control": "text" }]
+    }
+  ]
+}
+`)
+
+/** Sam may start the closed flow; nobody else holds a grant (AC-1). An anonymous flow needs none (ID-3). */
 export const grants: readonly Grant[] = [
-  { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
+  { principal: SAM, scopes: ['instance.start'], resource: `flow:${CLOSED_SLUG}` },
 ]
 
 /** The directory of the test (ID-4): a user target is its principal; the starter is whoever starts. */
@@ -54,10 +68,17 @@ function deps(): OperationDeps {
   }
 }
 
-/** The published seed that the form reads the flow back from (DF-2). */
+/** The published seed that the forms read their flows back from (DF-2): both flows at version 1. */
 export function publishedState(): State {
   const sources = deps()
-  const pushed = push(createFlow(SLUG), definition, sources, 'user:dana')
-  const published = publish(pushed.flow, sources, 'user:dana')
-  return apply(published.operation, apply(pushed.operation, emptyState))
+  let state = emptyState
+  for (const [slug, body] of [
+    [SLUG, definition],
+    [CLOSED_SLUG, closedDefinition],
+  ] as const) {
+    const pushed = push(createFlow(slug), body, sources, 'user:dana')
+    const published = publish(pushed.flow, sources, 'user:dana')
+    state = apply(published.operation, apply(pushed.operation, state))
+  }
+  return state
 }

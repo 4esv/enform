@@ -462,7 +462,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
   ): { submit: () => void; post: (operation: Operation, key?: string) => Promise<void> } => {
     const instancePath = instanceUrl(slug, instanceId)
     let navigateAfterFlush = false
+    // The first refusal of a send is the one the person reads (A4): a start
+    // the server refused takes the submit queued behind it down with it, and
+    // the page keeps the reason instead of a later, derived one.
+    let refusal: RequestRefused | undefined
     onRefused = (operation, error) => {
+      if (refusal === undefined) refusal = error
       showRefusal(status, form, error)
       if (operation.type === INSTANCE_SUBMITTED) navigateAfterFlush = false
     }
@@ -492,11 +497,18 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
       await store.enqueue(operation as unknown as Record<string, unknown>)
       await showQueued()
+      refusal = undefined
       let flushed = await flushQueue()
       while (flushed && store !== undefined && (await store.pending()).length > 0) {
         flushed = await flushQueue()
       }
       await showQueued()
+      if (refusal !== undefined) {
+        // The server refused this send: the reason stays on the status line,
+        // and nothing of it is marked synced (I16).
+        showRefusal(status, form, refusal)
+        return
+      }
       if (!flushed) {
         markSync(key, 'saved')
         status.textContent = navigateAfterFlush
@@ -733,6 +745,16 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const heading = document.createElement('h1')
     heading.textContent = flow.slug
     main.appendChild(heading)
+    // Anonymous access is an explicit setting of the flow, and the form says
+    // so where the person fills it in, not only in the builder (ID-3).
+    if (flow.definition.anonymous === true) {
+      const anonymous = document.createElement('p')
+      anonymous.className = 'warning'
+      anonymous.dataset.anonymous = ''
+      anonymous.textContent =
+        'Anonymous access: this flow can be started without signing in, and a submission made that way names no person.'
+      main.appendChild(anonymous)
+    }
 
     const stepKey = stepKeys(flow.definition)[0]
     if (stepKey === undefined) throw new Error('the flow has no step to show')
