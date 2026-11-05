@@ -299,6 +299,65 @@ paths:
                 $ref: '#/components/schemas/PublishedFlow'
         '404':
           description: No flow has this slug
+  /api/v1/flows/{slug}/diff:
+    get:
+      operationId: readFlowDiff
+      summary: Read the difference between two points of a flow's history
+      description: >-
+        The field-level difference from one point of the flow's history to
+        another (DF-6, S03, S04): two published versions, or a version and
+        the draft. Each change carries its path, its class, the value before
+        and after, and the author and the time of the push that made it,
+        read from the log (I4, I14). A point is a published version number
+        or `draft`. `to` absent means the draft; `from` absent means the
+        parent of `to`: the version before a version, the newest version
+        before the draft. A version needs a flow read scope; the draft is the
+        working copy, so a point at the draft needs `flow.read`, `flow.edit`
+        or `flow.build` (I8). An unknown version answers 404.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The flow slug (ID-1).
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: The point the difference starts from; absent means the parent of `to`.
+          schema:
+            type: string
+        - name: to
+          in: query
+          required: false
+          description: The point the difference ends at; absent means the draft.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The attributed difference between the two points.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefinitionDiff'
+        '400':
+          description: A point is neither a positive version number nor `draft`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: The principal may not read the flow, or the draft (I8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No flow has this slug, or it has no such version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/flows/{slug}/grants:
     get:
       operationId: readFlowGrants
@@ -957,9 +1016,12 @@ paths:
         structural (DF-3, DF-5) and appends the attributed operations that
         record it (I14). `version` is the draft version the client based the
         edit on, so a stale write is refused with 409 and appends nothing (I5),
-        and the client re-reads and retries (A1). A definition that the schema
-        rejects answers 422 with every error by path, and nothing is appended
-        (DF-1, A9).
+        and the client re-reads and retries (A1). `baseHash` names the draft
+        the edit is based on, so two people editing at the same time are
+        merged instead of blocked (DF-3, S03): a place only one side changed
+        lands, and a place both changed differently answers 409 with the
+        conflicting paths. A definition that the schema rejects answers 422
+        with every error by path, and nothing is appended (DF-1, A9).
       parameters:
         - name: slug
           in: path
@@ -998,8 +1060,10 @@ paths:
                 $ref: '#/components/schemas/ApiError'
         '409':
           description: >-
-            The version is stale: another write reached the draft first, so
-            this one appends nothing and the client re-reads (I5, A1).
+            The version is stale, or the write named a `baseHash` and the
+            merge with the current draft found a place both changed
+            differently: `conflicts` names each such path (DF-3, S03). Either
+            way this write appends nothing and the client re-reads (I5, A1).
           content:
             application/json:
               schema:
@@ -1012,6 +1076,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/flows/{slug}/dry-run:
+    post:
+      operationId: dryRunFlow
+      summary: Run a version or the draft of a flow as a dry run
+      description: >-
+        A dry run of any published version or of the draft (DR-1) with the
+        given data: the route with the steps a condition skipped and their
+        conditions (S05), who each active step resolves to and through which
+        target (S08, AS-1), the assignment emails of the next step as the
+        preview inbox (DR-3), and, with the simulated clock moved forward,
+        the reminders and the escalation that step fires by then (DR-4, S12).
+        The run writes no event and sends nothing (A6, I7). It needs
+        `flow.dryrun`, `flow.edit` or `flow.build` on the flow. Running as
+        another person needs `org.impersonate` on `org`, and the log records
+        each such use as `dryrun.ran@1` (DR-5, I14); nothing else of a dry
+        run is stored (DR-6).
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DryRunRequest'
+      responses:
+        '200':
+          description: The dry run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DryRunResult'
+        '400':
+          description: The body names no data, or a version that is neither a number nor `draft`.
+        '401':
+          description: There is no session.
+        '403':
+          description: The person may not dry-run the flow, or may not run as another person.
+        '404':
+          description: No flow has the slug, or the version is not published, or the draft is empty.
   /api/v1/flows/{slug}/publish:
     post:
       operationId: publishFlow
@@ -2034,6 +2141,7 @@ components:
         - values
         - fields
         - outcomes
+        - allowedOutcomes
         - version
         - previousSteps
         - notes
@@ -2113,6 +2221,15 @@ components:
           description: >-
             The outcomes the current step offers (AC-4, WF-2), in definition
             order; empty when the step declares none or no step is open.
+          items:
+            type: string
+        allowedOutcomes:
+          type: array
+          description: >-
+            The outcomes of the current step the acting principal may choose
+            (AC-4, S02): a `step.outcome:<name>` scope on the step or on the
+            flow allows that outcome and no other. The page offers these
+            alone, so a reviewer with `send_back` only sees Send back.
           items:
             type: string
         previousSteps:
@@ -2354,6 +2471,33 @@ components:
             absent when no field of the request is at fault.
           items:
             $ref: '#/components/schemas/FieldError'
+        conflicts:
+          type: array
+          description: >-
+            The places a merged draft write could not settle (DF-3, S03):
+            present on a 409 of `PUT /api/v1/flows/{slug}/draft` whose
+            three-way merge found a place both sides changed differently,
+            absent otherwise.
+          items:
+            $ref: '#/components/schemas/MergeConflict'
+    MergeConflict:
+      type: object
+      description: >-
+        One place of a draft that two writes changed differently (DF-3,
+        S03): its path, in the shape of a definition change, and the value
+        the base, the write and the current draft hold there. A value is
+        absent where that side has none.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Where the conflict sits, for example `/steps/request/fields/summary/label`.
+        base:
+          description: The value of the draft the write was based on.
+        ours:
+          description: The value the write holds.
+        theirs:
+          description: The value the current draft holds.
     FieldError:
       type: object
       description: >-
@@ -2439,10 +2583,19 @@ components:
         and the cookie stops authenticating at once (ID-5). The browser and the
         CLI read the same session: one principal and one session row
         (ADR 0012).
-      required: [principal, expiresAt, csrfToken]
+      required: [principal, grants, expiresAt, csrfToken]
       properties:
         principal:
           $ref: '#/components/schemas/Principal'
+        grants:
+          type: array
+          description: >-
+            The grants that apply to the principal (AC-1, DF-5, #264), as the
+            server authorizes with them. The builder reads them to disable the
+            structural controls for a person who holds `flow.edit` and not
+            `flow.build`; the engine authorizes every write again (I8).
+          items:
+            $ref: '#/components/schemas/Grant'
         expiresAt:
           type: number
           description: >-
@@ -2632,6 +2785,13 @@ components:
           description: >-
             The draft version that this read is based on and that the next
             write names (DF-2, I5).
+        draftHash:
+          type: string
+          description: >-
+            The content hash of the draft definition (DF-2, DF-3, S03): the
+            copy this read is based on. A write names it as `baseHash`, so a
+            write made beside another one merges with the draft instead of
+            replacing it. It is absent while the draft is empty.
         definition:
           type: object
           description: >-
@@ -2676,6 +2836,178 @@ components:
           description: The value before the change, when one place changed.
         after:
           description: The value after the change, when one place changed.
+    DryRunRequest:
+      type: object
+      description: >-
+        What a dry run takes (DR-1, DR-4, DR-5): the version to run (a
+        published version number, or `draft`; absent means the draft), the
+        data of the request form, the person to run as, and how far to move
+        the simulated clock forward, in minutes.
+      required: [data]
+      properties:
+        version:
+          type: string
+          description: A published version number, or `draft`; absent means the draft.
+          pattern: '^([1-9][0-9]*|draft)$'
+        data:
+          type: object
+          additionalProperties: true
+        as:
+          $ref: '#/components/schemas/ActorId'
+        advanceMinutes:
+          type: integer
+          minimum: 0
+    DryRunTimer:
+      type: object
+      description: One timer of the next step and whether the moved clock fired it (DR-4).
+      required: [step, kind, fireAt, fired]
+      properties:
+        step:
+          type: string
+        kind:
+          type: string
+          enum: [reminder, escalation]
+        fireAt:
+          type: integer
+        fired:
+          type: boolean
+    DefinitionDiff:
+      type: object
+      description: >-
+        The attributed difference between two points of a flow's history
+        (DF-6, S03): the net field-level changes from `from` to `to`, each
+        with the author and the time of the push that made it. A point is a
+        published version number as a string, or `draft`.
+      required: [slug, from, to, changes]
+      properties:
+        slug:
+          type: string
+          description: The flow slug (ID-1).
+        from:
+          type: string
+          description: The point the difference starts from, a version number or `draft`.
+        to:
+          type: string
+          description: The point the difference ends at, a version number or `draft`.
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttributedChange'
+    AttributedChange:
+      type: object
+      description: >-
+        One difference between two points, as the engine classifies it
+        (DF-5, DF-6), with the author and the time of the push that made it
+        (S03, I14). The author is absent when no push between the two points
+        changed the path, for example on the first version.
+      required: [class, message, path]
+      properties:
+        class:
+          type: string
+          description: Whether the change needs `flow.edit` or `flow.build` (DF-5, D2).
+          enum: [edit, structural]
+        message:
+          type: string
+          description: A short description of the difference (DF-6).
+        path:
+          type: string
+          description: Where the difference sits, for example `/steps/request/fields/summary/label`.
+        before:
+          description: The value before the change, when one place changed.
+        after:
+          description: The value after the change, when one place changed.
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        at:
+          type: integer
+          description: When the push that made the change was recorded, in milliseconds since the epoch.
+    DryRunResult:
+      type: object
+      description: >-
+        What a dry run shows (DR-1, DR-3, DR-4, S05, S08): the flow and the
+        version it ran, the person it ran as, the simulated start time, the
+        route with the skipped steps and their conditions, who each active
+        step resolves to and why, the step a submit routes to, the preview
+        inbox, and the timers of that step.
+      required: [flow, version, actor, now, route, assignees, intents, timers]
+      properties:
+        flow:
+          type: string
+        version:
+          type: string
+          description: The published version number that ran, or `draft`.
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        now:
+          type: integer
+        route:
+          $ref: '#/components/schemas/DryRunRoute'
+        assignees:
+          type: array
+          items:
+            $ref: '#/components/schemas/DryRunAssignee'
+        next:
+          type: string
+        intents:
+          type: array
+          description: >-
+            The preview inbox (DR-3): each side effect as the outbox would
+            carry it, with what it would send and to whom.
+          items:
+            $ref: '#/components/schemas/DryRunIntent'
+        timers:
+          type: array
+          items:
+            $ref: '#/components/schemas/DryRunTimer'
+    DryRunRoute:
+      type: object
+      description: >-
+        The route of a dry run (S05, WF-1): the active steps in order, and the
+        steps a condition skipped with the condition.
+      required: [active, skipped]
+      properties:
+        active:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            $ref: '#/components/schemas/DryRunSkipped'
+    DryRunSkipped:
+      type: object
+      required: [step, condition]
+      properties:
+        step:
+          type: string
+        condition:
+          description: The JSON expression that was true (FM-5).
+    DryRunAssignee:
+      type: object
+      description: Who one active step resolves to, and through which target (S08, AS-1).
+      required: [step, target, members]
+      properties:
+        step:
+          type: string
+        target:
+          type: object
+          additionalProperties: true
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActorId'
+    DryRunIntent:
+      type: object
+      description: One side effect of the preview inbox (DR-3), as the outbox would carry it.
+      required: [operation, target, payload]
+      properties:
+        operation:
+          type: string
+        target:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
     DraftWrite:
       type: object
       description: >-
@@ -2690,6 +3022,15 @@ components:
           type: integer
           minimum: 1
           description: The draft version that the edit is based on (I5).
+        baseHash:
+          type: string
+          description: >-
+            The `draftHash` of the draft the edit is based on (DF-3, S03).
+            When the draft moved on since, the server merges the edit with
+            the current draft three ways: a place only one side changed
+            lands, and a place both changed differently is a conflict that
+            answers 409 with `conflicts`. Absent, the write replaces the
+            draft as before.
         definition:
           type: object
           description: >-

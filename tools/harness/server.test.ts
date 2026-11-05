@@ -378,6 +378,7 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
           { key: 'details', control: 'long-text' },
         ],
         outcomes: [],
+        allowedOutcomes: [],
         previousSteps: [],
         notes: [],
         canWithdraw: true,

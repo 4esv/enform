@@ -24,30 +24,38 @@ const BUILD = 'flow.build'
  * others hold a start scope or one step's outcome scopes, not `flow.build`.
  */
 const cast: readonly Grant[] = [
-  { principal: 'dana', scopes: [BUILD], resource: '*' },
-  { principal: 'priya', scopes: ['flow.edit', 'flow.dryrun', 'instance.read'], resource: FLOW },
-  { principal: 'sam', scopes: ['instance.start'], resource: FLOW },
+  { principal: 'user:dana', scopes: [BUILD], resource: '*' },
   {
-    principal: 'okafor',
+    principal: 'user:priya',
+    scopes: ['flow.edit', 'flow.dryrun', 'instance.read'],
+    resource: FLOW,
+  },
+  { principal: 'user:sam', scopes: ['instance.start'], resource: FLOW },
+  {
+    principal: 'user:okafor',
     scopes: ['step.outcome:approve', 'step.outcome:send_back'],
     resource: `${FLOW}/step:advisor`,
   },
   {
-    principal: 'lin',
+    principal: 'user:lin',
     scopes: ['step.outcome:approve', 'step.outcome:send_back'],
     resource: `${FLOW}/step:chair`,
   },
   {
-    principal: 'lee',
+    principal: 'user:lee',
     scopes: ['step.outcome:approve', 'step.outcome:reject'],
     resource: `${FLOW}/step:registrar`,
   },
   {
-    principal: 'ana',
+    principal: 'user:ana',
     scopes: ['step.outcome:approve', 'step.outcome:reject'],
     resource: `${FLOW}/step:registrar`,
   },
-  { principal: 'jordan', scopes: ['step.outcome:send_back'], resource: `${FLOW}/step:registrar` },
+  {
+    principal: 'user:jordan',
+    scopes: ['step.outcome:send_back'],
+    resource: `${FLOW}/step:registrar`,
+  },
 ]
 
 /** The grants as they enter the log, one attributed operation each (AC-2, I14). */
@@ -55,7 +63,7 @@ function grantsLog(grants: readonly Grant[]): Log {
   let state = emptyState
   grants.forEach((grant, index) => {
     const deps = { clock: () => index + 1, ids: () => `grant-${index + 1}` }
-    state = apply(addGrant(grant, 'dana', deps), state)
+    state = apply(addGrant(grant, 'user:dana', deps), state)
   })
   return state.log
 }
@@ -67,14 +75,14 @@ test('#32 the Race operator adds a competing action at each S01 step (S01)', () 
   // Dana acts every step of the golden path, so every other person is a
   // competitor. One variant per step and per competitor, generated in step
   // order, then cast order, so the generation is deterministic (I6).
-  const competitors = Object.keys(people).filter((person) => person !== 'dana')
+  const competitors = Object.keys(people).filter((person) => person !== 'user:dana')
   const generated = raceVariants(golden, people)
   expect(generated).toHaveLength(golden.steps.length * competitors.length)
   expect(generated.slice(0, 2).map((variant) => variant.id)).toEqual([
-    'race:step1:priya',
-    'race:step1:sam',
+    'race:step1:user:priya',
+    'race:step1:user:sam',
   ])
-  expect(generated.every((variant) => variant.actor === 'dana')).toBe(true)
+  expect(generated.every((variant) => variant.actor === 'user:dana')).toBe(true)
 
   // The runner runs every race both ways: the golden action wins once and the
   // competitor wins once, and exactly one succeeds each time (I5). The oracles

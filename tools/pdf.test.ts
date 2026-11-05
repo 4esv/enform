@@ -53,6 +53,7 @@ function view(): InstanceView {
     values: { summary: 'Three extra credits', secret: 'Hidden value' },
     fields: [{ key: 'summary', control: 'text', label: 'Summary' }],
     outcomes: [],
+    allowedOutcomes: [],
     version: 5,
     previousSteps: [],
     notes: [],

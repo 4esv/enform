@@ -148,7 +148,7 @@ function run(argv: readonly string[], json: boolean, cwd: string): number | Prom
 }
 
 /** The `flow` commands that a signed-in person runs against the server (#258). */
-const REMOTE_FLOW_COMMANDS = new Set(['pull', 'push', 'publish', 'diff'])
+const REMOTE_FLOW_COMMANDS = new Set(['pull', 'push', 'publish', 'diff', 'dry-run'])
 
 /** The service commands that ADR 0011 gives the one `enform` binary. */
 const SERVICE_COMMANDS = new Set(['init', 'serve', 'migrate', 'worker', 'admin', 'seed', 'doctor'])

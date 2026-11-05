@@ -33,7 +33,9 @@ import {
 import type { Pool } from 'pg'
 import { STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
-import { type FlowDefinition, parse } from '../engine/definition.js'
+import { type FlowDefinition, type JsonValue, parse } from '../engine/definition.js'
+import { definitionDiff, type VersionRef } from '../engine/diff.js'
+import { dryRun } from '../engine/dryrun.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
 import {
   changeTitle,
@@ -46,9 +48,16 @@ import {
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
+import { contentHash } from '../engine/instance.js'
 import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
 import { readableLog } from '../engine/logRead.js'
-import type { Log, Operation, OperationDeps } from '../engine/operation.js'
+import { definitionByHash, mergeDefinitions } from '../engine/merge.js'
+import {
+  createOperation,
+  type Log,
+  type Operation,
+  type OperationDeps,
+} from '../engine/operation.js'
 import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
@@ -68,6 +77,7 @@ import {
   flowExists,
   grantsOfFlow,
   grantsOfPrincipal,
+  groupMembersFromPrincipals,
   type InboxTab,
   isClearedSeedRecord,
   listFlowSummaries,
@@ -252,6 +262,9 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     if (auth === undefined) return unauthorized(c)
     return c.json({
       principal: auth.principal,
+      // The grants that apply to the principal (AC-1, DF-5, #264), so the
+      // builder knows which controls the server would refuse (I8).
+      grants: await grantsOfPrincipal(pool, auth.principal.id),
       expiresAt: auth.session.expiresAt,
       csrfToken: auth.session.csrfToken,
     })
@@ -532,7 +545,14 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     if (stored === undefined || stored.flow.draft === undefined) {
       return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
     }
-    return c.json({ slug, version: stored.draftVersion, definition: stored.flow.draft })
+    // The read names the hash of the draft, so a write can name the copy it
+    // is based on and merge with a write made beside it (DF-3, S03, #264).
+    return c.json({
+      slug,
+      version: stored.draftVersion,
+      draftHash: contentHash(stored.flow.draft),
+      definition: stored.flow.draft,
+    })
   })
 
   app.put('/api/v1/flows/:slug/draft', async (c) => {
@@ -567,6 +587,50 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
         409
       )
     }
+    // Two people edit the draft at the same time and nobody is blocked (DF-3,
+    // S03, #264): a write that names the draft it was based on merges with
+    // the draft another write left since. The engine merges three ways; a
+    // place both changed differently is a conflict the writer decides (A1).
+    const current = stored.flow.draft
+    if (
+      input.baseHash !== undefined &&
+      current !== undefined &&
+      input.baseHash !== contentHash(current)
+    ) {
+      const base = definitionByHash(await readLog(pool), slug, input.baseHash)
+      if (base === undefined) {
+        return c.json(
+          {
+            error: `the draft moved on since the copy ${input.baseHash} was read`,
+            code: 'version-stale',
+          },
+          409
+        )
+      }
+      const merged = mergeDefinitions(base, definition, current)
+      if (merged.definition === undefined) {
+        const paths = merged.conflicts.map((conflict) => conflict.path).join(', ')
+        return c.json(
+          {
+            error: `the draft changed at the same places since it was read: ${paths}`,
+            code: 'version-stale',
+            conflicts: merged.conflicts,
+          },
+          409
+        )
+      }
+      try {
+        definition = parse(JSON.stringify(merged.definition))
+      } catch (error) {
+        return c.json(
+          {
+            error: `the merged draft is not valid: ${messageOf(error)}`,
+            code: 'version-stale',
+          },
+          409
+        )
+      }
+    }
     const grants = await grantsOfPrincipal(pool, auth.principal.id)
     const changes = changesForPush(stored.flow, definition)
     if (!changeAllowed(grants, slug, changes)) {
@@ -575,13 +639,116 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     const pushed = push(stored.flow, definition, operationDeps, auth.principal.id, grants)
     await appendOperation(pool, pushed.operation)
     // The write answers the field-level changes it made, with their paths, so
-    // the builder shows what changed (DF-3, DF-6, #256).
+    // the builder shows what changed (DF-3, DF-6, #256), and the hash of the
+    // draft it left, so the next write names its base (S03).
+    const draft = pushed.flow.draft ?? definition
     return c.json({
       slug,
       version: stored.draftVersion,
-      definition: pushed.flow.draft ?? definition,
+      draftHash: contentHash(draft),
+      definition: draft,
       changes,
     })
+  })
+
+  // Issue #264, DR-1, DR-3, DR-4, DR-5, DR-6, I7, I8: a dry run of a version
+  // or the draft. The engine routes, resolves and previews; the route reads
+  // the definition, the directory and the grants, writes nothing of the run,
+  // and records only an impersonated run (DR-5, I14).
+  app.post('/api/v1/flows/:slug/dry-run', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const slug = c.req.param('slug')
+    const body = await readJsonObject(c)
+    if (body === undefined || !isRecord(body.data)) {
+      return c.json({ error: 'the body needs the data of the request form' }, 400)
+    }
+    const requested = body.version ?? 'draft'
+    const versionValue: number | 'draft' =
+      requested === 'draft'
+        ? 'draft'
+        : typeof requested === 'number'
+          ? requested
+          : typeof requested === 'string' && /^[1-9][0-9]*$/.test(requested)
+            ? Number(requested)
+            : Number.NaN
+    if (versionValue !== 'draft' && (!Number.isInteger(versionValue) || versionValue < 1)) {
+      return c.json({ error: 'version is a published version number or draft' }, 400)
+    }
+    const advance = body.advanceMinutes ?? 0
+    if (typeof advance !== 'number' || !Number.isInteger(advance) || advance < 0) {
+      return c.json({ error: 'advanceMinutes must be a non-negative integer' }, 400)
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const resource = `flow:${slug}`
+    if (
+      !['flow.dryrun', 'flow.edit', 'flow.build'].some((scope) =>
+        authorize(grants, scope, resource)
+      )
+    ) {
+      return c.json(
+        { error: `a dry run requires flow.dryrun, flow.edit or flow.build on ${resource}` },
+        403
+      )
+    }
+    const as = nonEmpty(typeof body.as === 'string' ? body.as : undefined)
+    if (
+      as !== undefined &&
+      as !== auth.principal.id &&
+      !authorize(grants, 'org.impersonate', 'org')
+    ) {
+      return c.json(
+        { error: 'running as another person requires org.impersonate on org (DR-5)' },
+        403
+      )
+    }
+    let definition: FlowDefinition
+    if (versionValue === 'draft') {
+      const stored = await readFlowProjection(pool, slug)
+      if (stored === undefined || stored.flow.draft === undefined) {
+        return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
+      }
+      definition = stored.flow.draft
+    } else {
+      const published = publishedVersion(await readLog(pool), slug, versionValue)
+      if (published === undefined) {
+        return c.json({ error: `the flow ${slug} has no published version ${versionValue}` }, 404)
+      }
+      definition = published.definition
+    }
+    const actor = as ?? auth.principal.id
+    const data = body.data as Record<string, JsonValue>
+    const log = await readLog(pool)
+    const teamMembers = await teamMembersFor(pool, log)
+    // A dry run resolves the live targets through the directory, like a live
+    // run (AS-4); when the identity provider cannot be reached it answers
+    // from the membership the profile cache recorded at the last sign-in or
+    // sync (ID-5), so a rehearsal never depends on the directory being up.
+    const groupMembers = await groupMembersFor(config).catch(() => groupMembersFromPrincipals(pool))
+    const now = Date.now()
+    const result = dryRun({
+      definition,
+      data,
+      actor,
+      resolve: resolverFor(actor, data, teamMembers, groupMembers),
+      now,
+      advanceMs: advance * 60_000,
+    })
+    if (as !== undefined && as !== auth.principal.id) {
+      // The log records each impersonated run (DR-5, I14); nothing else of
+      // the run is stored (DR-6).
+      await appendOperation(
+        pool,
+        createOperation(
+          'dryrun.ran@1',
+          { flow: slug, version: String(versionValue), as },
+          operationDeps,
+          auth.principal.id
+        )
+      )
+    }
+    return c.json({ flow: slug, version: String(versionValue), actor, now, ...result })
   })
 
   app.post('/api/v1/flows/:slug/publish', async (c) => {
@@ -657,6 +824,39 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
       version: published.version,
       contentHash: published.contentHash,
       definition: published.definition,
+    })
+  })
+
+  // Issue #264, DF-6, S03, S04, I8, I14: the attributed difference between
+  // two points of a flow's history. The engine reads it from the log; the
+  // route only parses the points and authorizes the read: a version needs a
+  // flow read scope, the draft a draft scope.
+  app.get('/api/v1/flows/:slug/diff', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const slug = c.req.param('slug')
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!mayReadFlow(grants, slug)) {
+      return c.json({ error: `reading the flow requires a scope on flow:${slug}` }, 403)
+    }
+    const from = versionRefOf(c.req.query('from'))
+    const toRef = versionRefOf(c.req.query('to'))
+    if (from === null || toRef === null) {
+      return c.json({ error: 'a point is a positive version number or draft' }, 400)
+    }
+    const to = toRef === undefined ? 'draft' : toRef
+    if ((from === 'draft' || to === 'draft') && !mayReadDraft(grants, slug)) {
+      return c.json({ error: `reading the draft requires a flow scope on flow:${slug}` }, 403)
+    }
+    const diff = definitionDiff(await readLog(pool), slug, from, to)
+    if (diff === undefined) {
+      return c.json({ error: `the flow ${slug} has no such version` }, 404)
+    }
+    return c.json({
+      slug,
+      from: String(diff.from),
+      to: String(diff.to),
+      changes: diff.changes,
     })
   })
 
@@ -1446,11 +1646,12 @@ function readCreateFlow(
 /** Read the body of `PUT /api/v1/flows/{slug}/draft` (#220, I5). */
 function readDraftWrite(
   body: Record<string, unknown>
-): { version: number; definition: unknown } | undefined {
-  const { version, definition } = body
+): { version: number; definition: unknown; baseHash?: string } | undefined {
+  const { version, definition, baseHash } = body
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) return undefined
   if (!isRecord(definition)) return undefined
-  return { version, definition }
+  if (baseHash !== undefined && (typeof baseHash !== 'string' || baseHash === '')) return undefined
+  return { version, definition, ...(baseHash === undefined ? {} : { baseHash }) }
 }
 
 /** Read the body of `POST /api/v1/flows/{slug}/publish` (#220, I5). */
@@ -1478,6 +1679,19 @@ function includesChanges(value: string | undefined): boolean {
 /** A query value that names something, or undefined for an absent or empty one. */
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value
+}
+
+/**
+ * One point of a flow's history from a query parameter (DF-6, #264): a
+ * positive version number or `draft`; absent gives undefined, anything else
+ * gives null.
+ */
+function versionRefOf(value: string | undefined): VersionRef | undefined | null {
+  const text = nonEmpty(value)
+  if (text === undefined) return undefined
+  if (text === 'draft') return 'draft'
+  const number = Number(text)
+  return Number.isInteger(number) && number >= 1 ? number : null
 }
 
 /** The filename of an instance PDF: the flow, the instance and the step, ASCII and safe (OU-1). */

@@ -364,6 +364,7 @@ export interface InstanceView {
   readonly values: Record<string, unknown>
   readonly fields: readonly InstanceField[]
   readonly outcomes: readonly string[]
+  readonly allowedOutcomes: readonly string[]
   readonly previousSteps: readonly string[]
   readonly notes: readonly Note[]
   readonly withdrawal?: string
@@ -428,6 +429,19 @@ export interface ApiError {
   readonly error: string
   readonly code?: string
   readonly errors?: readonly FieldError[]
+  readonly conflicts?: readonly MergeConflict[]
+}
+
+/**
+ * One place of a draft that two writes changed differently (DF-3, S03): its path, in the shape
+ * of a definition change, and the value the base, the write and the current draft hold there. A
+ * value is absent where that side has none.
+ */
+export interface MergeConflict {
+  readonly path: string
+  readonly base?: Record<string, unknown>
+  readonly ours?: Record<string, unknown>
+  readonly theirs?: Record<string, unknown>
 }
 
 /**
@@ -481,6 +495,7 @@ export interface CliAuth {
  */
 export interface Session {
   readonly principal: Principal
+  readonly grants: readonly Grant[]
   readonly expiresAt: number
   readonly csrfToken: string
 }
@@ -560,6 +575,7 @@ export interface FlowSummary {
 export interface DraftFlow {
   readonly slug: string
   readonly version: number
+  readonly draftHash?: string
   readonly definition?: Record<string, unknown>
   readonly changes?: readonly DefinitionChange[]
 }
@@ -578,6 +594,105 @@ export interface DefinitionChange {
 }
 
 /**
+ * What a dry run takes (DR-1, DR-4, DR-5): the version to run (a published version number, or
+ * `draft`; absent means the draft), the data of the request form, the person to run as, and how
+ * far to move the simulated clock forward, in minutes.
+ */
+export interface DryRunRequest {
+  readonly version?: string
+  readonly data: Record<string, unknown>
+  readonly as?: ActorId
+  readonly advanceMinutes?: number
+}
+
+/**
+ * One timer of the next step and whether the moved clock fired it (DR-4).
+ */
+export interface DryRunTimer {
+  readonly step: string
+  readonly kind: string
+  readonly fireAt: number
+  readonly fired: boolean
+}
+
+/**
+ * The attributed difference between two points of a flow's history (DF-6, S03): the net
+ * field-level changes from `from` to `to`, each with the author and the time of the push that
+ * made it. A point is a published version number as a string, or `draft`.
+ */
+export interface DefinitionDiff {
+  readonly slug: string
+  readonly from: string
+  readonly to: string
+  readonly changes: readonly AttributedChange[]
+}
+
+/**
+ * One difference between two points, as the engine classifies it (DF-5, DF-6), with the author
+ * and the time of the push that made it (S03, I14). The author is absent when no push between
+ * the two points changed the path, for example on the first version.
+ */
+export interface AttributedChange {
+  readonly class: string
+  readonly message: string
+  readonly path: string
+  readonly before?: Record<string, unknown>
+  readonly after?: Record<string, unknown>
+  readonly actor?: ActorId
+  readonly at?: number
+}
+
+/**
+ * What a dry run shows (DR-1, DR-3, DR-4, S05, S08): the flow and the version it ran, the
+ * person it ran as, the simulated start time, the route with the skipped steps and their
+ * conditions, who each active step resolves to and why, the step a submit routes to, the
+ * preview inbox, and the timers of that step.
+ */
+export interface DryRunResult {
+  readonly flow: string
+  readonly version: string
+  readonly actor: ActorId
+  readonly now: number
+  readonly route: DryRunRoute
+  readonly assignees: readonly DryRunAssignee[]
+  readonly next?: string
+  readonly intents: readonly DryRunIntent[]
+  readonly timers: readonly DryRunTimer[]
+}
+
+/**
+ * The route of a dry run (S05, WF-1): the active steps in order, and the steps a condition
+ * skipped with the condition.
+ */
+export interface DryRunRoute {
+  readonly active: readonly string[]
+  readonly skipped: readonly DryRunSkipped[]
+}
+
+export interface DryRunSkipped {
+  readonly step: string
+  readonly condition: Record<string, unknown>
+}
+
+/**
+ * Who one active step resolves to, and through which target (S08, AS-1).
+ */
+export interface DryRunAssignee {
+  readonly step: string
+  readonly target: Record<string, unknown>
+  readonly members: readonly ActorId[]
+}
+
+/**
+ * One side effect of the preview inbox (DR-3), as the outbox would carry it.
+ */
+export interface DryRunIntent {
+  readonly operation: string
+  readonly target: string
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * One write of a draft definition (DF-4, I5). `version` is the draft version that the edit is
  * based on, so the server refuses a stale write and appends nothing (I5, A1); `definition` is
  * the whole canonical v2 definition, because the server diffs it against the draft and
@@ -585,6 +700,7 @@ export interface DefinitionChange {
  */
 export interface DraftWrite {
   readonly version: number
+  readonly baseHash?: string
   readonly definition: Record<string, unknown>
 }
 
@@ -747,6 +863,20 @@ export async function createUser(createUser: CreateUser): Promise<CreatedUser> {
   return (await response.json()) as CreatedUser
 }
 
+export async function dryRunFlow(
+  dryRunRequest: DryRunRequest,
+  slug: string
+): Promise<DryRunResult> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/dry-run`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(dryRunRequest),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DryRunResult
+}
+
 export function instancePdfUrl(instanceId: string, step?: string): string {
   const query = new URLSearchParams()
   if (step !== undefined) query.set('step', String(step))
@@ -865,6 +995,24 @@ export async function readFlow(slug: string, version?: number): Promise<Publishe
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as PublishedFlow
+}
+
+export async function readFlowDiff(
+  slug: string,
+  from?: string,
+  to?: string
+): Promise<DefinitionDiff> {
+  const query = new URLSearchParams()
+  if (from !== undefined) query.set('from', String(from))
+  if (to !== undefined) query.set('to', String(to))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/diff${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DefinitionDiff
 }
 
 export async function readFlowGrants(slug: string): Promise<readonly Grant[]> {

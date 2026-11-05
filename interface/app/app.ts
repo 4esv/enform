@@ -50,6 +50,7 @@ import {
   type UnroutableItem,
 } from '../client/client.js'
 import { mountBuilder } from './builder.js'
+import { mountDiff } from './diff.js'
 import {
   controlKind,
   type FormField,
@@ -60,6 +61,7 @@ import {
 } from './form.js'
 import { indexedDbStore, type LocalStore, openLocal, sessionSecrets } from './local.js'
 import { modeLabel, openRealtime, type Present, type Realtime, type Scope } from './realtime.js'
+import { mountSharing } from './sharing.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
 const INSTANCE_STARTED = 'instance.started@1'
@@ -842,6 +844,40 @@ export async function mountApp(options: AppOptions): Promise<void> {
     submit.dataset.submit = ''
     submit.addEventListener('click', () => local.submit())
     form.append(save, submit, status)
+    // The draft moved to a newer published version since it was opened (RT-6,
+    // S04): the read names the required fields of the new form the draft
+    // leaves empty and the values that no longer fit. The page says so,
+    // highlights them and deletes nothing (A7); the engine kept every value.
+    const rebound = reboundOf(view.rebound)
+    if (rebound !== undefined) {
+      const notice = document.createElement('p')
+      notice.className = 'status'
+      notice.dataset.formChanged = ''
+      const count = rebound.newRequired.length
+      notice.textContent =
+        count === 0
+          ? 'This form changed.'
+          : `This form changed. ${count === 1 ? 'One new field needs' : `${count} new fields need`} your answer.`
+      main.appendChild(notice)
+      for (const key of rebound.newRequired) {
+        const row = form.querySelector<HTMLElement>(`[data-field-row="${key}"]`)
+        if (row !== null) row.dataset.newRequired = 'true'
+      }
+      if (rebound.misfits.length > 0) {
+        const list = document.createElement('ul')
+        list.dataset.misfits = ''
+        for (const misfit of rebound.misfits) {
+          const item = document.createElement('li')
+          item.dataset.misfit = misfit.key
+          const held = view.values[misfit.key]
+          item.textContent = `${misfit.key}: ${misfit.reason}. ${held === undefined ? 'The value is kept.' : `The value ${JSON.stringify(held)} is kept.`}`
+          list.appendChild(item)
+          const row = form.querySelector<HTMLElement>(`[data-field-row="${misfit.key}"]`)
+          if (row !== null) row.dataset.misfit = 'true'
+        }
+        main.appendChild(list)
+      }
+    }
     main.appendChild(form)
   }
 
@@ -995,11 +1031,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
       form.appendChild(claimControl)
     }
 
-    // The instance read names the outcomes the step offers (AC-4); the engine
-    // authorizes the one the holder chooses and re-runs the rules (A9). Only
-    // the holder may choose one, so the controls wait for the claim.
+    // The instance read names the outcomes the holder may choose (AC-4, S02):
+    // a reviewer with `send_back` only sees Send back, and the engine still
+    // authorizes the one chosen and re-runs the rules (A9). Only the holder
+    // may choose one, so the controls wait for the claim.
     if (view.status.holder === actor) {
-      for (const outcome of view.outcomes) {
+      for (const outcome of view.allowedOutcomes) {
         const control = document.createElement('button')
         control.type = 'button'
         control.textContent = outcome
@@ -2078,10 +2115,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   const renderBuilder = async (slug: string): Promise<void> => {
-    await mountBuilder({ root: main, slug, actor, clock, ids })
+    const builder = await mountBuilder({ root: main, slug, actor, clock, ids })
     // Presence on the draft definition (RT-2, S03): who is in the builder and
-    // at which field; a change of the flow on the server is announced, not
-    // applied over the person's edits (A4).
+    // at which field. A change of the flow on the server refreshes the
+    // builder when it holds no unsaved edit, and is announced, not applied
+    // over the person's edits, when it does (DF-3, A4).
     const presence = document.createElement('p')
     presence.className = 'presence'
     presence.dataset.presence = ''
@@ -2096,8 +2134,20 @@ export async function mountApp(options: AppOptions): Promise<void> {
       { flow: slug },
       (change) => {
         if (!change.eventType.startsWith('config.')) return
-        notice.hidden = false
-        notice.textContent = 'This flow changed on the server. Reload to see the newest draft.'
+        if (builder.dirty()) {
+          notice.hidden = false
+          notice.dataset.flowChanged = 'unsaved'
+          notice.textContent =
+            'This flow changed on the server. Save or discard your edits to see the newest draft.'
+          return
+        }
+        void builder.refresh().then((refreshed) => {
+          if (!refreshed) return
+          notice.hidden = false
+          notice.dataset.flowChanged = 'refreshed'
+          notice.textContent =
+            'This flow changed on the server. The builder shows the newest draft.'
+        })
       },
       (people) => renderPresence(presence, people)
     )
@@ -2109,6 +2159,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
     })
     channel.presence()
+    // The sharing panel and the diff view sit below the builder (S02, S03,
+    // S04, #264): the grants as scopes with presets, and the attributed
+    // difference between two points of the flow's history.
+    await mountSharing({ root: main, slug, actor, clock, ids })
+    await mountDiff({ root: main, slug })
   }
 
   try {
@@ -2124,6 +2179,31 @@ const inboxTabs = [
   { key: 'available', label: 'Available' },
   { key: 'started', label: 'Started by me' },
 ] as const
+
+/** The rebind the instance read carries (RT-6, S04), narrowed from the generated type. */
+function reboundOf(value: unknown):
+  | {
+      readonly misfits: readonly { key: string; reason: string }[]
+      readonly newRequired: readonly string[]
+    }
+  | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { misfits, newRequired } = value as { misfits?: unknown; newRequired?: unknown }
+  return {
+    misfits: Array.isArray(misfits)
+      ? misfits.filter(
+          (entry): entry is { key: string; reason: string } =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as { key?: unknown }).key === 'string' &&
+            typeof (entry as { reason?: unknown }).reason === 'string'
+        )
+      : [],
+    newRequired: Array.isArray(newRequired)
+      ? newRequired.filter((key): key is string => typeof key === 'string')
+      : [],
+  }
+}
 
 /** The tab the URL names, or `my` for an absent or unknown value (VT-1). */
 function inboxTabOf(value: string): 'my' | 'available' | 'started' {

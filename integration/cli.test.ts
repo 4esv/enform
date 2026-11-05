@@ -371,6 +371,58 @@ test('#258 S13 Sam withdraws and undoes it, Priya cancels, and the starter alone
   expect(show('sam', instanceId).status.state).toBe('cancelled')
 })
 
+test('#264 S05 S08 S12 DR-5 a dry run through the server routes, explains, previews and moves the clock, and runs as another person', () => {
+  const { dir } = requireSetup()
+  const lin = demoUser('chair')
+  const sam = demoUser('starter')
+  signIn('lin', lin)
+  const slug = flowSlug()
+  const small = join(dir, 'small.json')
+  writeFileSync(small, JSON.stringify({ summary: 'two credits', credits: 2 }))
+  const large = join(dir, 'large.json')
+  writeFileSync(large, JSON.stringify({ summary: 'four credits', credits: 4 }))
+  // Two credits skip the chair step, four do not (S05); the route names who
+  // each step resolves to (S08); the next step's email is the inbox (DR-3).
+  const skipped = output<{
+    route: { active: string[]; skipped: { step: string }[] }
+    assignees: { step: string; members: string[] }[]
+    next?: string
+    intents: { operation: string }[]
+  }>(enform('lin', ['flow', 'dry-run', slug, '--data', small]))
+  expect(skipped.route.skipped.map((step) => step.step)).toEqual(['chair'])
+  expect(skipped.route.active).toEqual(['request', 'advisor', 'registrar'])
+  expect(
+    skipped.assignees.find((entry) => entry.step === 'advisor')?.members.length
+  ).toBeGreaterThan(0)
+  expect(skipped.next).toBe('advisor')
+  expect(skipped.intents.map((intent) => intent.operation)).toEqual(['send-assignment'])
+  const active = output<{ route: { active: string[] } }>(
+    enform('lin', ['flow', 'dry-run', slug, '--data', large])
+  )
+  expect(active.route.active).toContain('chair')
+  // The simulated clock moves one day forward (DR-4): the advisor step of
+  // the demo flow sets no reminder, so nothing fires, and the timers say so.
+  const advanced = output<{ timers: unknown[] }>(
+    enform('lin', ['flow', 'dry-run', slug, '--data', small, '--advance', 'P1D'])
+  )
+  expect(Array.isArray(advanced.timers)).toBe(true)
+  // Running as Sam needs org.impersonate (DR-5): Lin has none, the admin has.
+  const refused = enform('lin', ['flow', 'dry-run', slug, '--data', small, '--as', sam.id])
+  expect(refused.status).toBe(1)
+  expect(JSON.parse(refused.stdout).error).toMatch(/org.impersonate/)
+  output(enform('admin', ['grant', 'add', lin.id, 'org.impersonate', 'org']))
+  const asSam = output<{ actor: string }>(
+    enform('lin', ['flow', 'dry-run', slug, '--data', small, '--as', sam.id])
+  )
+  expect(asSam.actor).toBe(sam.id)
+  const recorded = output<{ log: { type: string; actor?: string }[] }>(
+    enform('admin', ['log', '--limit', '3'])
+  ).log
+  expect(recorded.some((event) => event.type === 'dryrun.ran@1' && event.actor === lin.id)).toBe(
+    true
+  )
+})
+
 test('#258 S01 S03 the builder pulls, diffs, pushes and publishes the flow through the server', () => {
   const { dir } = requireSetup()
   const lin = demoUser('chair')

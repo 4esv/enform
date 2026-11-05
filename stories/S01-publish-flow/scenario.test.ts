@@ -8,6 +8,7 @@ import { DUPLICATE, runOperator } from '../../tools/harness/operators.js'
 import { oracles } from '../../tools/harness/oracles.js'
 import { runGolden } from '../../tools/harness/runner.js'
 import { goldenView, stepOperation } from '../../tools/harness/scenario.js'
+import { DANA } from '../example-flow.js'
 import { draftV1, draftV2, golden } from './scenario.js'
 
 // The injected sources of the lifecycle in the golden path (I6): the clock is
@@ -23,13 +24,13 @@ function stepDeps(index: number): { clock: () => number; ids: () => string } {
 function lifecycleOperations(): readonly Operation[] {
   let flow = createFlow('course-overload')
   const operations: Operation[] = []
-  const first = push(flow, draftV1, stepDeps(0), 'dana')
+  const first = push(flow, draftV1, stepDeps(0), DANA)
   flow = first.flow
   operations.push(first.operation)
-  const published = publish(flow, stepDeps(1), 'dana')
+  const published = publish(flow, stepDeps(1), DANA)
   flow = published.flow
   operations.push(published.operation)
-  const changed = push(flow, draftV2, stepDeps(2), 'dana')
+  const changed = push(flow, draftV2, stepDeps(2), DANA)
   operations.push(changed.operation)
   return operations
 }
@@ -50,7 +51,7 @@ test('#38 the lifecycle publishes an immutable version and pins an instance to v
   // A push makes the draft equal to the pushed file, and validate reads a file
   // without changing the flow (DF-1, DF-4).
   let flow = createFlow('course-overload')
-  const first = push(flow, draftV1, stepDeps(0), 'dana')
+  const first = push(flow, draftV1, stepDeps(0), DANA)
   // The change names its flow, so a projection can key the draft by slug (I4, #220).
   expect(first.operation.payload).toEqual({ flow: 'course-overload', definition: draftV1 })
   flow = first.flow
@@ -59,7 +60,7 @@ test('#38 the lifecycle publishes an immutable version and pins an instance to v
   expect(() => validate('{ "schemaVersion": 3, "steps": [] }')).toThrow(/schemaVersion/)
 
   // Publish freezes the draft as version 1 with a content hash (DF-2).
-  const published = publish(flow, stepDeps(1), 'dana')
+  const published = publish(flow, stepDeps(1), DANA)
   flow = published.flow
   expect(flow.versions).toHaveLength(1)
   expect(flow.versions[0].version).toBe(1)
@@ -70,7 +71,7 @@ test('#38 the lifecycle publishes an immutable version and pins an instance to v
   const instance = createInstance(version1.definition, [])
 
   // A push after publish opens a new draft; version 1 does not change (DF-2).
-  const changed = push(flow, draftV2, stepDeps(2), 'dana')
+  const changed = push(flow, draftV2, stepDeps(2), DANA)
   flow = changed.flow
   expect(flow.draft).toEqual(draftV2)
   expect(flow.versions).toEqual([version1])
