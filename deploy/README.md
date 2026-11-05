@@ -7,7 +7,7 @@ surface (MVP.md 9.1). `make stack` runs
 ## Quick start
 
 `make init` is the documented one-command bootstrap of DE-1. It starts the
-Compose `postgres` and `keycloak` services when they are not reachable, then
+Compose `postgres`, `keycloak` and `mailpit` services when they are not reachable, then
 runs `enform init`, which writes the configuration, creates the database, runs
 the migrations, creates the first administrator and serves the configured
 public URL. It reads `.env` and the `ENFORM_*` variables of the environment.
@@ -23,7 +23,13 @@ public URL. It reads `.env` and the `ENFORM_*` variables of the environment.
 | `ENFORM_KEYCLOAK_ADMIN_PASSWORD` | `admin` |
 | `ENFORM_ADMIN_EMAIL` | `admin@example.com` |
 | `ENFORM_ADMIN_PASSWORD` | `admin-dev-password` |
+| `ENFORM_SMTP_URL` | `smtp://127.0.0.1:1025`, the Mailpit of the stack |
+| `ENFORM_MAIL_FROM` | `enform@localhost` |
 | `ENFORM_DIRECTORY_SYNC_SECONDS` | `300` |
+
+`make worker` runs the worker against the same configuration, and `make doctor`
+runs the operator's check (DE-5). The procedures for backup, restore and
+upgrade are in [`docs/operations.md`](../docs/operations.md).
 
 `ENFORM_DIRECTORY_SYNC_SECONDS` (`directory.syncSeconds` in the file,
 `--directory-sync-seconds` on the command line) is how often the worker

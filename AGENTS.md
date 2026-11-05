@@ -38,6 +38,8 @@ A change is done when it meets `MVP.md` section 11.6. All items, each time.
 | `make stories` | The story suites in `stories/` only. |
 | `make browser` | The browser suite in `stories/` only: `gui` mode drives Chromium (#27). |
 | `make stack` | The local stack from `deploy/compose.yaml` (#97). |
+| `make init`, `make seed`, `make worker`, `make doctor` | The documented bootstrap (DE-1), the demo seed (DE-4), the worker and the operator's check (DE-5) against the stack. |
+| `make site` | The documentation site from `docs/`, the charter documents and the ADRs into `site/` (#266). |
 
 ## CI
 
