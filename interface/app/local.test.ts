@@ -19,8 +19,15 @@ type Local = {
     secrets: Map<string, string>
     now?: () => number
   }) => Promise<{
-    saveDraft: (id: string, values: Values, state: 'saved' | 'synced') => Promise<void>
-    readDraft: (id: string) => Promise<{ values: Values; state: 'saved' | 'synced' } | undefined>
+    saveDraft: (
+      id: string,
+      values: Values,
+      state: 'saved' | 'synced',
+      version?: number
+    ) => Promise<void>
+    readDraft: (
+      id: string
+    ) => Promise<{ values: Values; state: 'saved' | 'synced'; version: number } | undefined>
     markSynced: (id: string) => Promise<void>
     rememberDraft: (flow: string, id: string) => Promise<void>
     draftOf: (flow: string) => Promise<string | undefined>
@@ -59,13 +66,15 @@ test('#262 I11 a draft is stored as ciphertext under the session key and reads b
   expect(await store.readDraft('inst-1')).toEqual({
     values: { summary: 'three credits', credits: 3 },
     state: 'saved',
+    version: 0,
   })
   // The server acknowledged the edit: Synced (I15, I16).
   await store.markSynced('inst-1')
   expect((await store.readDraft('inst-1'))?.state).toBe('synced')
   // A new edit is saved again, not synced yet.
-  await store.saveDraft('inst-1', { summary: 'four credits', credits: 4 }, 'saved')
+  await store.saveDraft('inst-1', { summary: 'four credits', credits: 4 }, 'saved', 2)
   expect((await store.readDraft('inst-1'))?.state).toBe('saved')
+  expect((await store.readDraft('inst-1'))?.version).toBe(2)
   // The draft of a flow is remembered, so the start page finds it after a refresh (RT-4).
   await store.rememberDraft('course-overload', 'inst-1')
   expect(await store.draftOf('course-overload')).toBe('inst-1')

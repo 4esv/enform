@@ -40,16 +40,26 @@ export type QueuedOperation = Record<string, unknown>
 export type SendOutcome = 'sent' | 'refused' | 'offline'
 
 export type LocalStore = {
-  /** Store the values of a draft under its id, sealed, with the state the interface shows (RT-3, I15). */
+  /**
+   * Store the values of a draft under its id, sealed, with the state the
+   * interface shows (RT-3, I15) and the instance version the next write is
+   * based on (I5), so a queued submit after a refresh carries the right one.
+   */
   readonly saveDraft: (
     id: string,
     values: Record<string, unknown>,
-    state: SyncState
+    state: SyncState,
+    version?: number
   ) => Promise<void>
-  /** The values and the state of a draft, or undefined without the key or the draft. */
-  readonly readDraft: (
-    id: string
-  ) => Promise<{ readonly values: Record<string, unknown>; readonly state: SyncState } | undefined>
+  /** The values, the state and the version of a draft, or undefined without the key or the draft. */
+  readonly readDraft: (id: string) => Promise<
+    | {
+        readonly values: Record<string, unknown>
+        readonly state: SyncState
+        readonly version: number
+      }
+    | undefined
+  >
   /** The server acknowledged the held edit (I15, I16). */
   readonly markSynced: (id: string) => Promise<void>
   /** Forget one draft (a deliberate discard, I15). */
@@ -196,17 +206,22 @@ export async function openLocal(options: {
     const text = await open(key, raw)
     if (text === undefined) return undefined
     try {
-      const parsed = JSON.parse(text) as { values?: unknown; state?: unknown }
+      const parsed = JSON.parse(text) as { values?: unknown; state?: unknown; version?: unknown }
       if (typeof parsed.values !== 'object' || parsed.values === null) return undefined
       const state: SyncState = parsed.state === 'synced' ? 'synced' : 'saved'
-      return { values: parsed.values as Record<string, unknown>, state }
+      const version = typeof parsed.version === 'number' ? parsed.version : 0
+      return { values: parsed.values as Record<string, unknown>, state, version }
     } catch {
       return undefined
     }
   }
 
-  const saveDraft: LocalStore['saveDraft'] = async (id, values, state) => {
-    await storage.set(`${DRAFT_PREFIX}${id}`, await seal(key, JSON.stringify({ values, state })))
+  const saveDraft: LocalStore['saveDraft'] = async (id, values, state, version) => {
+    const held = version === undefined ? await readDraft(id) : undefined
+    await storage.set(
+      `${DRAFT_PREFIX}${id}`,
+      await seal(key, JSON.stringify({ values, state, version: version ?? held?.version ?? 0 }))
+    )
   }
 
   return {
@@ -214,7 +229,7 @@ export async function openLocal(options: {
     readDraft,
     markSynced: async (id) => {
       const held = await readDraft(id)
-      if (held !== undefined) await saveDraft(id, held.values, 'synced')
+      if (held !== undefined) await saveDraft(id, held.values, 'synced', held.version)
     },
     forgetDraft: async (id) => {
       await storage.delete(`${DRAFT_PREFIX}${id}`)
