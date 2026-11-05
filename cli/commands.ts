@@ -30,13 +30,22 @@ import { runFlow } from '../engine/workflow.js'
 import { bootstrap } from '../server/bootstrap.js'
 import { configPath, issuerUrl, loadConfig, writeConfig } from '../server/config.js'
 import { newEncryptionKey, validEncryptionKey } from '../server/crypto.js'
-import { createPool, migrationStatus, rebuild, runMigrations } from '../server/db.js'
+import {
+  createDatabaseIfMissing,
+  createPool,
+  exportStore,
+  importStore,
+  migrationStatus,
+  rebuild,
+  runMigrations,
+  type StoreBackup,
+} from '../server/db.js'
 import { serveHttp } from '../server/http.js'
 import { oidcConfiguration } from '../server/keycloak.js'
 import { checkMail } from '../server/mail.js'
 import { clearDemo, seedDemo } from '../server/seed.js'
 import { syncDirectory } from '../server/sync.js'
-import { versionLine } from '../server/version.js'
+import { VERSION, versionLine } from '../server/version.js'
 import { startWorker } from '../server/worker.js'
 import { type Args, flag, has, parseArgs, report, required } from './args.js'
 import {
@@ -393,8 +402,9 @@ function printHelp(): void {
       '  admin     create the first administrator (admin create), rebuild the projections (admin rebuild),',
       '            synchronize the accounts with the directory once (admin sync), or deprovision a user',
       '            through the server (admin deprovision <user-id>; sign in first)',
+      '            back up the store to a file (admin backup --out <file>) or restore one into an empty store (admin restore <file>)',
       '  seed      load a demo seed (seed demo) or remove only its records (seed clear)',
-      '  doctor    check the configuration, the database and the identity provider',
+      '  doctor    check the configuration, the database, the identity provider and email, and report the version',
       '  version   print the version',
       '  help      print this help',
       '',
@@ -494,7 +504,12 @@ async function commandMigrate(args: Args, json: boolean): Promise<number> {
       return 0
     }
     const applied = await runMigrations(pool)
-    report(json, { ok: true, applied }, `applied ${applied.length} migration(s)`)
+    const status = await migrationStatus(pool)
+    report(
+      json,
+      { ok: true, applied, migrated: status.applied },
+      `applied ${applied.length} migration(s); ${status.applied.length} in total, none pending`
+    )
     return 0
   } finally {
     await pool.end()
@@ -554,7 +569,66 @@ async function commandAdmin(
       await pool.end()
     }
   }
+  if (action === 'backup') return commandBackup(args, json)
+  if (action === 'restore') return commandRestore(args, json)
   throw new Error(`unknown admin command: ${action ?? ''}`.trim())
+}
+
+/**
+ * `enform admin backup --out <file>`: write the log and the operational state
+ * beside it to one JSON file (DE-5, D3). The file is the portable backup of
+ * an installation; `pg_dump` of the database is the other, and both are
+ * documented in docs/operations.md.
+ */
+async function commandBackup(args: Args, json: boolean): Promise<number> {
+  const file = flag(args, '--out', 'enform admin backup --out <file>')
+  const config = loadConfig(args.flags)
+  const pool = createPool(config.databaseUrl)
+  try {
+    const backup = await exportStore(pool, VERSION, Date.now())
+    writeFileSync(file, `${JSON.stringify(backup)}\n`, { mode: 0o600 })
+    report(
+      json,
+      { ok: true, file, events: backup.events.length, takenAt: backup.takenAt },
+      `wrote ${file}: ${backup.events.length} event(s)`
+    )
+    return 0
+  } finally {
+    await pool.end()
+  }
+}
+
+/**
+ * `enform admin restore <file>`: create the database when it is missing,
+ * migrate it, load the backup into its empty log and rebuild the projections
+ * (DE-5). A store that already holds a log is refused (I4).
+ */
+async function commandRestore(args: Args, json: boolean): Promise<number> {
+  const file = required(args.positionals[2], 'enform admin restore <file> [--database-url <url>]')
+  const config = loadConfig(args.flags)
+  let backup: StoreBackup
+  try {
+    backup = JSON.parse(readFileSync(file, 'utf8')) as StoreBackup
+  } catch (error) {
+    throw new Error(`cannot read the backup ${file}: ${messageOf(error)}`)
+  }
+  if (backup.format !== 1 || !Array.isArray(backup.events)) {
+    throw new Error(`${file} is not an enform backup`)
+  }
+  await createDatabaseIfMissing(config.databaseUrl)
+  const pool = createPool(config.databaseUrl)
+  try {
+    await runMigrations(pool)
+    const events = await importStore(pool, backup)
+    report(
+      json,
+      { ok: true, file, events, version: backup.version, takenAt: backup.takenAt },
+      `restored ${events} event(s) from ${file} (taken by enform ${backup.version})`
+    )
+    return 0
+  } finally {
+    await pool.end()
+  }
 }
 
 /** `enform seed demo|clear`: load or clear the demo organization (DE-4). */
@@ -640,6 +714,7 @@ async function commandDoctor(args: Args, json: boolean): Promise<number> {
   const config = loadConfig(args.flags)
   const keyOk = validEncryptionKey(config.session.encryptionKey)
   const checks: { readonly name: string; readonly ok: boolean; readonly detail: string }[] = [
+    { name: 'version', ok: true, detail: versionLine() },
     { name: 'config', ok: true, detail: `${configPath(args.flags)} -> ${config.publicUrl}` },
     {
       name: 'session encryption key',
@@ -680,7 +755,7 @@ async function commandDoctor(args: Args, json: boolean): Promise<number> {
 
   const ok = checks.every((check) => check.ok)
   if (json) {
-    process.stdout.write(`${JSON.stringify({ ok, checks })}\n`)
+    process.stdout.write(`${JSON.stringify({ ok, version: VERSION, checks })}\n`)
   } else {
     for (const check of checks) {
       process.stdout.write(`${check.ok ? 'ok' : 'fail'} ${check.name}: ${check.detail}\n`)

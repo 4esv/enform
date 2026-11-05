@@ -31,9 +31,27 @@ database URL and the administrator values are the `ENFORM_*` variables in
 teams, their grants, a published course-overload flow and four in-flight
 instances; its passwords are printed once and enform stores none of them.
 
+## Documentation
+
+The documentation site is built from [`docs/`](docs/) and published at
+[4esv.github.io/enform](https://4esv.github.io/enform/): [quick setup](docs/quick-setup.md),
+[concepts](docs/concepts.md), [the builder](docs/builder.md), [forms and conditions](docs/forms.md),
+[routing](docs/routing.md), [acting on work](docs/acting.md), [realtime and offline](docs/realtime-offline.md),
+the [CLI](docs/cli.md) and [API](docs/api.md) references, [deployment](docs/deployment.md),
+[operations](docs/operations.md) and [security](docs/security.md). `make site` builds it locally into `site/`.
+
 ## Status
 
-Version `0.0.0`. This version contains the specification only. There is no product code yet.
+The engine, the release server, the CLI and the web interface implement the
+scope of `MVP.md`, except the Active Directory and Entra ID federation and the
+connectors, which are configured per installation, and a few interface pieces
+that are still open: sending a failed email again, the email templates page,
+the teams page, and the interface paths of S12 and S15. Every story of
+`STORIES.md` runs through the engine path in api, cli and dry mode under the
+variation operators, and the interface paths of the other stories run in
+Chromium; the evidence table in `STORIES.md` and the matrix in
+`stories/MATRIX.md` record where. The version is in `package.json` and the
+changes by release in `CHANGELOG.md`.
 
 | Document | Content |
 |---|---|

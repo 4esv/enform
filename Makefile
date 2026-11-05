@@ -41,6 +41,12 @@ rules:
 # Regenerate the interface API client from api/openapi.yaml (DX-4, I12). The
 # generated client is checked in, and tools/client.test.ts fails when it drifts
 # from the generator output.
+# The documentation site (#266): docs/, the charter documents and the ADRs as
+# static HTML with the metadata a search engine reads. SITE_URL sets the
+# canonical root; the Pages workflow passes the deployment's URL.
+site:
+	node tools/site.mjs site
+
 client:
 	node tools/generate-client.mjs
 
@@ -65,7 +71,7 @@ stack:
 # administrator and serves. A bare-metal install uses the systemd units and
 # `/etc/enform/enform.toml` instead (deploy/README.md).
 init:
-	docker compose -f deploy/compose.yaml up -d --wait postgres keycloak
+	docker compose -f deploy/compose.yaml up -d --wait postgres keycloak mailpit
 	pnpm exec node --experimental-strip-types cli/main.ts init \
 		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}" \
 		--database-url "$${ENFORM_DATABASE_URL:-postgres://enform:enform@127.0.0.1:5432/enform}" \
@@ -76,7 +82,21 @@ init:
 		--keycloak-admin-password "$${ENFORM_KEYCLOAK_ADMIN_PASSWORD:-admin}" \
 		--admin-email "$${ENFORM_ADMIN_EMAIL:-admin@example.com}" \
 		--admin-password "$${ENFORM_ADMIN_PASSWORD:-admin-dev-password}" \
+		--smtp-url "$${ENFORM_SMTP_URL:-smtp://127.0.0.1:1025}" \
+		--mail-from "$${ENFORM_MAIL_FROM:-enform@localhost}" \
 		--no-open
+
+# The worker beside `make init`: it delivers the outbox through the Mailpit of
+# the stack, fires the due timers and runs the directory sync (#266).
+worker:
+	pnpm exec node --experimental-strip-types cli/main.ts worker \
+		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}"
+
+# The operator's check (DE-5): the version, the configuration, the session
+# key, the database, the identity provider and email.
+doctor:
+	pnpm exec node --experimental-strip-types cli/main.ts doctor \
+		--config "$${ENFORM_CONFIG:-$${XDG_CONFIG_HOME:-$$HOME/.config}/enform/enform.toml}"
 
 # The demo organization of DE-4: six users, two teams, their grants, a
 # published flow and four in-flight instances. The passwords are printed once.
