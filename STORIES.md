@@ -97,7 +97,7 @@ This table records where each story was done. Update it in the same pull request
 
 | Story | Engine issue | Engine tests | Engine commits | Interface issue | Interface commits | Status |
 |---|---|---|---|---|---|---|
-| S01 | #38, #258, #264 | stories/S01-publish-flow/scenario.test.ts, integration/cli.test.ts | ad5ddca eac5f63 58750b7 | #224, #264 | fa4992c d086700 b7a73b7 28f960b | Engine in progress: the Offline operator does not run S01 yet; the interface path runs in Chromium |
+| S01 | #38, #258, #264 | stories/S01-publish-flow/scenario.test.ts, stories/S01-publish-flow/operators.test.ts, integration/cli.test.ts, integration/builder.test.ts | ad5ddca eac5f63 58750b7 | #224, #264 | fa4992c d086700 b7a73b7 28f960b | Done |
 | S02 | #39 | stories/S02-grant-scopes/scenario.test.ts, stories/S02-grant-scopes/operators.test.ts, tools/allowed-outcomes.test.ts, interface/app/sharing.test.ts, integration/sharing-diff.test.ts | 5383f8c e9b044d 565016a 1e92d7c | #264 | 55fe4ce | Done |
 | S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts, tools/merge.test.ts, tools/diff.test.ts, server/draft-merge.test.ts, server/diff.test.ts, interface/app/diff.test.ts, integration/sharing-diff.test.ts | e436106 5808cdc 889e4a6 93615cd f668370 068d078 | #264 | 55fe4ce a7e4c4b e85bd21 b352063 28f960b | Done |
 | S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts, tools/diff.test.ts, server/diff.test.ts, integration/sharing-diff.test.ts | c38bb5e bc6b63a f668370 068d078 | #264 | 55fe4ce 6caf363 | Done |

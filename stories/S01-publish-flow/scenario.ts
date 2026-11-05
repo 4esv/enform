@@ -1,6 +1,10 @@
-import { parse } from '../../engine/definition.js'
+import type { Grant } from '../../engine/authorize.js'
+import { DEFINITION_CHANGED, parse } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
+import type { Requirements } from '../../tools/harness/operators.js'
 import { scenario } from '../../tools/harness/scenario.js'
+import { DANA, FLOW, membership } from '../example-flow.js'
 
 // S01: Dana creates and publishes a flow (STORIES.md). The flow is a
 // definition (DF-1). Dana pushes the first draft (DF-4), publishes it as
@@ -42,19 +46,45 @@ export const publishedV1 = {
   definition: draftV1,
 }
 
+/** The installation before the story: Dana, the first administrator, builds every flow (STORIES.md, Cast). */
+export const bootstrap: readonly Grant[] = [
+  { principal: DANA, scopes: ['org.grants', 'org.teams', 'org.impersonate'], resource: 'org' },
+  { principal: DANA, scopes: ['flow.build'], resource: '*' },
+]
+
 export const golden = scenario({
   slug: 'publish-flow',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
   steps: [
     {
-      actor: 'dana',
+      actor: DANA,
       type: 'config.definition.changed@1',
       payload: { flow: SLUG, definition: draftV1 },
     },
-    { actor: 'dana', type: 'config.definition.published@1', payload: publishedV1 },
+    { actor: DANA, type: 'config.definition.published@1', payload: publishedV1 },
     {
-      actor: 'dana',
+      actor: DANA,
       type: 'config.definition.changed@1',
       payload: { flow: SLUG, definition: draftV2 },
     },
   ],
 })
+
+/** The indexes of the story's steps. */
+export const STEP = { push: 0, publish: 1, change: 2 } as const
+
+/**
+ * What each step requires of its actor (I8), for the Actor operator: a push
+ * and a publication need `flow.build` on the flow (DF-5, D2).
+ */
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    default:
+      throw new Error(`S01: step ${index + 1} has no requirement (${step.type})`)
+  }
+}
