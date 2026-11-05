@@ -173,6 +173,17 @@ export interface BuilderOptions {
   readonly ids: () => string
 }
 
+/**
+ * What the page holds of a mounted builder (DF-3, RT-2, S03): whether it has
+ * edits the server has not seen, and a refresh that re-reads the draft and
+ * answers whether it changed. A change made elsewhere refreshes the builder
+ * when nothing is unsaved, and is announced when something is (A4).
+ */
+export interface BuilderHandle {
+  dirty(): boolean
+  refresh(): Promise<boolean>
+}
+
 /** The builder's state between renders. */
 type BuilderState = {
   readonly slug: string
@@ -201,6 +212,8 @@ type BuilderState = {
   publishedVersion: number | undefined
   /** The dry-run panel between renders (DR-1, DR-3, DR-4, DR-5). */
   readonly dry: DryRunPanel
+  /** Whether the model holds an edit the server has not seen (DF-3, A4). */
+  dirty: boolean
 }
 
 /** What the dry-run panel holds between renders: its inputs, and the last answer or refusal. */
@@ -226,7 +239,7 @@ type DryRunPanel = {
 const grantIds = new Map<string, string>()
 
 /** Mount the builder for one flow. */
-export async function mountBuilder(options: BuilderOptions): Promise<void> {
+export async function mountBuilder(options: BuilderOptions): Promise<BuilderHandle> {
   // The flow's grants need org.grants or flow.grant; an editor who holds
   // neither still opens the builder and sees no starter (DF-5, S03). The
   // session names the editor's own grants, so the builder knows which
@@ -241,10 +254,16 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
     readSession().catch(() => undefined),
   ])
   const summary = flows.find((flow) => flow.slug === options.slug)
+  // The builder renders into a host of its own, so what the page puts
+  // beside it (the presence line, a notice) survives each re-render.
+  const host = document.createElement('div')
+  host.className = 'builder'
+  host.dataset.builder = ''
+  options.root.replaceChildren(host)
   const state: BuilderState = {
     slug: options.slug,
     actor: options.actor,
-    root: options.root,
+    root: host,
     clock: options.clock,
     ids: options.ids,
     title: summary?.title,
@@ -263,8 +282,44 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
       result: undefined,
       error: undefined,
     },
+    dirty: false,
   }
+  // An edit of the definition marks the builder dirty until a save, a
+  // publication or a refresh (DF-3, A4). The dry-run inputs, the starters and
+  // the grant grid are not part of the draft.
+  const mark = (event: Event): void => {
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target.closest('[data-dry-panel], [data-starters], .grants') !== null) return
+    state.dirty = true
+  }
+  host.addEventListener('input', mark)
+  host.addEventListener('change', mark)
+  host.addEventListener('click', (event) => {
+    const target = event.target
+    if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON') return
+    if (target.closest('[data-dry-panel], [data-starters], .grants, .builder-controls') !== null)
+      return
+    state.dirty = true
+  })
   render(state)
+  return {
+    dirty: () => state.dirty,
+    refresh: async () => {
+      const [fresh, listed] = await Promise.all([readDraft(options.slug), listFlows()])
+      const entry = listed.find((flow) => flow.slug === options.slug)
+      const changed =
+        fresh.version !== state.draftVersion || entry?.publishedVersion !== state.publishedVersion
+      if (!changed) return false
+      state.draftVersion = fresh.version
+      state.model = readModel(fresh.definition)
+      state.title = entry?.title
+      state.publishedVersion = entry?.publishedVersion
+      state.dirty = false
+      render(state)
+      return true
+    },
+  }
 }
 
 /**
@@ -1660,6 +1715,7 @@ async function saveDraft(state: BuilderState): Promise<void> {
   try {
     const written = await writeDraft({ version: state.draftVersion, definition }, state.slug)
     state.draftVersion = written.version
+    state.dirty = false
     status.textContent = `Saved draft version ${written.version}`
   } catch (error: unknown) {
     await showWriteError(state, error, status)
@@ -1679,6 +1735,8 @@ async function publishDraft(state: BuilderState): Promise<void> {
     // The next draft publishes as the next version, so a second save and
     // publish are based on the version the server now names (I5).
     state.draftVersion = (await readDraft(state.slug)).version
+    state.publishedVersion = published.version
+    state.dirty = false
   } catch (error: unknown) {
     await showWriteError(state, error, status)
   }

@@ -2115,10 +2115,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   const renderBuilder = async (slug: string): Promise<void> => {
-    await mountBuilder({ root: main, slug, actor, clock, ids })
+    const builder = await mountBuilder({ root: main, slug, actor, clock, ids })
     // Presence on the draft definition (RT-2, S03): who is in the builder and
-    // at which field; a change of the flow on the server is announced, not
-    // applied over the person's edits (A4).
+    // at which field. A change of the flow on the server refreshes the
+    // builder when it holds no unsaved edit, and is announced, not applied
+    // over the person's edits, when it does (DF-3, A4).
     const presence = document.createElement('p')
     presence.className = 'presence'
     presence.dataset.presence = ''
@@ -2133,8 +2134,20 @@ export async function mountApp(options: AppOptions): Promise<void> {
       { flow: slug },
       (change) => {
         if (!change.eventType.startsWith('config.')) return
-        notice.hidden = false
-        notice.textContent = 'This flow changed on the server. Reload to see the newest draft.'
+        if (builder.dirty()) {
+          notice.hidden = false
+          notice.dataset.flowChanged = 'unsaved'
+          notice.textContent =
+            'This flow changed on the server. Save or discard your edits to see the newest draft.'
+          return
+        }
+        void builder.refresh().then((refreshed) => {
+          if (!refreshed) return
+          notice.hidden = false
+          notice.dataset.flowChanged = 'refreshed'
+          notice.textContent =
+            'This flow changed on the server. The builder shows the newest draft.'
+        })
       },
       (people) => renderPresence(presence, people)
     )
