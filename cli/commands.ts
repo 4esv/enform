@@ -35,10 +35,12 @@ import { serveHttp } from '../server/http.js'
 import { oidcConfiguration } from '../server/keycloak.js'
 import { checkMail } from '../server/mail.js'
 import { clearDemo, seedDemo } from '../server/seed.js'
+import { syncDirectory } from '../server/sync.js'
 import { versionLine } from '../server/version.js'
 import { startWorker } from '../server/worker.js'
 import { type Args, flag, has, parseArgs, report, required } from './args.js'
 import {
+  runAdminDeprovision,
   runGrantGroup,
   runInstanceGroup,
   runLog,
@@ -361,6 +363,22 @@ function slugOf(file: string): string {
   return base.slice(0, -FILE_SUFFIX.length)
 }
 
+/** Report one directory synchronization pass (ID-5). */
+function report_(
+  json: boolean,
+  result: {
+    readonly visited: number
+    readonly deprovisioned: readonly string[]
+    readonly provisioned: readonly string[]
+  }
+): void {
+  report(
+    json,
+    { ok: true, ...result },
+    `visited ${result.visited} account(s); deprovisioned ${result.deprovisioned.length}, provisioned ${result.provisioned.length}`
+  )
+}
+
 /** The help text: every service command and the `flow` group (DE-2). */
 function printHelp(): void {
   process.stdout.write(
@@ -372,7 +390,9 @@ function printHelp(): void {
       '  serve     serve the configured public URL',
       '  migrate   apply the schema migrations; --status reports them',
       '  worker    deliver the outbox through SMTP',
-      '  admin     create the first administrator, or rebuild the projections (admin rebuild)',
+      '  admin     create the first administrator (admin create), rebuild the projections (admin rebuild),',
+      '            synchronize the accounts with the directory once (admin sync), or deprovision a user',
+      '            through the server (admin deprovision <user-id>; sign in first)',
       '  seed      load a demo seed (seed demo) or remove only its records (seed clear)',
       '  doctor    check the configuration, the database and the identity provider',
       '  version   print the version',
@@ -490,12 +510,30 @@ async function commandWorker(args: Args): Promise<number> {
   return 0
 }
 
-/** `enform admin create|rebuild`: the first administrator and the rebuild (ADR 0013). */
+/**
+ * `enform admin create|rebuild|sync|deprovision`: the first administrator, the
+ * rebuild (ADR 0013), one directory synchronization pass (ID-5, #267), and
+ * the deprovision of one user through the server (ID-5, #267).
+ */
 async function commandAdmin(
   action: string | undefined,
   args: Args,
   json: boolean
 ): Promise<number> {
+  if (action === 'deprovision') {
+    return runAdminDeprovision(args.positionals[2], args, json, process.env)
+  }
+  if (action === 'sync') {
+    const config = loadConfig(args.flags)
+    const pool = createPool(config.databaseUrl)
+    try {
+      const report = await syncDirectory(pool, config, Date.now())
+      report_(json, report)
+      return 0
+    } finally {
+      await pool.end()
+    }
+  }
   if (action === 'create') {
     const usage = 'enform admin create --admin-email <email> --admin-password <password>'
     const email = flagAny(args, ['--admin-email', '--email'], usage)

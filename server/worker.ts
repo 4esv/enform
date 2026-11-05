@@ -10,6 +10,12 @@
 // worker only claims the row, appends the `timer.fired@1` event and delivers
 // the reminder or the escalation that the same transaction put in the outbox.
 //
+// Issue #267, ID-5: a pass also synchronizes every known account with the
+// directory every `directory.syncSeconds`: group membership, a disabled or
+// deleted user deprovisioned with its tasks back in the pool, a re-enabled
+// user provisioned again. The engine decides each change (server/sync.ts);
+// the worker only keeps the schedule.
+//
 // A missing SMTP URL leaves the rows queued and logs once (SE-1): a small
 // installation runs without a mail server. A row reaches `sent` at most once
 // (I3): a claimed row is `sending`, a delivered row is `sent`, and a second
@@ -22,6 +28,7 @@ import type { Config } from './config.js'
 import { createPool, fireDueTimers } from './db.js'
 import { listDirectoryGroups } from './keycloak.js'
 import { createMailer, type MailEntry, type Mailer } from './mail.js'
+import { syncDirectory } from './sync.js'
 
 /** The idle poll interval of the worker, in milliseconds. */
 const POLL_INTERVAL_MS = 1000
@@ -70,14 +77,43 @@ export function startWorker(config: Config): Worker {
       return groups?.members ?? new Map()
     }
   }
+  const sync = scheduledSync(pool, config, () => stopped)
   const loop = run(pool, mailer, groupMembers, () => stopped)
   return {
     stop: async () => {
       stopped = true
-      await loop
+      await Promise.all([loop, sync])
       mailer?.close()
       await pool.end()
     },
+  }
+}
+
+/**
+ * Synchronize the accounts with the directory on the configured schedule
+ * (ID-5, #267), starting with one pass at once. A pass that fails is logged
+ * and the next one runs on schedule; a zero interval disables the schedule.
+ */
+async function scheduledSync(pool: Pool, config: Config, stopped: () => boolean): Promise<void> {
+  const interval = config.directory.syncSeconds * 1000
+  if (interval <= 0) return
+  let due = Date.now()
+  while (!stopped()) {
+    if (Date.now() < due) {
+      await delay(Math.min(POLL_INTERVAL_MS, due - Date.now()))
+      continue
+    }
+    try {
+      const report = await syncDirectory(pool, config, Date.now())
+      if (report.deprovisioned.length > 0 || report.provisioned.length > 0) {
+        process.stderr.write(
+          `enform worker: directory sync deprovisioned ${report.deprovisioned.length} and provisioned ${report.provisioned.length} account(s)\n`
+        )
+      }
+    } catch (error) {
+      process.stderr.write(`enform worker: directory sync failed: ${messageOf(error)}\n`)
+    }
+    due = Date.now() + interval
   }
 }
 

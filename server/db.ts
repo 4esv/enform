@@ -250,6 +250,31 @@ export async function appendOperation(pool: Pool, operation: Operation): Promise
   }
 }
 
+/**
+ * Append several operations in one transaction, in order (I2, I4, #267): a
+ * deprovision releases every held task and records the account together, so
+ * a crash leaves either all of them or none on the log. Each operation keeps
+ * its own id, so a second append of the same ids writes nothing (I1).
+ */
+export async function appendOperations(
+  pool: Pool,
+  operations: readonly Operation[]
+): Promise<readonly AppendResult[]> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const results: AppendResult[] = []
+    for (const operation of operations) results.push(await appendOperationIn(client, operation))
+    await client.query('commit')
+    return results
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 /** Append one operation and fold its projection inside an open transaction (I2, I4). */
 async function appendOperationIn(client: PoolClient, operation: Operation): Promise<AppendResult> {
   const result = await client.query<{ seq: string }>(
@@ -974,6 +999,35 @@ export async function upsertPrincipal(pool: Pool, principal: Principal): Promise
       groups: principal.groups,
     },
   })
+}
+
+/** Every cached profile, in id order (ID-5, #267): the accounts the directory synchronization visits. */
+export async function listPrincipals(pool: Pool): Promise<readonly Principal[]> {
+  const result = await pool.query<{
+    id: string
+    display_name: string
+    email: string | null
+    groups: string[]
+  }>('select id, display_name, email, groups from principals order by id')
+  return result.rows.map((row) => ({
+    id: row.id,
+    displayName: row.display_name,
+    ...(row.email === null ? {} : { email: row.email }),
+    groups: row.groups ?? [],
+  }))
+}
+
+/**
+ * The ids of the instances whose open task one principal holds (ID-5, #267),
+ * from the instance projection, in id order. A deprovision releases each of
+ * them through the engine, which reads the instance back from the log.
+ */
+export async function instancesHeldBy(pool: Pool, principal: string): Promise<readonly string[]> {
+  const result = await pool.query<{ id: string }>(
+    'select id from instances where holder = $1 order by id',
+    [principal]
+  )
+  return result.rows.map((row) => row.id)
 }
 
 /** The cached profile of one principal, or undefined. */

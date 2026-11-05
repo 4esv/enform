@@ -5,6 +5,7 @@ import { classifyChange } from '../engine/edit.js'
 import { versionDiff } from '../engine/version.js'
 import {
   createFlow,
+  deprovisionUser,
   dryRunFlow,
   publishFlow,
   RequestRefused,
@@ -58,6 +59,7 @@ const USAGE = {
   taskReassign: 'task reassign <id> --to <principal> --reason <text>',
   undo: 'undo <event-seq> --instance <id> --reason <text>',
   log: 'log [--instance <id>] [--limit <n>]',
+  adminDeprovision: 'admin deprovision <user-id>',
   flowPull: 'flow pull <slug>',
   flowPush: 'flow push <file>',
   flowPublish: 'flow publish <slug>',
@@ -141,6 +143,32 @@ function flowOfResource(resource: string): string {
     )
   }
   return match[1]
+}
+
+/**
+ * `admin deprovision <user-id>` (ID-5, #267): deprovision one directory user
+ * through the API. The server disables the account and the engine returns
+ * every task the person held to the pool, with the reason on the log; the
+ * command reports what was released. It needs `org.grants`.
+ */
+export async function runAdminDeprovision(
+  id: string | undefined,
+  args: Args,
+  json: boolean,
+  env: NodeJS.ProcessEnv
+): Promise<number> {
+  const user = required(id, USAGE.adminDeprovision)
+  await session(args, env)
+  const result = await deprovisionUser(user)
+  const released = result.released.map((task) => `${task.instanceId} (${task.step})`).join(', ')
+  report(
+    json,
+    { ok: true, ...result },
+    result.alreadyDeprovisioned === true
+      ? `${user} was already deprovisioned; nothing changed`
+      : `deprovisioned ${user}; returned ${result.released.length} task(s) to the pool${released === '' ? '' : `: ${released}`}`
+  )
+  return 0
 }
 
 /** The `grant` group (S02, AC-1, AC-2): add, list and revoke through the grant intent and the grants read. */

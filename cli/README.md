@@ -77,3 +77,10 @@ enform undo <event-seq> --instance <id> --reason "Approved the wrong request"
 ## Service commands (ADR 0011)
 
 `init`, `serve`, `migrate`, `worker`, `admin`, `seed` and `doctor` run the installation; see `enform help`.
+
+```sh
+enform admin sync                       # one directory synchronization pass (ID-5)
+enform admin deprovision <user-id>      # through the server; needs org.grants
+```
+
+`admin sync` reads every known account from the directory once: it records changed group membership, deprovisions a disabled or deleted user, with their tasks back in the pool, and provisions a re-enabled user again. The worker runs the same pass every `directory.syncSeconds` (`ENFORM_DIRECTORY_SYNC_SECONDS`, 300 by default; 0 disables it). `admin deprovision` disables the account in the identity provider and releases every task the person holds with the reason "<user> was deprovisioned" on the timeline (ID-5, WF-5); it answers what it released.

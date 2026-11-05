@@ -153,7 +153,7 @@ function stubDirectory(users: Readonly<Record<string, boolean>>): void {
     const url = String(input)
     const method = init?.method ?? 'GET'
     const path = new URL(url).pathname
-    directoryCalls.push(`${method} ${path}`)
+    directoryCalls.push(`${method} ${decodeURIComponent(path)}`)
     if (path.endsWith('/protocol/openid-connect/token')) {
       return Promise.resolve(
         new Response(JSON.stringify({ access_token: 'admin-token' }), { status: 200 })
@@ -191,7 +191,7 @@ async function deprovisionRequest(pool: Pool, id: string): Promise<Response> {
   })
 }
 
-test.fails('#267 ID-5 a deprovision disables the account, releases the held task with the reason and records the account', async () => {
+test('#267 ID-5 a deprovision disables the account, releases the held task with the reason and records the account', async () => {
   stubDirectory({ [OKAFOR]: true })
   const response = await deprovisionRequest(sessionPool([administrator]), OKAFOR)
   expect(response.status).toBe(200)
@@ -219,7 +219,7 @@ test.fails('#267 ID-5 a deprovision disables the account, releases the held task
   })
 })
 
-test.fails('#267 I8 a deprovision without org.grants answers 403 and touches neither the log nor the directory', async () => {
+test('#267 I8 a deprovision without org.grants answers 403 and touches neither the log nor the directory', async () => {
   stubDirectory({ [OKAFOR]: true })
   const response = await deprovisionRequest(sessionPool([]), OKAFOR)
   expect(response.status).toBe(403)
@@ -227,7 +227,7 @@ test.fails('#267 I8 a deprovision without org.grants answers 403 and touches nei
   expect(directoryCalls).toEqual([])
 })
 
-test.fails('#267 ID-4 a principal that neither the directory nor the log knows answers 404', async () => {
+test('#267 ID-4 a principal that neither the directory nor the log knows answers 404', async () => {
   stubDirectory({})
   const response = await deprovisionRequest(sessionPool([administrator]), 'user:nobody')
   expect(response.status).toBe(404)
@@ -235,7 +235,7 @@ test.fails('#267 ID-4 a principal that neither the directory nor the log knows a
   expect(appended).toEqual([])
 })
 
-test.fails('#267 I1 a second deprovision of the same account appends nothing and says so', async () => {
+test('#267 I1 a second deprovision of the same account appends nothing and says so', async () => {
   stubDirectory({ [OKAFOR]: false })
   const log = [
     ...claimedLog(),

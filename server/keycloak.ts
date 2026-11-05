@@ -20,7 +20,12 @@ import type { Principal } from './db.js'
 export type CreateDirectoryUserInput = {
   readonly email: string
   readonly displayName: string
+  /** The immutable id of the user's manager, stored as the `manager` attribute (AS-1, #267). */
+  readonly managerId?: string
 }
+
+/** The user attribute that names a person's manager (AS-1, #267): `manager-of:starter` resolves to it. */
+export const MANAGER_ATTRIBUTE = 'manager'
 
 /** The immutable id of a created user and its one-time password (ID-6). */
 export type CreatedDirectoryUser = {
@@ -61,6 +66,8 @@ export type DirectoryUser = {
   readonly email: string
   readonly status: 'invited' | 'active' | 'disabled'
   readonly groups: readonly string[]
+  /** The immutable id of the user's manager, from the `manager` attribute (AS-1, #267). */
+  readonly managerId?: string
 }
 
 /** One user to create or update in the local directory (ID-6). */
@@ -82,6 +89,7 @@ type KeycloakUser = {
   readonly emailVerified?: boolean
   readonly requiredActions?: readonly string[]
   readonly credentials?: readonly Record<string, unknown>[]
+  readonly attributes?: Readonly<Record<string, readonly string[] | string>>
 }
 
 /** A Keycloak group representation, narrowed to the fields this slice reads. */
@@ -287,6 +295,9 @@ export async function createDirectoryUser(
     emailVerified: true,
     requiredActions: [],
     credentials: [{ type: 'password', value: temporaryPassword, temporary: false }],
+    ...(input.managerId === undefined || input.managerId === ''
+      ? {}
+      : { attributes: { [MANAGER_ATTRIBUTE]: [input.managerId] } }),
   })
   return { id, temporaryPassword }
 }
@@ -311,14 +322,62 @@ export async function deleteDirectoryUser(config: Config, id: string): Promise<v
 /** Every user of the configured realm, for the administrator surface (ID-6). */
 export async function listDirectoryUsers(config: Config): Promise<readonly DirectoryUser[]> {
   const token = await adminToken(config)
-  const response = await fetch(`${adminBase(config)}/users?max=1000`, {
+  const response = await fetch(`${adminBase(config)}/users?max=1000&briefRepresentation=false`, {
     headers: { authorization: `Bearer ${token}` },
   })
   const body = await response.text()
   if (!response.ok)
     throw new Error(`keycloak: listing the directory failed: ${response.status} ${body}`)
   const users = JSON.parse(body) as KeycloakUser[]
-  return users.map((user) => ({
+  return users.map(directoryUserOf)
+}
+
+/**
+ * One user of the configured realm by its immutable id (ID-4, ID-5, #267), or
+ * undefined when the directory no longer holds it. The synchronization and
+ * the deprovision read the account this way, one id at a time, so a listing
+ * that is cut short can never make a person look deprovisioned.
+ */
+export async function directoryUser(
+  config: Config,
+  id: string
+): Promise<DirectoryUser | undefined> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/users/${encodeURIComponent(id)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (response.status === 404) return undefined
+  const body = await response.text()
+  if (!response.ok)
+    throw new Error(`keycloak: reading the user ${id} failed: ${response.status} ${body}`)
+  return directoryUserOf(JSON.parse(body) as KeycloakUser)
+}
+
+/**
+ * Disable one directory user (ID-5, ID-6, #267), so the account signs in no
+ * more. The representation is read first and written back with `enabled`
+ * false, so no other field of the account changes. An account the directory
+ * no longer holds is already gone, and the call succeeds.
+ */
+export async function disableDirectoryUser(config: Config, id: string): Promise<void> {
+  const token = await adminToken(config)
+  const response = await fetch(`${adminBase(config)}/users/${encodeURIComponent(id)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (response.status === 404) return
+  const body = await response.text()
+  if (!response.ok)
+    throw new Error(`keycloak: reading the user ${id} failed: ${response.status} ${body}`)
+  const user = JSON.parse(body) as KeycloakUser
+  if (user.enabled === false) return
+  await updateUser(config, token, id, { ...user, enabled: false })
+}
+
+/** One directory user as the administrator surface shows it, from the admin API's representation (ID-6). */
+function directoryUserOf(user: KeycloakUser): DirectoryUser {
+  const manager = user.attributes?.[MANAGER_ATTRIBUTE]
+  const managerId = Array.isArray(manager) ? manager[0] : manager
+  return {
     id: user.id ?? '',
     displayName:
       [user.firstName, user.lastName]
@@ -336,7 +395,8 @@ export async function listDirectoryUsers(config: Config): Promise<readonly Direc
           ? 'invited'
           : 'active',
     groups: [],
-  }))
+    ...(typeof managerId === 'string' && managerId !== '' ? { managerId } : {}),
+  }
 }
 
 /**
@@ -584,7 +644,7 @@ async function updateUser(
   })
   if (!response.ok) {
     throw new Error(
-      `keycloak: updating the administrator failed: ${response.status} ${await response.text()}`
+      `keycloak: updating the user ${id} failed: ${response.status} ${await response.text()}`
     )
   }
 }
