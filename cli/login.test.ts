@@ -135,7 +135,7 @@ afterAll(async () => {
   )
 })
 
-test.fails('#258 login signs in through the device flow and stores the credential per server', async () => {
+test('#258 login signs in through the device flow and stores the credential per server', async () => {
   const { deviceLogin, readCredential, writeCredential } = await loginModule()
   const lines: string[] = []
   const credential = await deviceLogin({
@@ -165,7 +165,7 @@ test.fails('#258 login signs in through the device flow and stores the credentia
   expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ [base]: credential })
 })
 
-test.fails('#258 a scripted login takes a username and a password, and a stale credential is refreshed', async () => {
+test('#258 a scripted login takes a username and a password, and a stale credential is refreshed', async () => {
   const { passwordLogin, freshCredential } = await loginModule()
   const signedIn = await passwordLogin({
     server: base,
@@ -184,22 +184,24 @@ test.fails('#258 a scripted login takes a username and a password, and a stale c
   const stale: Credential = {
     accessToken: 'access-1',
     refreshToken: 'refresh-1',
-    expiresAt: 1_000,
+    expiresAt: 100_000,
     tokenEndpoint: `${base}/token`,
     clientId: 'enform-cli',
   }
-  expect(await freshCredential(stale, { fetch, now: () => 500 })).toEqual(stale)
-  const refreshed = await freshCredential(stale, { fetch, now: () => 2_000 })
+  // Fresh means more than the ten-second margin before the expiry, so a
+  // command in flight does not outlive its token.
+  expect(await freshCredential(stale, { fetch, now: () => 50_000 })).toEqual(stale)
+  const refreshed = await freshCredential(stale, { fetch, now: () => 200_000 })
   expect(refreshes).toBe(1)
   expect(refreshed).toEqual({
     ...stale,
     accessToken: 'access-2',
     refreshToken: 'refresh-2',
-    expiresAt: 302_000,
+    expiresAt: 500_000,
   })
   // A credential whose refresh token is gone cannot be refreshed: the person
   // signs in again, and the message says so.
   await expect(
-    freshCredential({ ...stale, refreshToken: 'gone' }, { fetch, now: () => 2_000 })
+    freshCredential({ ...stale, refreshToken: 'gone' }, { fetch, now: () => 200_000 })
   ).rejects.toThrow(/enform login/)
 })
