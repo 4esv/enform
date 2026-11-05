@@ -685,7 +685,7 @@ test('#269 SE-1 a flow owner sends a delivered message again, and the page shows
 // and on the page; a person without org.grants is refused. Expected to fail
 // until the route and the page exist.
 
-test.fails('#269 SE-2 the templates page shows each event type with its variables and a preview', async () => {
+test('#269 SE-2 the templates page shows each event type with its variables and a preview', async () => {
   const { publicUrl, config } = requireSetup()
   const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
   const registrarToken = await signIn(castMember('registrar'))

@@ -120,6 +120,7 @@ import {
   principalFromToken,
   tokenExpiry,
 } from './keycloak.js'
+import { templateCatalog } from './mail.js'
 import { attachRealtime, createHub, followLog, type Hub, type Scope } from './realtime.js'
 import { mountInterface } from './static.js'
 import { DeprovisionRefused, deprovisionPrincipal, directoryFor } from './sync.js'
@@ -432,6 +433,19 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
       if (error instanceof DeprovisionRefused) return c.json({ error: error.message }, 403)
       throw error
     }
+  })
+
+  // Issue #269, SE-2, I8: the email templates with their variables and a
+  // preview, for an administrator (org.grants). The templates are code; the
+  // page reads what each one says before a message goes out.
+  app.get('/api/v1/admin/templates', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!authorize(grants, 'org.grants', 'org')) {
+      return c.json({ error: 'reading the templates requires the scope org.grants on org' }, 403)
+    }
+    return c.json(templateCatalog(config.publicUrl))
   })
 
   app.get('/api/v1/admin/groups', async (c) => {

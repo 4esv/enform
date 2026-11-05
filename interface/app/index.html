@@ -31,6 +31,7 @@
       const users = params.get('users') === '1'
       const groups = params.get('groups') === '1'
       const teams = params.get('teams') === '1'
+      const templates = params.get('templates') === '1'
       const queue = params.get('queue') === '1'
       const changes = params.get('changes') === '1'
       mountApp({
@@ -45,6 +46,7 @@
         ...(users ? { users: true } : {}),
         ...(groups ? { groups: true } : {}),
         ...(teams ? { teams: true } : {}),
+        ...(templates ? { templates: true } : {}),
         ...(queue ? { queue: true } : {}),
         ...(changes ? { changes: true } : {}),
         ...(sources

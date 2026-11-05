@@ -798,6 +798,25 @@ export interface DirectoryGroupMember {
 }
 
 /**
+ * One email template with its variables and a preview (SE-2).
+ */
+export interface MailTemplate {
+  readonly effect: string
+  readonly label: string
+  readonly variables: readonly string[]
+  readonly preview: MailPreview
+}
+
+/**
+ * A rendered sample of a template (SE-2).
+ */
+export interface MailPreview {
+  readonly subject: string
+  readonly text: string
+  readonly html: string
+}
+
+/**
  * One group of the built-in directory and the members it holds now (ID-6, AS-1). A `group`
  * target names the group id, and the resolver reads the members through the identity provider's
  * admin API (AS-4).
@@ -988,6 +1007,16 @@ export async function listGroups(): Promise<readonly DirectoryGroup[]> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as readonly DirectoryGroup[]
+}
+
+export async function listMailTemplates(): Promise<readonly MailTemplate[]> {
+  const url = `${configured().baseUrl}/api/v1/admin/templates`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly MailTemplate[]
 }
 
 export async function listTeams(): Promise<readonly Team[]> {

@@ -963,6 +963,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/admin/templates:
+    get:
+      operationId: listMailTemplates
+      summary: List the email templates with their variables and a preview
+      description: >-
+        One template per event type that SE-2 names (task assigned, sent
+        back, taken over, withdrawn or cancelled, undone, reminder,
+        escalation, unroutable), each with the variables it reads and a
+        preview rendered from a sample at the `review` step. The read
+        requires `org.grants` on `org` (I8). A template reads no form value.
+      responses:
+        '200':
+          description: The templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MailTemplate'
+        '403':
+          description: The principal does not hold `org.grants` on the organization (I8)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/admin/groups:
     get:
       operationId: listGroups
@@ -3387,6 +3412,35 @@ components:
         email:
           type: string
           description: The email address that the directory holds (ID-6).
+    MailTemplate:
+      type: object
+      description: One email template with its variables and a preview (SE-2).
+      required: [effect, label, variables, preview]
+      properties:
+        effect:
+          type: string
+          description: The effect the template renders, such as send-assignment.
+        label:
+          type: string
+          description: The template in words, such as "Task assigned".
+        variables:
+          type: array
+          items:
+            type: string
+          description: The payload keys the template reads, such as step, comment, reason, actor, link.
+        preview:
+          $ref: '#/components/schemas/MailPreview'
+    MailPreview:
+      type: object
+      description: A rendered sample of a template (SE-2).
+      required: [subject, text, html]
+      properties:
+        subject:
+          type: string
+        text:
+          type: string
+        html:
+          type: string
     DirectoryGroup:
       type: object
       description: >-

@@ -30,12 +30,14 @@ import {
   instancePdfUrl,
   listFlows,
   listGroups,
+  listMailTemplates,
   listTeams,
   listUnroutable,
   listUsers,
   loginUrl,
   logout,
   type MailRow,
+  type MailTemplate,
   type Note,
   type Operation,
   RequestRefused,
@@ -134,6 +136,8 @@ export interface AppOptions {
   readonly groups?: boolean
   /** Whether the URL asks for the teams page (AS-6). */
   readonly teams?: boolean
+  /** Whether the URL asks for the email templates page (SE-2). */
+  readonly templates?: boolean
   /** Whether the URL asks for the Unroutable queue (I10, AS-5). */
   readonly queue?: boolean
   /** Whether the URL asks for the global change feed (VT-6). */
@@ -237,6 +241,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
   teams.textContent = 'Teams'
   teams.dataset.teams = ''
   header.appendChild(teams)
+  // Issue #269, SE-2: the email templates, for an administrator.
+  const templates = document.createElement('a')
+  templates.href = '/?templates=1'
+  templates.textContent = 'Templates'
+  templates.dataset.templates = ''
+  header.appendChild(templates)
   // Issue #252, I10, AS-5: the Unroutable queue. The flow owner reads the
   // tasks that resolved to nobody; the server authorizes every row (I8).
   const queue = document.createElement('a')
@@ -2462,6 +2472,45 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   /**
+   * Render the email templates page (SE-2, #269): each event type's template
+   * with its variables and a preview rendered by the server from a sample,
+   * for an administrator. The server authorizes the read (I8).
+   */
+  const renderTemplates = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Email templates'
+    main.appendChild(heading)
+    let templates: readonly MailTemplate[]
+    try {
+      templates = await listMailTemplates()
+    } catch (error: unknown) {
+      const refusal = document.createElement('p')
+      refusal.className = 'status'
+      refusal.dataset.templatesRefused = ''
+      refusal.textContent = messageOf(error)
+      main.appendChild(refusal)
+      return
+    }
+    for (const template of templates) {
+      const section = document.createElement('section')
+      section.dataset.template = template.effect
+      const title = document.createElement('h2')
+      title.textContent = `${template.label} (${template.effect})`
+      const variables = document.createElement('p')
+      variables.className = 'template-variables'
+      variables.textContent = `Variables: ${template.variables.join(', ')}`
+      const subject = document.createElement('p')
+      subject.dataset.templateSubject = ''
+      subject.textContent = `Subject: ${template.preview.subject}`
+      const body = document.createElement('pre')
+      body.dataset.templateText = ''
+      body.textContent = template.preview.text
+      section.append(title, variables, subject, body)
+      main.appendChild(section)
+    }
+  }
+
+  /**
    * Render the teams page (AS-6, AS-4, ID-4, I14, #269). Everyone reads the
    * teams the log records; a holder of `org.teams` creates a team and adds or
    * removes a member, each as one attributed `config.team.changed@1`
@@ -2646,6 +2695,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
     }
     if (options.teams === true) {
       await renderTeams()
+      return
+    }
+    if (options.templates === true) {
+      await renderTemplates()
       return
     }
     if (options.queue === true) {

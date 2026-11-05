@@ -5,11 +5,11 @@ import { templateCatalog } from '../server/mail.js'
 // SE-2 names has a template with its variables and a preview rendered from
 // a sample entry, so an administrator reads what each message says before
 // it is sent. The catalog is deterministic (I6): the same public URL gives
-// the same previews. Expected to fail until the catalog exists.
+// the same previews.
 
 const PUBLIC_URL = 'https://forms.example.test'
 
-test.fails('#269 SE-2 the catalog holds one template per event type with its variables and a preview', () => {
+test('#269 SE-2 the catalog holds one template per event type with its variables and a preview', () => {
   const catalog = templateCatalog(PUBLIC_URL)
   expect(catalog.map((template) => template.effect).sort()).toEqual(
     [
