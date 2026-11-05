@@ -2872,8 +2872,8 @@ function mailLabel(effect: string): string {
     'send-reminder': 'Reminder',
     'send-escalation': 'Escalation',
     'send-unroutable': 'Unroutable',
-    'send-taken-over': 'Taken over',
-    'send-withdrawn': 'Withdrawn or cancelled',
+    'send-takeover': 'Taken over',
+    'send-withdrawn-cancelled': 'Withdrawn or cancelled',
     'send-undone': 'Undone',
   }
   return labels[effect] ?? effect

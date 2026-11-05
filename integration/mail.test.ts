@@ -679,3 +679,53 @@ test('#269 SE-1 a flow owner sends a delivered message again, and the page shows
     await browser.close()
   }
 }, 180_000)
+
+// Issue #269, SE-2, I8: the templates page. An administrator reads each
+// event type's template with its variables and a preview, through the API
+// and on the page; a person without org.grants is refused. Expected to fail
+// until the route and the page exist.
+
+test.fails('#269 SE-2 the templates page shows each event type with its variables and a preview', async () => {
+  const { publicUrl, config } = requireSetup()
+  const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
+  const registrarToken = await signIn(castMember('registrar'))
+  const refused = await fetch(`${publicUrl}/api/v1/admin/templates`, {
+    headers: { authorization: `Bearer ${registrarToken}` },
+  })
+  expect(refused.status).toBe(403)
+  const listed = await fetch(`${publicUrl}/api/v1/admin/templates`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  })
+  expect(listed.status, await listed.clone().text()).toBe(200)
+  const templates = (await listed.json()) as readonly {
+    effect: string
+    variables: readonly string[]
+    preview: { subject: string; text: string }
+  }[]
+  expect(templates.length).toBeGreaterThanOrEqual(8)
+  const assignment = templates.find((template) => template.effect === 'send-assignment')
+  expect(assignment?.preview.subject).toContain('task assigned')
+  expect(assignment?.preview.text).toContain(publicUrl)
+
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    const session = await page.request.get(`${publicUrl}/api/v1/session`)
+    await page.goto(publicUrl)
+    if (session.status() === 401) {
+      await page.locator('#username').waitFor({ timeout: 30_000 })
+      await page.fill('#username', ADMIN_EMAIL)
+      await page.fill('#password', ADMIN_PASSWORD)
+      await page.click('#kc-login')
+    }
+    await page.locator('.app-header').waitFor({ timeout: 30_000 })
+    await page.goto(`${publicUrl}/?templates=1`)
+    await page.locator('[data-template="send-assignment"]').waitFor({ timeout: 30_000 })
+    expect(await page.locator('[data-template]').count()).toBeGreaterThanOrEqual(8)
+    expect(
+      await page.locator('[data-template="send-assignment"] [data-template-subject]').textContent()
+    ).toContain('task assigned')
+  } finally {
+    await browser.close()
+  }
+}, 120_000)

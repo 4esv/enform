@@ -266,3 +266,16 @@ function redactUrl(value: string): string {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+/** One email template with its variables and a preview rendered from a sample (SE-2). */
+export type MailTemplate = {
+  readonly effect: string
+  readonly label: string
+  readonly variables: readonly string[]
+  readonly preview: { readonly subject: string; readonly text: string; readonly html: string }
+}
+
+/** The catalog of the templates, one per event type that SE-2 names (#269). */
+export function templateCatalog(_publicUrl: string): readonly MailTemplate[] {
+  throw new Error('#269: the template catalog is not implemented')
+}
