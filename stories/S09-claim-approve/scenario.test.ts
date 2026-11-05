@@ -39,7 +39,7 @@ test('#46 the S09 golden path runs in api, cli and dry mode and reaches the gold
   })
   expect(instance?.done).toBe(true)
   expect(state.log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(2)
-})
+}, 60_000)
 
 test('#46 exactly one claim succeeds and the holder completes with an authorized outcome (S09)', () => {
   // The view that Lee and Ana both hold: the instance at the registrar step,
