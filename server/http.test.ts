@@ -180,3 +180,21 @@ test('#228 a create-user request without the CSRF token answers 403', async () =
   })
   expect(response.status, await response.text()).toBe(403)
 })
+
+// Issue #258, DX-3, S01: the CLI signs in through the identity provider's
+// device authorization flow. It asks the server which provider and client to
+// use; the answer is public, because a sign-in has no credential yet, and it
+// names no secret: the CLI client is a public client.
+test('#258 the server describes the device sign-in of the CLI without a credential', async () => {
+  const app = createApp(defaultConfig, sessionPool())
+  const response = await app.request('/api/v1/auth/cli')
+  const body = await response.text()
+  expect(response.status, body).toBe(200)
+  const issuer = `${defaultConfig.keycloak.url}/realms/${defaultConfig.keycloak.realm}`
+  expect(JSON.parse(body)).toEqual({
+    clientId: 'enform-cli',
+    deviceAuthorizationEndpoint: `${issuer}/protocol/openid-connect/auth/device`,
+    tokenEndpoint: `${issuer}/protocol/openid-connect/token`,
+  })
+  expect(body).not.toContain(defaultConfig.keycloak.clientSecret)
+})

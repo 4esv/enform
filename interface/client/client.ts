@@ -463,6 +463,17 @@ export interface Principal {
 }
 
 /**
+ * What the CLI needs to sign in through the device authorization flow (DX-3, RFC 8628): the
+ * public client id, the device authorization endpoint and the token endpoint of the identity
+ * provider.
+ */
+export interface CliAuth {
+  readonly clientId: string
+  readonly deviceAuthorizationEndpoint: string
+  readonly tokenEndpoint: string
+}
+
+/**
  * One signed-in session, as `readSession` reports it (ADR 0012). The server holds the session
  * row, so logout and deprovisioning revoke it and the cookie stops authenticating at once
  * (ID-5). The browser and the CLI read the same session: one principal and one session row (ADR
@@ -823,6 +834,16 @@ export async function publishFlow(
   return (await response.json()) as PublishedFlow
 }
 
+export async function readCliAuth(): Promise<CliAuth> {
+  const url = `${configured().baseUrl}/api/v1/auth/cli`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as CliAuth
+}
+
 export async function readDraft(slug: string): Promise<DraftFlow> {
   const url = `${configured().baseUrl}/api/v1/flows/${slug}/draft`
   const response = await fetch(url, {
@@ -833,8 +854,11 @@ export async function readDraft(slug: string): Promise<DraftFlow> {
   return (await response.json()) as DraftFlow
 }
 
-export async function readFlow(slug: string): Promise<PublishedFlow> {
-  const url = `${configured().baseUrl}/api/v1/flows/${slug}`
+export async function readFlow(slug: string, version?: number): Promise<PublishedFlow> {
+  const query = new URLSearchParams()
+  if (version !== undefined) query.set('version', String(version))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}${search}`
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(),

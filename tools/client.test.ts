@@ -76,7 +76,7 @@ test('#93 DX-4 the generated client exposes the four typed operations (I12)', ()
     'export async function readState(): Promise<State> {'
   )
   expect(source, 'readFlow takes a slug and returns a PublishedFlow').toContain(
-    'export async function readFlow(slug: string): Promise<PublishedFlow> {'
+    'export async function readFlow(slug: string, version?: number): Promise<PublishedFlow> {'
   )
 })
 

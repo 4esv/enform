@@ -31,6 +31,24 @@
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }
+    },
+    {
+      "clientId": "enform-cli",
+      "name": "enform CLI",
+      "description": "The enform command line (DX-3): a public client that signs in through the device authorization flow or a direct grant of the local directory.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": [],
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      }
     }
   ],
   "components": {
