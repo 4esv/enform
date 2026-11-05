@@ -134,14 +134,14 @@ Refs: AS-2, AC-4, RT-2, VT-1, I5, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S10: Take over from a peer on vacation (`takeover`)
 
