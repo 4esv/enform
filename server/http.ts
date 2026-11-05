@@ -47,8 +47,10 @@ import {
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
+import { contentHash } from '../engine/instance.js'
 import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
 import { readableLog } from '../engine/logRead.js'
+import { definitionByHash, mergeDefinitions } from '../engine/merge.js'
 import {
   createOperation,
   type Log,
@@ -539,7 +541,14 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     if (stored === undefined || stored.flow.draft === undefined) {
       return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
     }
-    return c.json({ slug, version: stored.draftVersion, definition: stored.flow.draft })
+    // The read names the hash of the draft, so a write can name the copy it
+    // is based on and merge with a write made beside it (DF-3, S03, #264).
+    return c.json({
+      slug,
+      version: stored.draftVersion,
+      draftHash: contentHash(stored.flow.draft),
+      definition: stored.flow.draft,
+    })
   })
 
   app.put('/api/v1/flows/:slug/draft', async (c) => {
@@ -574,6 +583,50 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
         409
       )
     }
+    // Two people edit the draft at the same time and nobody is blocked (DF-3,
+    // S03, #264): a write that names the draft it was based on merges with
+    // the draft another write left since. The engine merges three ways; a
+    // place both changed differently is a conflict the writer decides (A1).
+    const current = stored.flow.draft
+    if (
+      input.baseHash !== undefined &&
+      current !== undefined &&
+      input.baseHash !== contentHash(current)
+    ) {
+      const base = definitionByHash(await readLog(pool), slug, input.baseHash)
+      if (base === undefined) {
+        return c.json(
+          {
+            error: `the draft moved on since the copy ${input.baseHash} was read`,
+            code: 'version-stale',
+          },
+          409
+        )
+      }
+      const merged = mergeDefinitions(base, definition, current)
+      if (merged.definition === undefined) {
+        const paths = merged.conflicts.map((conflict) => conflict.path).join(', ')
+        return c.json(
+          {
+            error: `the draft changed at the same places since it was read: ${paths}`,
+            code: 'version-stale',
+            conflicts: merged.conflicts,
+          },
+          409
+        )
+      }
+      try {
+        definition = parse(JSON.stringify(merged.definition))
+      } catch (error) {
+        return c.json(
+          {
+            error: `the merged draft is not valid: ${messageOf(error)}`,
+            code: 'version-stale',
+          },
+          409
+        )
+      }
+    }
     const grants = await grantsOfPrincipal(pool, auth.principal.id)
     const changes = changesForPush(stored.flow, definition)
     if (!changeAllowed(grants, slug, changes)) {
@@ -582,11 +635,14 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     const pushed = push(stored.flow, definition, operationDeps, auth.principal.id, grants)
     await appendOperation(pool, pushed.operation)
     // The write answers the field-level changes it made, with their paths, so
-    // the builder shows what changed (DF-3, DF-6, #256).
+    // the builder shows what changed (DF-3, DF-6, #256), and the hash of the
+    // draft it left, so the next write names its base (S03).
+    const draft = pushed.flow.draft ?? definition
     return c.json({
       slug,
       version: stored.draftVersion,
-      definition: pushed.flow.draft ?? definition,
+      draftHash: contentHash(draft),
+      definition: draft,
       changes,
     })
   })
@@ -1553,11 +1609,12 @@ function readCreateFlow(
 /** Read the body of `PUT /api/v1/flows/{slug}/draft` (#220, I5). */
 function readDraftWrite(
   body: Record<string, unknown>
-): { version: number; definition: unknown } | undefined {
-  const { version, definition } = body
+): { version: number; definition: unknown; baseHash?: string } | undefined {
+  const { version, definition, baseHash } = body
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) return undefined
   if (!isRecord(definition)) return undefined
-  return { version, definition }
+  if (baseHash !== undefined && (typeof baseHash !== 'string' || baseHash === '')) return undefined
+  return { version, definition, ...(baseHash === undefined ? {} : { baseHash }) }
 }
 
 /** Read the body of `POST /api/v1/flows/{slug}/publish` (#220, I5). */
