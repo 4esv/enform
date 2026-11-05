@@ -133,6 +133,9 @@ const ROUTING_INTENTS: ReadonlySet<string> = new Set([
 ])
 
 /** The running HTTP server and the way to drain it (DE-3). */
+/** The public client of the realm that the CLI signs in with (#258, DX-3): deploy/keycloak/realms. */
+const CLI_CLIENT_ID = 'enform-cli'
+
 export type ServedHttp = {
   readonly port: number
   readonly close: () => Promise<void>
@@ -187,6 +190,19 @@ export function createApp(config: Config, pool: Pool): Hono {
     const refreshToken = decryptStoredRefreshToken(config, revoked?.refreshToken)
     if (refreshToken !== undefined) await endIdpSession(config, refreshToken)
     return c.body(null, 204)
+  })
+
+  // Issue #258, DX-3, S01: the CLI signs in through the identity provider's
+  // device authorization flow. The answer is public, because a sign-in has
+  // no credential yet, and it names no secret: the CLI client is a public
+  // client of the realm.
+  app.get('/api/v1/auth/cli', (c) => {
+    const issuer = issuerUrl(config)
+    return c.json({
+      clientId: CLI_CLIENT_ID,
+      deviceAuthorizationEndpoint: `${issuer}/protocol/openid-connect/auth/device`,
+      tokenEndpoint: `${issuer}/protocol/openid-connect/token`,
+    })
   })
 
   app.get('/api/v1/auth/login', async (c) => {

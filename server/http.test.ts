@@ -185,7 +185,7 @@ test('#228 a create-user request without the CSRF token answers 403', async () =
 // device authorization flow. It asks the server which provider and client to
 // use; the answer is public, because a sign-in has no credential yet, and it
 // names no secret: the CLI client is a public client.
-test.fails('#258 the server describes the device sign-in of the CLI without a credential', async () => {
+test('#258 the server describes the device sign-in of the CLI without a credential', async () => {
   const app = createApp(defaultConfig, sessionPool())
   const response = await app.request('/api/v1/auth/cli')
   const body = await response.text()
