@@ -364,6 +364,7 @@ export interface InstanceView {
   readonly values: Record<string, unknown>
   readonly fields: readonly InstanceField[]
   readonly outcomes: readonly string[]
+  readonly allowedOutcomes: readonly string[]
   readonly previousSteps: readonly string[]
   readonly notes: readonly Note[]
   readonly withdrawal?: string

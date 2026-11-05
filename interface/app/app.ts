@@ -995,11 +995,12 @@ export async function mountApp(options: AppOptions): Promise<void> {
       form.appendChild(claimControl)
     }
 
-    // The instance read names the outcomes the step offers (AC-4); the engine
-    // authorizes the one the holder chooses and re-runs the rules (A9). Only
-    // the holder may choose one, so the controls wait for the claim.
+    // The instance read names the outcomes the holder may choose (AC-4, S02):
+    // a reviewer with `send_back` only sees Send back, and the engine still
+    // authorizes the one chosen and re-runs the rules (A9). Only the holder
+    // may choose one, so the controls wait for the claim.
     if (view.status.holder === actor) {
-      for (const outcome of view.outcomes) {
+      for (const outcome of view.allowedOutcomes) {
         const control = document.createElement('button')
         control.type = 'button'
         control.textContent = outcome
