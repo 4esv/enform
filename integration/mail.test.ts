@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { chromium } from 'playwright'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { passwordToken, readSession } from './auth.js'
 import {
@@ -574,3 +575,99 @@ test('#240 SE-1 a refused connection records the attempt, the error and the back
     await worker.stop()
   }
 })
+
+// Issue #269, SE-1, I4, I8, I14: a flow owner sends a message again. The
+// instance's messages read back with their status, a person who is not a
+// flow owner may not resend, the owner's resend re-queues the row, records
+// one attributed `mail.resent@1` event, and the worker delivers it a second
+// time through Mailpit. The task page shows each message's status and the
+// Send again control to the owner. Expected to fail until the route and the
+// page exist.
+
+test.fails('#269 SE-1 a flow owner sends a delivered message again, and the page shows each message', async () => {
+  const { configPath, publicUrl, config } = requireSetup()
+  const instanceId = seededInstance('advisor').id
+  const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
+  const advisorToken = await signIn(castMember('advisor'))
+  const headers = (token: string) => ({ authorization: `Bearer ${token}` })
+
+  // The messages of the instance, with their status (SE-1).
+  const listed = await fetch(`${publicUrl}/api/v1/instances/${instanceId}/mail`, {
+    headers: headers(advisorToken),
+  })
+  expect(listed.status, await listed.clone().text()).toBe(200)
+  const rows = (await listed.json()) as readonly {
+    id: string
+    effect: string
+    status: string
+    attempts: number
+  }[]
+  const assignment = rows.find((row) => row.effect === 'send-assignment')
+  expect(assignment, 'the assignment email is listed').toBeDefined()
+  expect(assignment?.status).toBe('sent')
+  if (assignment === undefined) throw new Error('no assignment row')
+
+  // The advisor is not a flow owner: refused (I8).
+  const refused = await fetch(
+    `${publicUrl}/api/v1/instances/${instanceId}/mail/${assignment.id}/resend`,
+    { method: 'POST', headers: headers(advisorToken) }
+  )
+  expect(refused.status).toBe(403)
+
+  // The administrator holds org.grants: the row is queued again and the log
+  // records the resend (I14).
+  const resent = await fetch(
+    `${publicUrl}/api/v1/instances/${instanceId}/mail/${assignment.id}/resend`,
+    { method: 'POST', headers: headers(adminToken) }
+  )
+  expect(resent.status, await resent.clone().text()).toBe(200)
+  expect(outboxRows().find((row) => row.id === assignment.id)?.status).toBe('queued')
+  const logged = queryDatabase(
+    requireSetup().databaseUrl,
+    `select count(*) from events where type = 'mail.resent@1' and payload->>'mailId' = '${assignment.id}'`
+  )
+  expect(logged[0]).toBe('1')
+
+  // The worker sends it again: a second assignment email for the instance.
+  const before = (await mailpitMessages()).filter((message) =>
+    message.Subject.includes('task assigned (advisor)')
+  ).length
+  const worker = startWorker(configPath)
+  try {
+    const row = await waitForStatus('send-assignment', 'sent')
+    expect(row.id).toBe(assignment.id)
+    await waitFor('a second assignment email', async () => {
+      const count = (await mailpitMessages()).filter((message) =>
+        message.Subject.includes('task assigned (advisor)')
+      ).length
+      return count > before ? count : undefined
+    })
+  } finally {
+    await worker.stop()
+  }
+
+  // The task page lists the message with its status and offers Send again to
+  // the owner (SE-1, A4).
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage()
+    const session = await page.request.get(`${publicUrl}/api/v1/session`)
+    await page.goto(publicUrl)
+    if (session.status() === 401) {
+      await page.locator('#username').waitFor({ timeout: 30_000 })
+      await page.fill('#username', ADMIN_EMAIL)
+      await page.fill('#password', ADMIN_PASSWORD)
+      await page.click('#kc-login')
+    }
+    await page.locator('.app-header').waitFor({ timeout: 30_000 })
+    await page.goto(
+      `${publicUrl}/?flow=${encodeURIComponent(requireSetup().seed.flow?.slug ?? '')}&instance=${instanceId}`
+    )
+    const mailRow = page.locator(`[data-mail-row="${assignment.id}"]`)
+    await mailRow.waitFor({ timeout: 30_000 })
+    expect(await mailRow.getAttribute('data-mail-status')).toBe('sent')
+    expect(await mailRow.locator('[data-mail-resend]').count()).toBe(1)
+  } finally {
+    await browser.close()
+  }
+}, 180_000)
