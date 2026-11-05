@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/realtime/v1.json",
+  "title": "enform realtime protocol, version 1",
+  "description": "The messages of the realtime channel (MVP.md DX-2, RT-1, RT-2, ADR 0006). A client opens the channel and sends `hello` with the protocol version it speaks; the server answers `welcome`, or `reload` when it no longer supports that version. The server notifies and the client reads (I8): a `changed` message names the seq and the instance or the flow of a new event, and the client re-reads it through the authorized HTTP API. A subscription to an instance or a flow is authorized when it is opened. Presence names who is on an instance or a draft definition, and where. Over Server-Sent Events the server sends `welcome`, `changed` and `presence` only; polling reads `GET /api/v1/log?after=<seq>` instead.",
+  "$defs": {
+    "protocolVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The protocol version (MVP.md 9.1). The server supports the current version and the previous one (9.3)."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "A position on the log (I4): 0 is the empty log."
+    },
+    "scope": {
+      "type": "object",
+      "description": "What a subscription or a presence names: exactly one instance or one flow.",
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [{ "required": ["instance"] }, { "required": ["flow"] }]
+    },
+    "person": {
+      "type": "object",
+      "required": ["id", "displayName"],
+      "properties": {
+        "id": { "type": "string", "description": "The immutable directory id (ID-4)." },
+        "displayName": { "type": "string" },
+        "where": {
+          "type": "string",
+          "description": "The field or the step the person is on, when the client told the server (RT-2)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "hello": {
+      "type": "object",
+      "required": ["type", "protocol"],
+      "properties": {
+        "type": { "const": "hello" },
+        "protocol": { "$ref": "#/$defs/protocolVersion" }
+      },
+      "additionalProperties": false
+    },
+    "subscribe": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["subscribe", "unsubscribe"] },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [{ "required": ["instance"] }, { "required": ["flow"] }],
+      "additionalProperties": false
+    },
+    "presenceUpdate": {
+      "type": "object",
+      "description": "The client tells where the person is (RT-2): on an instance or a draft definition, and at which field or step.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "presence" },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 },
+        "where": { "type": "string" }
+      },
+      "oneOf": [{ "required": ["instance"] }, { "required": ["flow"] }],
+      "additionalProperties": false
+    },
+    "ping": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "ping" } },
+      "additionalProperties": false
+    },
+    "welcome": {
+      "type": "object",
+      "required": ["type", "protocol", "principal", "seq"],
+      "properties": {
+        "type": { "const": "welcome" },
+        "protocol": { "$ref": "#/$defs/protocolVersion" },
+        "principal": {
+          "type": "object",
+          "required": ["id", "displayName"],
+          "properties": { "id": { "type": "string" }, "displayName": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "seq": { "$ref": "#/$defs/seq" }
+      },
+      "additionalProperties": false
+    },
+    "reload": {
+      "type": "object",
+      "description": "The server does not speak the client's protocol version: the client reloads to get a newer interface (MVP.md 9.3).",
+      "required": ["type", "supported", "reason"],
+      "properties": {
+        "type": { "const": "reload" },
+        "supported": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/protocolVersion" },
+          "minItems": 1
+        },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "subscribed": {
+      "type": "object",
+      "required": ["type", "seq"],
+      "properties": {
+        "type": { "const": "subscribed" },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 },
+        "seq": { "$ref": "#/$defs/seq" }
+      },
+      "oneOf": [{ "required": ["instance"] }, { "required": ["flow"] }],
+      "additionalProperties": false
+    },
+    "refused": {
+      "type": "object",
+      "description": "The server refused a subscription or a presence update (I8): the person may not read what it names, or the message was malformed.",
+      "required": ["type", "reason"],
+      "properties": {
+        "type": { "const": "refused" },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "changed": {
+      "type": "object",
+      "description": "A new event on the log that touches a subscribed instance or flow. It carries no payload: the client reads the instance, the flow or the log through the authorized API (I8).",
+      "required": ["type", "seq", "eventType"],
+      "properties": {
+        "type": { "const": "changed" },
+        "seq": { "$ref": "#/$defs/seq" },
+        "eventType": { "type": "string" },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "presence": {
+      "type": "object",
+      "description": "Who is on the instance or the draft definition now, with where each person is (RT-2).",
+      "required": ["type", "people"],
+      "properties": {
+        "type": { "const": "presence" },
+        "instance": { "type": "string", "minLength": 1 },
+        "flow": { "type": "string", "minLength": 1 },
+        "people": { "type": "array", "items": { "$ref": "#/$defs/person" } }
+      },
+      "oneOf": [{ "required": ["instance"] }, { "required": ["flow"] }],
+      "additionalProperties": false
+    },
+    "pong": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "pong" } },
+      "additionalProperties": false
+    },
+    "clientMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/hello" },
+        { "$ref": "#/$defs/subscribe" },
+        { "$ref": "#/$defs/presenceUpdate" },
+        { "$ref": "#/$defs/ping" }
+      ]
+    },
+    "serverMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/welcome" },
+        { "$ref": "#/$defs/reload" },
+        { "$ref": "#/$defs/subscribed" },
+        { "$ref": "#/$defs/refused" },
+        { "$ref": "#/$defs/changed" },
+        { "$ref": "#/$defs/presence" },
+        { "$ref": "#/$defs/pong" }
+      ]
+    }
+  },
+  "oneOf": [{ "$ref": "#/$defs/clientMessage" }, { "$ref": "#/$defs/serverMessage" }]
+}
