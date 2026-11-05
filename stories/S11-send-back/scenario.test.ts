@@ -1,64 +1,35 @@
 import { expect, test } from 'vitest'
-import { type ActionResult, claim, complete } from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Instance } from '../../engine/instance.js'
-import type { Log, OperationDeps } from '../../engine/operation.js'
+import { complete } from '../../engine/action.js'
+import { instanceOf } from '../../engine/instances.js'
+import type { Log } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
-import { resolveAssignees } from '../../engine/routing.js'
+import { SENT_BACK_NOTIFICATION, STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
+import { INSTANCE_SUBMITTED } from '../../engine/submission.js'
+import { predict } from '../../tools/harness/predict.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
-  SENT_BACK_NOTIFICATION,
-  type SendBackContext,
-  type SendBackResult,
-  STEP_SENT_BACK,
-  sendBack,
-} from '../../engine/sendBack.js'
-import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
-import {
-  data,
-  definition,
-  flow,
+  ADVISOR_STEP,
+  definitionV1,
+  directory,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
   JORDAN,
-  jordanGrants,
-  REGISTRAR_MEMBERS,
+  OKAFOR,
   REGISTRAR_STEP,
-  REGISTRAR_TEAM,
   REQUEST_STEP,
-  resolve,
+  SAM,
   SLUG,
-  STARTER,
-  samGrants,
-  starterGrants,
-} from './scenario.js'
+  stateAfter,
+} from '../example-flow.js'
+import { COMMENT, CORRECTION, golden, JORDAN_COMMENT, STEP, values } from './scenario.js'
 
-/** The note that Jordan attaches to the send back (WF-3, SE-2). */
-const COMMENT = 'Attach your degree audit'
-
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
-
-/** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
-function deps(): OperationDeps {
-  let next = 0
-  return {
-    clock: () => 1_700_000_000_000,
-    ids: () => {
-      next += 1
-      return `op-${next}`
-    },
-  }
-}
-
-/** Apply the operation that an accepted action returned (I14); the test checks acceptance first. */
-function applyAction(result: ActionResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
-
-/** Apply the operation that an accepted send back returned (I14). */
-function applySendBack(result: SendBackResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
+// Issue #48: Dr. Okafor sends Sam's request back with a note, so Sam corrects
+// it and does not start again (WF-2, WF-3). A send back without a comment is
+// refused (WF-3). Sam submits again and the instance goes to the advisor step
+// again; the timeline shows both revisions (WF-3). Jordan can send back at the
+// registrar step and cannot approve (S02, AC-4). The path is deterministic
+// (I6).
 
 /**
  * The revisions of one step on the timeline (WF-3, S11): revision 1 is the
@@ -75,163 +46,200 @@ function revisionsOnTimeline(log: Log, step: string): number[] {
   return revisions
 }
 
-// Issue #48: Sam's request is at the registrar step, held by Jordan, a
-// reviewer who may send back and may not approve (AC-4). A send back without a
-// comment is refused (WF-3). With a comment it returns the instance to the
-// request step as revision 2, clears the holder and records the note to Sam in
-// the same commit (I2, SE-2); the timeline keeps revision 1 and revision 2
-// (WF-3). A send back from a stale view is refused at once (I5). The path is
-// deterministic (I6).
+/** The injected sources of a check (I6). */
+const deps = (index: number) => ({ clock: () => index + 1, ids: () => `check-${index}` })
 
-test('#48 a send back needs a comment and returns the instance to the named step as revision 2 (S11)', () => {
-  // One shared source, so every recorded operation gets a distinct ID (I1).
-  const sources = deps()
+test('#48 the S11 golden path runs in api, cli and dry mode: the send back, the resubmission and both revisions (S11)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
 
-  // The start creates Sam's draft on the request form, whose starter target
-  // resolves to him (S06, ADR 0014, I13).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
-  const startState = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REQUEST_STEP)
-  expect(started.instance.assignees).toEqual([
-    { step: REQUEST_STEP, target: { starter: 'starter' }, members: [STARTER] },
-  ])
-
-  // Sam submits his draft, so the instance advances to the registrar step
-  // (S06, WF-1, ADR 0014).
-  const opened = startState.log.length
-  const submitted = submitInstance(
-    started.instance,
-    STARTER,
-    {},
-    0,
-    { flow: SLUG, definition, resolve, grants: starterGrants },
-    sources
-  )
-  expect(submitted.accepted).toBe(true)
-  if (submitted.operation === undefined) throw new Error(submitted.reason)
-  expect(submitted.instance.currentStep).toBe(REGISTRAR_STEP)
-  let state = apply(submitted.operation, startState)
-  const assignmentEmails = outboxOf(state.log)
-
-  // The engine records the assignees of a step when it starts it (S06, I13):
-  // the submit resolved the registrar team snapshot, so Jordan can claim it.
-  const registrarAssignees = resolveAssignees(definition.steps[1], resolve)
-  expect(registrarAssignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
-  expect(submitted.instance.assignees).toContainEqual(registrarAssignees[0])
-  const atRegistrar: Instance = submitted.instance
-  const claimedRegistrar = claim(atRegistrar, JORDAN, atRegistrar.version ?? 0, sources)
-  expect(claimedRegistrar.accepted).toBe(true)
-  expect(claimedRegistrar.instance.holder).toBe(JORDAN)
-  const held = claimedRegistrar.instance
-  state = applyAction(claimedRegistrar, state)
-
-  const context: SendBackContext = { flow: SLUG, definition, grants: jordanGrants }
-
-  // (a) WF-3: a send back without a comment is refused, and the instance is
-  // unchanged.
-  const noComment = sendBack(held, JORDAN, REQUEST_STEP, '', held.version ?? 0, context, sources)
-  expect(noComment.accepted).toBe(false)
-  expect(noComment.operation).toBeUndefined()
-  expect(noComment.outbox).toBeUndefined()
-  expect(noComment.instance).toBe(held)
-  expect(noComment.reason).toContain('comment')
-  const blank = sendBack(held, JORDAN, REQUEST_STEP, '   ', held.version ?? 0, context, sources)
-  expect(blank.accepted).toBe(false)
-  expect(blank.reason).toContain('comment')
-
-  // (c) AC-4: Jordan holds `step.outcome:send_back` on the registrar step and
-  // no other scope, so the engine refuses approve, and it refuses a send back
-  // from a principal that lacks the send back scope.
-  const approve = complete(
-    held,
-    JORDAN,
-    'approve',
-    {},
-    held.version ?? 0,
-    { flow: SLUG, definition, grants: jordanGrants },
-    sources
-  )
-  expect(approve.accepted).toBe(false)
-  expect(approve.operation).toBeUndefined()
-  expect(approve.reason).toContain('step.outcome:approve')
-  const noScope = sendBack(
-    held,
-    JORDAN,
-    REQUEST_STEP,
-    COMMENT,
-    held.version ?? 0,
-    { flow: SLUG, definition, grants: [] },
-    sources
-  )
-  expect(noScope.accepted).toBe(false)
-  expect(noScope.reason).toContain('step.outcome:send_back')
-
-  // (b) WF-3, I2, SE-2: the send back with a comment returns the instance to
-  // the request step as revision 2, clears the holder, and records the note to
-  // Sam in the same operation.
-  const sent = sendBack(held, JORDAN, REQUEST_STEP, COMMENT, held.version ?? 0, context, sources)
-  expect(sent.accepted).toBe(true)
-  expect(sent.instance.currentStep).toBe(REQUEST_STEP)
-  expect(sent.instance.holder).toBeUndefined()
-  expect(sent.instance.revisions).toEqual({ [REQUEST_STEP]: 2 })
-  expect(sent.instance.version).toBe((held.version ?? 0) + 1)
-  expect(sent.operation?.type).toBe(STEP_SENT_BACK)
-  expect(sent.operation?.actor).toBe(JORDAN)
-  expect(sent.outbox).toEqual({
-    operation: SENT_BACK_NOTIFICATION,
-    target: EMAIL_CONNECTOR,
-    payload: {
-      to: STARTER,
-      step: REQUEST_STEP,
-      from: REGISTRAR_STEP,
-      actor: JORDAN,
-      comment: COMMENT,
-    },
-  })
-  expect(sent.operation?.payload).toEqual({
+  // The send back returned the request to the request form as revision 2,
+  // with the note to Sam in the same commit (WF-3, I2, SE-2), and Sam's
+  // resubmission routed the instance to the advisor step again.
+  const sentBack = state.log.filter((event) => event.type === STEP_SENT_BACK)
+  expect(sentBack).toHaveLength(2)
+  expect(sentBack[0].actor).toBe(OKAFOR)
+  expect(sentBack[0].payload).toMatchObject({
     instanceId: INSTANCE_ID,
-    from: REGISTRAR_STEP,
+    from: ADVISOR_STEP,
     to: REQUEST_STEP,
     comment: COMMENT,
     revision: 2,
-    outbox: [sent.outbox],
   })
+  expect(outboxOf(state.log)).toContainEqual({
+    operation: SENT_BACK_NOTIFICATION,
+    target: 'connector-smtp',
+    payload: { to: SAM, step: REQUEST_STEP, from: ADVISOR_STEP, actor: OKAFOR, comment: COMMENT },
+  })
+  const submits = state.log.filter((event) => event.type === INSTANCE_SUBMITTED)
+  expect(submits).toHaveLength(2)
+  expect(submits[1].payload.currentStep).toBe(ADVISOR_STEP)
+  expect(revisionsOnTimeline(state.log, REQUEST_STEP)).toEqual([1, 2])
 
-  // One apply commits the state change and its note together (I2): the outbox
-  // is the projection of that one event.
-  const afterSent = applySendBack(sent, state)
-  expect(outboxOf(afterSent.log)).toEqual([...assignmentEmails, sent.outbox])
+  // Jordan sent the registrar task back to the advisor step (AC-4): the
+  // instance waits there as revision 2 of that step, and the corrected
+  // summary is the one the instance holds.
+  expect(sentBack[1].actor).toBe(JORDAN)
+  expect(sentBack[1].payload).toMatchObject({
+    from: REGISTRAR_STEP,
+    to: ADVISOR_STEP,
+    comment: JORDAN_COMMENT,
+    revision: 2,
+  })
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  expect(instance?.currentStep).toBe(ADVISOR_STEP)
+  expect(instance?.holder).toBeUndefined()
+  expect(instance?.values).toEqual({ ...values, ...CORRECTION })
+  expect(revisionsOnTimeline(state.log, ADVISOR_STEP)).toEqual([1, 1, 2])
+}, 60_000)
 
-  // The timeline shows both revisions of the request step (WF-3): revision 1 is
-  // the start that routed the instance to request, and revision 2 is the send
-  // back.
-  expect(revisionsOnTimeline(afterSent.log, REQUEST_STEP)).toEqual([1, 2])
+test('#48 a send back needs a comment, the holder, and the send back scope (S11)', () => {
+  // The view after Dr. Okafor's claim: he holds the advisor task.
+  const held = instanceAfter(golden.steps.slice(0, STEP.okaforSendBack))
+  expect(held.holder).toBe(OKAFOR)
+  const version = held.version ?? 0
+  const context = {
+    flow: SLUG,
+    definition: definitionV1,
+    grants: grantsOfPerson(OKAFOR),
+    resolve: directory(values),
+  }
 
-  // (d) I5: a send back based on the stale view, the version before the claim,
-  // is refused at once, so the instance moves back once.
-  const stale = sendBack(held, JORDAN, REQUEST_STEP, COMMENT, opened, context, sources)
-  expect(stale.accepted).toBe(false)
-  expect(stale.operation).toBeUndefined()
-  expect(stale.instance).toBe(held)
-  expect(stale.reason).toContain('stale')
+  // (a) WF-3: a send back without a comment is refused; so is a blank one.
+  const noComment = sendBack(
+    held,
+    OKAFOR,
+    REQUEST_STEP,
+    '',
+    version,
+    context,
+    deps(STEP.okaforSendBack)
+  )
+  expect(noComment.accepted).toBe(false)
+  expect(noComment.refusal).toBe('comment')
+  const blank = sendBack(
+    held,
+    OKAFOR,
+    REQUEST_STEP,
+    '   ',
+    version,
+    context,
+    deps(STEP.okaforSendBack)
+  )
+  expect(blank.accepted).toBe(false)
+  // The server refuses the same intent as a bad request, and appends nothing.
+  const withoutComment = {
+    ...golden,
+    steps: golden.steps.map((step, index) =>
+      index === STEP.okaforSendBack ? { ...step, intent: { ...step.intent, comment: '' } } : step
+    ),
+  }
+  const outcome = predict(withoutComment).outcomes[STEP.okaforSendBack]
+  expect('error' in outcome && outcome.status).toBe(400)
+  expect('error' in outcome && outcome.error).toContain('comment')
 
-  // A principal that is not the holder may not send the step back (WF-3).
+  // (b) WF-3: a principal that is not the holder may not send the step back,
+  // and a holder without step.outcome:send_back may not either (AC-4).
   const outsider = sendBack(
     held,
-    STARTER,
+    SAM,
     REQUEST_STEP,
     COMMENT,
-    held.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
-    sources
+    version,
+    { ...context, grants: grantsOfPerson(SAM) },
+    deps(STEP.okaforSendBack)
   )
   expect(outsider.accepted).toBe(false)
-  expect(outsider.reason).toContain('does not hold')
+  expect(outsider.refusal).toBe('holder')
+  const noScope = sendBack(
+    held,
+    OKAFOR,
+    REQUEST_STEP,
+    COMMENT,
+    version,
+    { ...context, grants: [] },
+    deps(STEP.okaforSendBack)
+  )
+  expect(noScope.accepted).toBe(false)
+  expect(noScope.refusal).toBe('outcome')
 
-  // (e) I6: the same inputs give the same result.
-  const runOnce = (): SendBackResult =>
-    sendBack(held, JORDAN, REQUEST_STEP, COMMENT, held.version ?? 0, context, deps())
-  expect(runOnce()).toEqual(runOnce())
+  // (c) I5: a send back from a stale view is refused at once.
+  const stale = sendBack(
+    held,
+    OKAFOR,
+    REQUEST_STEP,
+    COMMENT,
+    version - 1,
+    context,
+    deps(STEP.okaforSendBack)
+  )
+  expect(stale.accepted).toBe(false)
+  expect(stale.refusal).toBe('stale')
+
+  // (d) ADR 0014: the send back to the request form makes the instance a
+  // draft again, held by nobody, and the submit path takes it from there.
+  const sent = sendBack(
+    held,
+    OKAFOR,
+    REQUEST_STEP,
+    COMMENT,
+    version,
+    context,
+    deps(STEP.okaforSendBack)
+  )
+  expect(sent.accepted).toBe(true)
+  expect(sent.instance.currentStep).toBe(REQUEST_STEP)
+  expect(sent.instance.submitted).toBe(false)
+  expect(sent.instance.holder).toBeUndefined()
+  expect(sent.instance.revisions).toEqual({ [REQUEST_STEP]: 2 })
+})
+
+test('#48 Jordan can send back at the registrar step and cannot approve (S11, S02)', () => {
+  // The view after Jordan's claim of the registrar task.
+  const held = instanceAfter(golden.steps.slice(0, STEP.jordanSendBack))
+  expect(held.holder).toBe(JORDAN)
+  const version = held.version ?? 0
+  const context = {
+    flow: SLUG,
+    definition: definitionV1,
+    grants: grantsOfPerson(JORDAN),
+    resolve: directory({ ...values, ...CORRECTION }),
+  }
+
+  // Jordan holds step.outcome:send_back only (AC-4): approve is refused.
+  const approve = complete(held, JORDAN, 'approve', {}, version, context, deps(STEP.jordanSendBack))
+  expect(approve.accepted).toBe(false)
+  expect(approve.reason).toContain('step.outcome:approve')
+  // The server answers 403 for it (S02).
+  const approving = {
+    ...golden,
+    steps: golden.steps.map((step, index) =>
+      index === STEP.jordanSendBack
+        ? {
+            ...step,
+            type: 'step.completed@1',
+            intent: { instanceId: INSTANCE_ID, version, outcome: 'approve', values: {} },
+          }
+        : step
+    ),
+  }
+  const outcome = predict(approving).outcomes[STEP.jordanSendBack]
+  expect('error' in outcome && outcome.status).toBe(403)
+
+  // The send back is accepted, and its note goes to the advisor step's
+  // assignee, Dr. Okafor (SE-2).
+  const sent = sendBack(
+    held,
+    JORDAN,
+    ADVISOR_STEP,
+    JORDAN_COMMENT,
+    version,
+    context,
+    deps(STEP.jordanSendBack)
+  )
+  expect(sent.accepted).toBe(true)
+  expect(sent.outbox?.payload.to).toBe(OKAFOR)
+  expect(
+    stateAfter(golden.steps).log.filter((event) => event.type === STEP_SENT_BACK)
+  ).toHaveLength(2)
 })
