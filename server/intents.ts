@@ -20,7 +20,7 @@ import { authorize, type Grant } from '../engine/authorize.js'
 import { CompletionRefused, resolveCompletion } from '../engine/completions.js'
 import { takeoverIdleMs } from '../engine/definition.js'
 import { publishedByHash } from '../engine/flow.js'
-import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
+import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf, revokeGrant } from '../engine/grants.js'
 import { instanceOf } from '../engine/instances.js'
 import type { ActorId, Log, Operation } from '../engine/operation.js'
 import { reassign, release } from '../engine/reassign.js'
@@ -36,7 +36,13 @@ import {
   SubmitRefused,
 } from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
-import { teamsOf } from '../engine/teams.js'
+import {
+  addTeamMember,
+  createTeam,
+  removeTeamMember,
+  TEAM_CHANGE_TYPE,
+  teamsOf,
+} from '../engine/teams.js'
 import { EVENT_UNDONE, TASK_REASSIGNED, TASK_RELEASED, undoAction } from '../engine/undo.js'
 import {
   cancel,
@@ -108,6 +114,7 @@ export const INTENT_TYPES: readonly string[] = [
   EVENT_UNDONE,
   TASK_RELEASED,
   TASK_REASSIGNED,
+  TEAM_CHANGE_TYPE,
 ]
 
 /**
@@ -128,7 +135,7 @@ export function isClientIntent(body: Record<string, unknown>): boolean {
   if (type === DRAFT_EDITED) return true
   if (type === STEP_COMPLETED) return !('step' in payload)
   if (type === STEP_CLAIMED) return 'expectedVersion' in payload
-  if (type === GRANT_CHANGE_TYPE) return true
+  if (type === GRANT_CHANGE_TYPE || type === TEAM_CHANGE_TYPE) return true
   if (type === STEP_SENT_BACK) return !('from' in payload) && !('revision' in payload)
   if (type === INSTANCE_WITHDRAWN || type === INSTANCE_CANCELLED) {
     return !hasEngineCloseField(payload)
@@ -218,6 +225,9 @@ export function resolveClientOperation(
     }
     if (body.type === GRANT_CHANGE_TYPE) {
       return grantOperation(body, principal, grants)
+    }
+    if (body.type === TEAM_CHANGE_TYPE) {
+      return teamOperation(context, body)
     }
     if (body.type === STEP_SENT_BACK) {
       return sendBackOperation(context, body)
@@ -785,11 +795,66 @@ function grantOperation(
       error: `a grant requires the scope org.grants on org or flow.grant on ${resource}`,
     }
   }
-  const operation = addGrant({ principal: grantPrincipal, scopes, resource }, principal.id, {
-    clock: () => body.at as number,
-    ids: () => body.id as string,
-  })
+  const change = payload?.change
+  if (change !== undefined && change !== 'added' && change !== 'revoked') {
+    return { status: 400, error: "a grant change is 'added' or 'revoked'" }
+  }
+  const deps = { clock: () => body.at as number, ids: () => body.id as string }
+  const grant = { principal: grantPrincipal, scopes, resource }
+  // A revoke is the same attributed change in the other direction (AC-2,
+  // #256): it needs the same scope, and the projection removes the named
+  // scopes and nothing else.
+  const operation =
+    change === 'revoked'
+      ? revokeGrant(grant, principal.id, deps)
+      : addGrant(grant, principal.id, deps)
   return { operation }
+}
+
+/**
+ * Resolve one team change (AS-6, I14, #256): a creation, a member added or a
+ * member removed. The engine authorizes `org.teams` on `org` and refuses an
+ * unknown team or a membership change without a member before anything is
+ * appended; the operation keeps the client's id and time (I1, I6).
+ */
+function teamOperation(context: IntentContext, body: Record<string, unknown>): IntentResult {
+  const { log, principal, grants } = context
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const team = stringValue(payload?.team)
+  const change = payload?.change
+  const member = stringValue(payload?.member)
+  if (
+    team === undefined ||
+    team === '' ||
+    (change !== 'created' && change !== 'member-added' && change !== 'member-removed') ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return {
+      status: 400,
+      error:
+        "a team change needs an id, a time, a team and a change of 'created', 'member-added' or 'member-removed'",
+    }
+  }
+  const deps = { clock: () => body.at as number, ids: () => body.id as string }
+  const existing = teamsOf(log).find((candidate) => candidate.name === team)
+  try {
+    if (change === 'created') {
+      if (existing !== undefined) return { status: 409, error: `the team ${team} already exists` }
+      return { operation: createTeam(team, principal.id, deps, grants).operation }
+    }
+    if (existing === undefined) return { status: 409, error: `there is no team ${team}` }
+    if (member === undefined || member === '') {
+      return { status: 400, error: 'a membership change needs a member' }
+    }
+    const changed =
+      change === 'member-added'
+        ? addTeamMember(existing, member, principal.id, deps, grants)
+        : removeTeamMember(existing, member, principal.id, deps, grants)
+    return { operation: changed.operation }
+  } catch (error) {
+    return { status: 403, error: messageOf(error) }
+  }
 }
 
 /**

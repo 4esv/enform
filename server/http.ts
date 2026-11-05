@@ -294,6 +294,17 @@ export function createApp(config: Config, pool: Pool): Hono {
     return c.json(await listDirectoryGroups(config))
   })
 
+  // The teams and their members (AS-6, AS-4, #256): a projection of the log
+  // that any signed-in principal may read, because a target names a team by
+  // its name and the builder offers them. The write path is a
+  // `config.team.changed@1` intent on `POST /api/v1/operations`.
+  app.get('/api/v1/teams', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const log = await readLog(pool)
+    return c.json(teamsOf(log).map((team) => ({ name: team.name, members: [...team.members] })))
+  })
+
   app.get('/api/v1/admin/users', async (c) => {
     const auth = await authenticate(c, pool, config)
     if (auth === undefined) return unauthorized(c)

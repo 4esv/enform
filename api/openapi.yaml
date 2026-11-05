@@ -69,7 +69,11 @@ paths:
         path serves: its payload names `principal`, `scopes` and `resource`,
         and the server authorizes `org.grants` on `org` or `flow.grant` on the
         resource before it appends the grant with the client's ID and time, so
-        a retry with the same ID appends nothing. A raw start, a raw completion,
+        a retry with the same ID appends nothing; with `change: revoked` the
+        same operation removes the named scopes of the principal on the
+        resource and nothing else (AC-2). A `config.team.changed@1` intent
+        (`TeamIntent`) creates a team, adds a member or removes one, for a
+        principal with `org.teams` on `org` (AS-6). A raw start, a raw completion,
         a raw send back, a raw close or undo, any other configuration event or
         any other operation is refused. The appended event keeps the client's
         ID and time.
@@ -588,6 +592,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/teams:
+    get:
+      operationId: listTeams
+      summary: List the teams and their members
+      description: >-
+        The teams that `org.teams` holders created and maintain, with the
+        members they hold now (AS-6, AS-4). They are a projection of the
+        `config.team.changed@1` events on the log (I4, I14). Any signed-in
+        principal may read them, because a step target names a team by its
+        name. A team is changed by posting a `TeamIntent` to `/operations`.
+      responses:
+        '200':
+          description: The teams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Team'
+        '401':
+          description: There is no session.
   /api/v1/admin/users:
     get:
       operationId: listUsers
@@ -1252,6 +1277,55 @@ components:
               type: integer
               minimum: 0
               description: The instance version the client read (I5).
+    Team:
+      type: object
+      description: One team and the members it holds now (AS-6, AS-4, ID-4).
+      required: [name, members]
+      properties:
+        name:
+          type: string
+          description: The team name, the principal ID a `team` target names (ID-4).
+        members:
+          type: array
+          description: The user and group IDs the team holds now, in the order they joined.
+          items:
+            type: string
+    TeamIntent:
+      type: object
+      description: >-
+        A team change (AS-6, I14): the parts a client sends to create a team,
+        add a member or remove one. It carries the operation ID (I1), the type
+        `config.team.changed@1`, the actor, the team name, the change and, for
+        a membership change, the member. The engine authorizes `org.teams` on
+        `org` (403 otherwise), refuses a team that already exists or does not
+        exist (409) and a malformed change (400).
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `config.team.changed@1`.
+          examples:
+            - config.team.changed@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [team, change]
+          properties:
+            team:
+              type: string
+              description: The team name (ID-4).
+            change:
+              type: string
+              enum: [created, member-added, member-removed]
+            member:
+              type: string
+              description: The user or group ID the change adds or removes (ID-4).
     ReleaseIntent:
       type: object
       description: >-

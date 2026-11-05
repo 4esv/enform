@@ -52,7 +52,7 @@ function context(state: State, actor: string, grants: readonly Grant[]) {
   }
 }
 
-test.fails('#256 AC-2 a revoke removes the named scopes and the projection folds it', async () => {
+test('#256 AC-2 a revoke removes the named scopes and the projection folds it', async () => {
   const { resolveClientOperation } = await resolverModule()
   let state = emptyState
   state = apply(
@@ -121,7 +121,7 @@ test.fails('#256 AC-2 a revoke removes the named scopes and the projection folds
   expect(state.log.filter((event) => event.type === 'config.grant.changed@1')).toHaveLength(3)
 })
 
-test.fails('#256 AS-6 a team is created and maintained through the write path by org.teams', async () => {
+test('#256 AS-6 a team is created and maintained through the write path by org.teams', async () => {
   const { resolveClientOperation } = await resolverModule()
   let state = emptyState
   const post = (

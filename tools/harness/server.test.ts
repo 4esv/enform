@@ -32,12 +32,15 @@ afterAll(async () => {
   )
 })
 
+// A resolved configuration operation that the harness appends as it is: a
+// team change is a client intent since #256 and resolves through the engine,
+// so the idempotent append is proved with the title change instead.
 const op = (id: string) => ({
   id,
-  type: 'config.team.changed@1',
+  type: 'config.flow.title@1',
   at: 1,
   actor: 'user-1',
-  payload: { name: 'registrar-office' },
+  payload: { flow: 'course-overload', title: 'Course overload' },
 })
 
 test('#24 the api-mode server serves the /api/v1 contract', async () => {

@@ -101,6 +101,29 @@ export interface UndoActionIntent {
 }
 
 /**
+ * One team and the members it holds now (AS-6, AS-4, ID-4).
+ */
+export interface Team {
+  readonly name: string
+  readonly members: readonly string[]
+}
+
+/**
+ * A team change (AS-6, I14): the parts a client sends to create a team, add a member or remove
+ * one. It carries the operation ID (I1), the type `config.team.changed@1`, the actor, the team
+ * name, the change and, for a membership change, the member. The engine authorizes `org.teams`
+ * on `org` (403 otherwise), refuses a team that already exists or does not exist (409) and a
+ * malformed change (400).
+ */
+export interface TeamIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * A release (WF-5, AS-2, I5): the holder returns the task of the current step to the pool, or a
  * flow owner with `task.reassign` on the flow returns anyone's with a reason. It carries the
  * operation ID (I1), the type `task.released@1`, the actor, the instance and the version read.
@@ -734,6 +757,16 @@ export async function listGroups(): Promise<readonly DirectoryGroup[]> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as readonly DirectoryGroup[]
+}
+
+export async function listTeams(): Promise<readonly Team[]> {
+  const url = `${configured().baseUrl}/api/v1/teams`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly Team[]
 }
 
 export async function listUnroutable(): Promise<readonly UnroutableItem[]> {

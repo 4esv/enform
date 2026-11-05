@@ -22,7 +22,7 @@ import {
   parse,
 } from '../engine/definition.js'
 import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow, publishedByHash } from '../engine/flow.js'
-import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
+import { GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash, mergeAssignees } from '../engine/instance.js'
 import { instanceOf, type ProjectedInstance } from '../engine/instances.js'
@@ -1198,12 +1198,72 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === GRANT_CHANGE_TYPE) {
     const grant = readGrant(event)
+    if (event.payload.change === 'revoked') {
+      // The engine's projection decides what the principal holds on the
+      // resource after the revoke (AC-2, I4): the rows of that pair are
+      // replaced by it, so a live append and a rebuild agree.
+      const rows = await client.query<{ payload: Record<string, unknown>; seq: string }>(
+        `select payload, seq from events where type = $1 and seq <= $2 order by seq`,
+        [GRANT_CHANGE_TYPE, event.seq]
+      )
+      const held = grantsOf(
+        rows.rows.map((row) => ({
+          seq: Number(row.seq),
+          operationId: '',
+          type: GRANT_CHANGE_TYPE,
+          at: 0,
+          payload: row.payload,
+        }))
+      ).filter((entry) => entry.principal === grant.principal && entry.resource === grant.resource)
+      await client.query('delete from grants where principal = $1 and resource = $2', [
+        grant.principal,
+        grant.resource,
+      ])
+      for (const entry of held) {
+        await client.query(
+          `insert into grants (principal, resource, scopes, seq) values ($1, $2, $3::text[], $4)
+           on conflict (principal, resource, scopes) do update set seq = excluded.seq`,
+          [entry.principal, entry.resource, entry.scopes, event.seq]
+        )
+      }
+      return
+    }
     await client.query(
       `insert into grants (principal, resource, scopes, seq)
        values ($1, $2, $3::text[], $4)
        on conflict (principal, resource, scopes) do update set seq = excluded.seq`,
       [grant.principal, grant.resource, grant.scopes, event.seq]
     )
+    return
+  }
+  if (event.type === TEAM_CHANGE_TYPE) {
+    // A team and its members are a projection of the log (AS-6, I4): the
+    // rows follow the same fold as the engine's teamsOf.
+    const { team, change, member } = event.payload
+    if (typeof team !== 'string') {
+      throw new Error(`events: malformed ${TEAM_CHANGE_TYPE} payload at seq ${event.seq}`)
+    }
+    if (change === 'created') {
+      await client.query(
+        `insert into teams (slug, name, seq) values ($1, $1, $2)
+         on conflict (slug) do update set seq = excluded.seq`,
+        [team, event.seq]
+      )
+      return
+    }
+    if (typeof member !== 'string') return
+    if (change === 'member-added') {
+      await client.query(
+        `insert into team_members (team_slug, principal, seq) values ($1, $2, $3)
+         on conflict (team_slug, principal) do update set seq = excluded.seq`,
+        [team, member, event.seq]
+      )
+    } else if (change === 'member-removed') {
+      await client.query('delete from team_members where team_slug = $1 and principal = $2', [
+        team,
+        member,
+      ])
+    }
     return
   }
   if (event.type === PRINCIPAL_UPDATED_TYPE) {
