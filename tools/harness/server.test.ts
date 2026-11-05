@@ -384,6 +384,8 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
         canWithdraw: true,
         canCancel: false,
         canTakeOver: false,
+        canRelease: false,
+        canReassign: false,
       })
 
       // An actor that may not read the instance is refused (I8).

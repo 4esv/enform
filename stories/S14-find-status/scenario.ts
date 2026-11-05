@@ -1,6 +1,8 @@
 import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import type { State } from '../../engine/apply.js'
 import { DEFINITION_CHANGED } from '../../engine/definition.js'
 import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
+import { instanceOf } from '../../engine/instances.js'
 import { release } from '../../engine/reassign.js'
 import { STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
 import {
@@ -21,6 +23,7 @@ import {
   definitionV1,
   depsFor,
   directory,
+  exampleTeamState,
   FLOW,
   flow,
   grantsOfPerson,
@@ -35,7 +38,10 @@ import {
   SAM,
   SLUG,
   samValues,
+  seedApproved,
+  seedSubmitted,
   setupSteps,
+  stateAfter,
   stepResource,
 } from '../example-flow.js'
 
@@ -197,3 +203,126 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S14: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/** The server state the interface path starts from (#269, S14): the request at the registrar step. */
+export function guiSeed(): State {
+  return seedApproved(seedSubmitted(exampleTeamState(), values), values)
+}
+
+/**
+ * The interface path of S14 (STORIES.md): Ana claims and releases, Jordan
+ * claims and sends back; Sam reads the status line and the tracker of his
+ * own request, and sees no note of the people who act on it.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const resolve = directory(values)
+  const instanceAt = () => {
+    const log = [...seed.log, ...stateAfter(steps).log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S14 gui: no instance')
+    return instance
+  }
+  const anaClaim = claim(instanceAt(), ANA, 3, depsFor(0))
+  if (anaClaim.operation === undefined) throw new Error(anaClaim.reason)
+  steps.push(declared(anaClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 3 }))
+  const released = release(
+    instanceAt(),
+    ANA,
+    undefined,
+    4,
+    { flow: SLUG, grants: grantsOfPerson(ANA) },
+    depsFor(1)
+  )
+  if (released.operation === undefined) throw new Error(released.reason)
+  steps.push(declared(released.operation, { instanceId: INSTANCE_ID, version: 4 }))
+  const jordanClaim = claim(instanceAt(), JORDAN, 5, depsFor(2))
+  if (jordanClaim.operation === undefined) throw new Error(jordanClaim.reason)
+  steps.push(declared(jordanClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 5 }))
+  const sent = sendBack(
+    instanceAt(),
+    JORDAN,
+    ADVISOR_STEP,
+    SEND_BACK_COMMENT,
+    6,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(JORDAN), resolve },
+    depsFor(3)
+  )
+  if (sent.operation === undefined) throw new Error(sent.reason)
+  steps.push(
+    declared(sent.operation, {
+      instanceId: INSTANCE_ID,
+      to: ADVISOR_STEP,
+      comment: SEND_BACK_COMMENT,
+      version: 6,
+    })
+  )
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'find-status',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-claim]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:ana.',
+          },
+        },
+      ],
+    },
+    {
+      // Ana releases the task to the pool: waiting to be opened again.
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-release]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is waiting to be opened.',
+          },
+        },
+      ],
+    },
+    { instance: INSTANCE_ID, actions: [{ click: '[data-claim]' }, { expect: 'Claimed' }] },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { fill: { field: 'to', value: ADVISOR_STEP } },
+        { type: { selector: '[data-send-back-comment]', text: SEND_BACK_COMMENT } },
+        { click: '[data-send-back]' },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },
+      ],
+    },
+    {
+      // Sam reads where his request is: the status line and the tracker, and
+      // no note of the people who act on the advisor step (VT-3, VT-4, I8).
+      instance: INSTANCE_ID,
+      actor: SAM,
+      steps: 0,
+      actions: [
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 2 of 4: advisor is waiting to be opened.',
+          },
+        },
+        { expectSelector: '[data-tracker-step="request"][data-tracker-state="completed"]' },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },
+        { expectSelector: '[data-tracker-step="chair"][data-tracker-state="skipped"]' },
+        { expectText: { selector: '[data-notes-count]', text: '0' } },
+      ],
+    },
+  ],
+})

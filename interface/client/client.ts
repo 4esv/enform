@@ -329,6 +329,21 @@ export interface TimelineEntry {
   readonly comment?: string
   readonly reason?: string
   readonly call?: TimelineCall
+  readonly undone?: boolean
+  readonly undoes?: number
+  readonly alreadySent?: readonly AlreadySentEffect[]
+}
+
+/**
+ * One side effect of an undone event that already occurred (S16, A2): the connector operation
+ * that ran, the connector it ran on, the person it reached when its payload names one, and the
+ * status the timeline shows for it.
+ */
+export interface AlreadySentEffect {
+  readonly operation: string
+  readonly target: string
+  readonly to?: ActorId
+  readonly status: string
 }
 
 /**
@@ -342,6 +357,7 @@ export interface Status {
   readonly currentStep?: string
   readonly holder?: ActorId
   readonly state: string
+  readonly queue?: string
   readonly skipped: readonly Record<string, unknown>[]
 }
 
@@ -376,8 +392,26 @@ export interface InstanceView {
   readonly canWithdraw: boolean
   readonly canCancel: boolean
   readonly canTakeOver: boolean
+  readonly names?: Readonly<Record<string, string>>
+  readonly canRelease: boolean
+  readonly canReassign: boolean
+  readonly undoable?: UndoableAction
   readonly takeoverAvailableAt?: number
   readonly rebound?: Record<string, unknown>
+}
+
+/**
+ * The one action the actor may undo now (S16, WF-5): the newest standing manual action on the
+ * instance, when the actor made it, was the holder a takeover took it from, or owns the flow,
+ * and the instance did not complete the flow's final step. `until` is the end of the flow's
+ * undo period for it, so the page offers Undo before that time.
+ */
+export interface UndoableAction {
+  readonly seq: number
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly until: number
 }
 
 /**
@@ -407,6 +441,9 @@ export interface TrackerStep {
   readonly startAt?: number
   readonly lastActivityAt?: number
   readonly dueAt?: number
+  readonly reminderSentAt?: number
+  readonly escalatedAt?: number
+  readonly queue?: string
 }
 
 /**
@@ -782,6 +819,7 @@ export interface InboxItem {
   readonly holder?: ActorId
   readonly dueAt?: number
   readonly lastActivityAt?: number
+  readonly names?: Readonly<Record<string, string>>
 }
 
 export interface ClientConfig {

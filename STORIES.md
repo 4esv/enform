@@ -105,14 +105,14 @@ This table records where each story was done. Update it in the same pull request
 | S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181, #262 | 640d062 f9e809d f9e5224 | Done |
 | S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts, stories/S07-lose-connection/gui.test.ts, interface/app/local.test.ts | 8d6bb33 | #262 | | Done |
 | S08 | #45, #264, #267 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts, tools/dryrun.test.ts, stories/S08-route/deprovisioned.test.ts, tools/claim-live.test.ts, tools/deprovision.test.ts, server/deprovision.test.ts, integration/deprovision.test.ts | c3d8025 27e0712 0d3e6c4 2c6f69a 4f9251d | #264 | b7a73b7 28f960b | Done |
-| S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts | 8888d67 98e561c |  |  | Engine passes |
-| S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts | d165932 0f1c912 23a561a |  |  | Engine passes |
-| S11 | #48 | stories/S11-send-back/scenario.test.ts, stories/S11-send-back/operators.test.ts | 981b365 07da674 |  |  | Engine passes |
+| S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts, stories/S09-claim-approve/gui.test.ts | 8888d67 98e561c 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
+| S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts, stories/S10-takeover/gui.test.ts | d165932 0f1c912 23a561a 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
+| S11 | #48 | stories/S11-send-back/scenario.test.ts, stories/S11-send-back/operators.test.ts, stories/S11-send-back/gui.test.ts | 981b365 07da674 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
 | S12 | #49, #264 | stories/S12-reminders-escalation/scenario.test.ts, stories/S12-reminders-escalation/operators.test.ts, tools/dryrun.test.ts | e85a55b 94a10c9 | #264 | b7a73b7 28f960b | Done |
-| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts, stories/S13-withdraw-cancel/operators.test.ts | 0194b88 243cf21 |  |  | Engine passes |
-| S14 | #51 | stories/S14-find-status/scenario.test.ts, stories/S14-find-status/operators.test.ts, tools/step-skipped.test.ts | 4cb4d49 f7ca96e faaadba 17cebe9 |  |  | Engine passes |
+| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts, stories/S13-withdraw-cancel/operators.test.ts, stories/S13-withdraw-cancel/gui.test.ts | 0194b88 243cf21 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
+| S14 | #51 | stories/S14-find-status/scenario.test.ts, stories/S14-find-status/operators.test.ts, tools/step-skipped.test.ts, stories/S14-find-status/gui.test.ts | 4cb4d49 f7ca96e faaadba 17cebe9 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
 | S15 | #52 | stories/S15-investigate/scenario.test.ts, stories/S15-investigate/operators.test.ts | 2768a41 0c36f20 |  |  | Engine passes |
-| S16 | #53 | stories/S16-undo/scenario.test.ts, stories/S16-undo/operators.test.ts | 5bf4a30 ec6ab98 9b79685 |  |  | Engine passes |
+| S16 | #53 | stories/S16-undo/scenario.test.ts, stories/S16-undo/operators.test.ts, stories/S16-undo/gui.test.ts | 5bf4a30 ec6ab98 9b79685 7ebabdc 0abfea9 | #269 | db9c85b 7fb6eb8 | Done |
 
 Status values: Not started, Engine in progress, Engine passes, Interface in progress, Done.
 

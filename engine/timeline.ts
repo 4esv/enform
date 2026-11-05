@@ -12,6 +12,7 @@
 
 import type { ActorId, Event, Log } from './operation.js'
 import { STEP_SENT_BACK } from './sendBack.js'
+import { type AlreadySentEffect, EVENT_UNDONE, readAlreadySent, undoneSeqs } from './undo.js'
 
 /** The event type of a recorded connector call (I13, S15). */
 export const CONNECTOR_CALLED = 'connector.called@1'
@@ -65,6 +66,12 @@ export type TimelineEntry = {
   readonly reason?: string
   /** The connector call, when the event records one (I13). */
   readonly call?: TimelineCall
+  /** Whether a compensating event undid this event (S16, D6, #269); the event itself stays (I4). */
+  readonly undone?: boolean
+  /** The `seq` of the event that this compensating event undoes (S16, #269). */
+  readonly undoes?: number
+  /** The side effects of the undone event that already occurred, which the undo did not reverse (S16, A2). */
+  readonly alreadySent?: readonly AlreadySentEffect[]
 }
 
 /** The filter of the change feed (VT-6): by flow slug and by event type. */
@@ -83,7 +90,8 @@ export type TimelineFilter = {
  * deterministic (I6).
  */
 export function timeline(log: Log): readonly TimelineEntry[] {
-  return log.map(entryOf)
+  const undone = undoneSeqs(log)
+  return log.map((event) => entryOf(event, undone))
 }
 
 /**
@@ -97,12 +105,17 @@ export function timelineFor(log: Log, filter: TimelineFilter): readonly Timeline
 }
 
 /** Project one event of the log into one entry of the timeline (VT-5, VT-6, I13). */
-function entryOf(event: Event): TimelineEntry {
+function entryOf(event: Event, undone: ReadonlySet<number>): TimelineEntry {
   const flow = flowOf(event)
   const step = stepOf(event)
   const comment = commentOf(event)
   const reason = reasonOf(event)
   const call = event.type === CONNECTOR_CALLED ? callOf(event) : undefined
+  const undoes =
+    event.type === EVENT_UNDONE && typeof event.payload.eventId === 'number'
+      ? event.payload.eventId
+      : undefined
+  const alreadySent = undoes === undefined ? [] : readAlreadySent(event)
   return {
     seq: event.seq,
     at: event.at,
@@ -113,6 +126,9 @@ function entryOf(event: Event): TimelineEntry {
     ...(comment === undefined ? {} : { comment }),
     ...(reason === undefined ? {} : { reason }),
     ...(call === undefined ? {} : { call }),
+    ...(undone.has(event.seq) ? { undone: true } : {}),
+    ...(undoes === undefined ? {} : { undoes }),
+    ...(alreadySent.length === 0 ? {} : { alreadySent }),
   }
 }
 

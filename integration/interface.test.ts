@@ -267,8 +267,7 @@ test('#226 a person fills, claims, approves and reads the three inbox tabs', asy
   // submit, so it shows the approval step next (ADR 0014, I5).
   await page.goto(taskUrl)
   await page.locator('[data-submit]').waitFor({ timeout: 30_000 })
-  expect(await page.textContent('.instance-status')).toContain('Step 1 of 2')
-  expect(await page.textContent('.instance-status')).toContain('draft')
+  expect(await page.textContent('.instance-status')).toContain('Draft, not submitted yet.')
   await page.click('[data-submit]')
   await page.waitForFunction(() =>
     document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
@@ -670,7 +669,9 @@ test('#232 a requester added as a starter starts and submits a published flow', 
 
     await requesterPage.goto(taskUrl)
     await requesterPage.locator('[data-submit]').waitFor({ timeout: 30_000 })
-    expect(await requesterPage.textContent('.instance-status')).toContain('Step 1 of 2')
+    expect(await requesterPage.textContent('.instance-status')).toContain(
+      'Draft, not submitted yet.'
+    )
     await requesterPage.click('[data-submit]')
     await requesterPage.waitForFunction(() =>
       document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')

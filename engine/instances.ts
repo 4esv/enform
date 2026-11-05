@@ -56,7 +56,16 @@ import { DRAFT_EDITED, INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
-import { EVENT_UNDONE, standingEvents, TASK_REASSIGNED, TASK_RELEASED, undoneSeqs } from './undo.js'
+import {
+  DEFAULT_UNDO_HOURS,
+  EVENT_UNDONE,
+  standingEvents,
+  TASK_REASSIGNED,
+  TASK_RELEASED,
+  type UndoableAction,
+  undoableAction,
+  undoneSeqs,
+} from './undo.js'
 import { DRAFT_REBOUND, type Misfit } from './version.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
@@ -166,6 +175,12 @@ export type InstanceView = {
   /** Who withdrew or cancelled the instance (S13, I14); only this actor may undo it (WF-5). */
   readonly closedBy?: ActorId
   /**
+   * The end of the undo period of the close (WF-5, S13): the close time plus
+   * the flow's `undoHours`, or 24 hours when the flow sets none. The page
+   * offers Undo before that time; the engine refuses after it either way.
+   */
+  readonly undoUntil?: number
+  /**
    * Whether the actor may withdraw the open instance (S13, WF-4, AC-5): only
    * its starter, and only while a task is open. The page uses it to show the
    * control; the engine still authorizes the write (A9, I8).
@@ -184,6 +199,20 @@ export type InstanceView = {
    * still authorizes the write and measures the idle period (A9, I8).
    */
   readonly canTakeOver: boolean
+  /**
+   * Whether the actor may release the current task to the pool (WF-5, AS-2,
+   * #269): the holder, or a flow owner with `task.reassign`. The page uses it
+   * to show the control; the engine still authorizes the write (A9, I8).
+   */
+  readonly canRelease: boolean
+  /** Whether the actor may reassign the current task (WF-5, #269): a flow owner with `task.reassign`. */
+  readonly canReassign: boolean
+  /**
+   * The one action the actor may undo now, with the end of its undo period
+   * (S16, WF-5, #269); absent when there is none. The page offers Undo on it
+   * until that time; the engine still decides the write (A9).
+   */
+  readonly undoable?: UndoableAction
   /**
    * The rebind of an open draft to a newer version (RT-6, S04): the version
    * it left, the version it is on, the values that no longer fit (kept, never
@@ -351,10 +380,64 @@ function viewForStep(
     ...(current.closeReason === undefined ? {} : { closeReason: current.closeReason }),
     ...(current.closedAt === undefined ? {} : { closedAt: current.closedAt }),
     ...(current.closedBy === undefined ? {} : { closedBy: current.closedBy }),
+    ...(current.closedAt === undefined
+      ? {}
+      : {
+          undoUntil:
+            current.closedAt + (context.definition.undoHours ?? DEFAULT_UNDO_HOURS) * 3_600_000,
+        }),
     canWithdraw: canWithdraw(actor, current),
     canCancel: canCancel(current, context),
     ...takeover,
+    canRelease: canRelease(actor, current, context),
+    canReassign: open(current) && isFlowOwner(context),
+    ...undoableView(actor, current, context),
     ...reboundView(current, context.log),
+  }
+}
+
+/** Whether the actor may release the task (WF-5, AS-2, #269): the holder or a flow owner, while someone holds it. */
+function canRelease(actor: ActorId, instance: ProjectedInstance, context: StatusContext): boolean {
+  if (!open(instance) || instance.holder === undefined) return false
+  return instance.holder === actor || isFlowOwner(context)
+}
+
+/** Whether the actor owns the flow (`task.reassign`, MVP.md 5.6). */
+function isFlowOwner(context: StatusContext): boolean {
+  return authorize(context.grants, 'task.reassign', `flow:${context.flow}`)
+}
+
+/** The undoable action of the view (S16, WF-5, #269), when the actor has one. */
+function undoableView(
+  actor: ActorId,
+  instance: ProjectedInstance,
+  context: StatusContext
+): { readonly undoable?: UndoableAction } {
+  const undoable = undoableAction(instance, actor, {
+    flow: context.flow,
+    definition: context.definition,
+    log: context.log,
+    grants: context.grants,
+  })
+  return undoable === undefined ? {} : { undoable }
+}
+
+/**
+ * The activity of a private draft (VT-4, D1, #269): its state, its starter
+ * and the time of its newest event, and never a value. A reader of the flow
+ * who may not read the draft sees this much, so "In progress by Sam, last
+ * active 2 minutes ago" needs no access to the contents. Pure (I6).
+ */
+export function draftActivity(
+  instance: ProjectedInstance,
+  log: Log
+): { readonly state: 'draft'; readonly starter?: ActorId; readonly lastActivityAt?: number } {
+  const own = log.filter((event) => event.payload.instanceId === instance.instanceId)
+  const last = own[own.length - 1]
+  return {
+    state: 'draft',
+    ...(instance.starter === undefined ? {} : { starter: instance.starter }),
+    ...(last === undefined ? {} : { lastActivityAt: last.at }),
   }
 }
 

@@ -93,6 +93,15 @@ const INSTANCE_UNDONE = 'instance.undone@1'
 /** The versioned event type of a takeover (S10, AS-3). */
 const STEP_TAKEN_OVER = 'step.taken-over@1'
 
+/** The versioned event type of a release to the pool (WF-5, AS-2). */
+const TASK_RELEASED = 'task.released@1'
+
+/** The versioned event type of a reassign by a flow owner (WF-5). */
+const TASK_REASSIGNED = 'task.reassigned@1'
+
+/** The versioned event type of the compensating event that undoes an action (S16, D6). */
+const EVENT_UNDONE = 'event.undone@1'
+
 export interface AppOptions {
   /** The element that receives the page. */
   readonly root: HTMLElement
@@ -121,6 +130,12 @@ export interface AppOptions {
   readonly changes?: boolean
   /** The injected clock (I6); absent means Date.now. */
   readonly clock?: () => number
+  /**
+   * The time the page compares and labels with (VT-2, S16), read without
+   * advancing the injected clock; absent means `clock`. gui mode injects the
+   * step's time, so a label never consumes an operation's timestamp (I6).
+   */
+  readonly now?: () => number
   /** The injected operation ID source (I1, I6); absent means crypto.randomUUID. */
   readonly ids?: () => string
   /** The injected instance ID source (DX-1, #187, I6); absent means crypto.randomUUID. */
@@ -137,6 +152,7 @@ type Page = {
 /** Mount the page that the URL names (FM-1, FM-3, FM-4, A9, ADR 0012). */
 export async function mountApp(options: AppOptions): Promise<void> {
   const clock = options.clock ?? (() => Date.now())
+  const now = options.now ?? clock
   const ids = options.ids ?? (() => crypto.randomUUID())
   const instanceIds = options.instanceIds ?? (() => crypto.randomUUID())
   const root = options.root
@@ -928,11 +944,20 @@ export async function mountApp(options: AppOptions): Promise<void> {
       gone.dataset.notReadable = ''
       gone.textContent = `You can no longer read this instance: ${refused?.error ?? ''}`
       main.appendChild(gone)
+      main.dataset.pageReady = ''
       return
+    }
+    // A notification right after an action (S16): what happened and, while
+    // the engine says the actor may undo it, Undo. It posts the compensating
+    // intent with a fixed reason; the timeline keeps Undo with a typed reason
+    // after the notification is gone (WF-5).
+    if (flash !== undefined) {
+      main.appendChild(renderToast(slug, instanceId, flash, view))
     }
     const instanceStatus = document.createElement('p')
     instanceStatus.className = 'instance-status'
-    instanceStatus.textContent = statusLine(view.status)
+    instanceStatus.dataset.statusLine = ''
+    instanceStatus.textContent = statusLine(view)
     main.appendChild(instanceStatus)
     // Who else looks at this instance (RT-2), and the changes that reach it
     // (RT-1): a change made elsewhere re-reads the page once no control of
@@ -962,9 +987,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
     printPdf.rel = 'noopener'
     printPdf.textContent = 'Print / PDF'
     main.appendChild(printPdf)
-    renderTracker(view.tracker, view.status.currentStep)
-    renderNotes(view.notes)
-    await renderTimeline(instanceId)
+    renderTracker(view.tracker, view.status.currentStep, view.names)
+    renderNotes(view.notes, view.names)
+    await renderTimeline(slug, instanceId, view)
+    main.dataset.pageReady = ''
     const stepKey = view.status.currentStep
     // A closed or finished instance has no current step, so it shows the
     // status line and no form (VT-1, FM-3). A closed instance shows the
@@ -1036,6 +1062,14 @@ export async function mountApp(options: AppOptions): Promise<void> {
     // authorizes the one chosen and re-runs the rules (A9). Only the holder
     // may choose one, so the controls wait for the claim.
     if (view.status.holder === actor) {
+      // How many outcomes the read offers the holder (AC-4, S11): the scopes
+      // decide, so a reviewer with only send back counts none.
+      const outcomeCount = document.createElement('span')
+      outcomeCount.className = 'outcome-count'
+      outcomeCount.dataset.outcomeCount = ''
+      outcomeCount.hidden = true
+      outcomeCount.textContent = String(view.allowedOutcomes.length)
+      form.appendChild(outcomeCount)
       for (const outcome of view.allowedOutcomes) {
         const control = document.createElement('button')
         control.type = 'button'
@@ -1050,7 +1084,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
             payload: { instanceId, version: view.version, outcome, values: readValues() },
           }
           void appendOperation(intent)
-            .then(() => renderTask(slug, instanceId, 'Step completed'))
+            .then(() => renderTask(slug, instanceId, outcomeLabel(outcome)))
             .catch(async (error: unknown) => {
               // A stale completion or a refusal that names no field re-reads,
               // so the page shows the state the log now holds (I5, FM-4). A
@@ -1069,8 +1103,46 @@ export async function mountApp(options: AppOptions): Promise<void> {
         form.appendChild(control)
       }
     }
+    // The holder, or a flow owner, returns the task to the pool (WF-5, AS-2,
+    // S14): the step waits to be opened again. The read says who may; the
+    // engine still decides the write (A9).
+    if (view.canRelease) {
+      const releaseControl = document.createElement('button')
+      releaseControl.type = 'button'
+      releaseControl.textContent = 'Release'
+      releaseControl.dataset.release = ''
+      releaseControl.addEventListener('click', () => {
+        const intent: Operation = {
+          id: ids(),
+          type: TASK_RELEASED,
+          at: clock(),
+          actor,
+          payload: { instanceId, version: view.version },
+        }
+        void appendOperation(intent)
+          .then(() => renderTask(slug, instanceId, 'Released'))
+          .catch(async (error: unknown) => {
+            if (
+              error instanceof RequestRefused &&
+              error.status === 409 &&
+              error.errors.length === 0
+            ) {
+              await renderTask(slug, instanceId, error.error)
+              return
+            }
+            showRefusal(status, form, error)
+          })
+      })
+      form.appendChild(releaseControl)
+    }
     form.appendChild(status)
     main.appendChild(form)
+
+    // A flow owner gives the task to a person, with a reason (WF-5, MVP.md
+    // 5.6). The read says who may; the engine authorizes the write (A9).
+    if (view.canReassign) {
+      main.appendChild(renderReassign(slug, instanceId, view))
+    }
 
     // The starter may withdraw the open instance and a principal with
     // `instance.cancel` may cancel it (S13, WF-4, AC-5). The read says which
@@ -1104,7 +1176,8 @@ export async function mountApp(options: AppOptions): Promise<void> {
    */
   const renderTracker = (
     tracker: readonly TrackerStep[],
-    currentStep: string | undefined
+    currentStep: string | undefined,
+    names?: Readonly<Record<string, string>>
   ): void => {
     const list = document.createElement('ol')
     list.className = 'tracker'
@@ -1124,7 +1197,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
       if (step.holder !== undefined) {
         const holder = document.createElement('span')
         holder.className = 'tracker-holder'
-        holder.textContent = `holder ${step.holder}`
+        holder.textContent = `held by ${nameOf(step.holder, names)}`
         item.append(holder)
       }
       if (step.startAt !== undefined) {
@@ -1153,8 +1226,35 @@ export async function mountApp(options: AppOptions): Promise<void> {
         due.dataset.trackerDue = ''
         due.dateTime = new Date(step.dueAt).toISOString()
         due.title = due.dateTime
-        due.textContent = relativeDue(step.dueAt, clock())
+        due.textContent = `Due ${dayLabel(step.dueAt, now())} (${relativeDue(step.dueAt, now())})`
         item.append(due)
+      }
+      // The timers that fired for the step, as the live view of S12: the
+      // worker's record on the log, never a guess from the page clock.
+      if (step.reminderSentAt !== undefined) {
+        const reminder = document.createElement('time')
+        reminder.className = 'tracker-reminder'
+        reminder.dataset.trackerReminder = ''
+        reminder.dateTime = new Date(step.reminderSentAt).toISOString()
+        reminder.title = reminder.dateTime
+        reminder.textContent = `Reminder sent ${dayLabel(step.reminderSentAt, now())}`
+        item.append(reminder)
+      }
+      if (step.escalatedAt !== undefined) {
+        const escalated = document.createElement('time')
+        escalated.className = 'tracker-escalated'
+        escalated.dataset.trackerEscalated = ''
+        escalated.dateTime = new Date(step.escalatedAt).toISOString()
+        escalated.title = escalated.dateTime
+        escalated.textContent = `Escalated ${dayLabel(step.escalatedAt, now())}`
+        item.append(escalated)
+      }
+      if (step.queue !== undefined) {
+        const queue = document.createElement('span')
+        queue.className = 'tracker-queue'
+        queue.dataset.trackerQueue = step.queue
+        queue.textContent = 'Unroutable: nobody can receive this task'
+        item.append(queue)
       }
       if (step.condition !== undefined) {
         const condition = document.createElement('span')
@@ -1179,7 +1279,15 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * send-back comment shows to the target step's people, and the approver
    * never sees a note it may not read.
    */
-  const renderNotes = (notes: readonly Note[]): void => {
+  const renderNotes = (notes: readonly Note[], names?: Readonly<Record<string, string>>): void => {
+    // The count is always on the page (S14, VT-4): the starter reads that
+    // no note of the people who act on the request reaches them (I8).
+    const count = document.createElement('span')
+    count.className = 'notes-count'
+    count.dataset.notesCount = ''
+    count.hidden = true
+    count.textContent = String(notes.length)
+    main.append(count)
     if (notes.length === 0) return
     const heading = document.createElement('h2')
     heading.textContent = 'Notes'
@@ -1197,9 +1305,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
       step.textContent = note.step
       const author = document.createElement('span')
       author.className = 'note-actor'
-      author.textContent = note.actor
+      author.textContent = nameOf(note.actor, names)
       const comment = document.createElement('p')
       comment.className = 'note-comment'
+      comment.dataset.noteComment = ''
       comment.textContent = note.comment
       item.append(step, author, comment)
       list.appendChild(item)
@@ -1307,7 +1416,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
       const closer = document.createElement('p')
       closer.className = 'close-by'
       closer.dataset.closeBy = view.closedBy
-      closer.textContent = `Closed by ${view.closedBy}`
+      closer.textContent = `Closed by ${nameOf(view.closedBy, view.names)}`
       section.appendChild(closer)
     }
     if (view.closeReason !== undefined && view.closeReason !== '') {
@@ -1320,7 +1429,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
 
     const status = document.createElement('p')
     status.className = 'status'
-    if (view.closedBy === actor && view.undoUntil !== undefined && view.undoUntil > clock()) {
+    if (view.closedBy === actor && view.undoUntil !== undefined && view.undoUntil > now()) {
       const undo = document.createElement('button')
       undo.type = 'button'
       undo.textContent = 'Undo'
@@ -1441,8 +1550,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
     heading.textContent = 'Take over'
     section.appendChild(heading)
 
-    const remaining =
-      view.takeoverAvailableAt === undefined ? 0 : view.takeoverAvailableAt - clock()
+    const remaining = view.takeoverAvailableAt === undefined ? 0 : view.takeoverAvailableAt - now()
     const waiting = remaining > 0
     if (waiting) {
       const wait = document.createElement('p')
@@ -1510,13 +1618,25 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * 403 shows the server's reason and leaves the instance events in place.
    * The timeline is read-only; the task controls stay below it.
    */
-  const renderTimeline = async (instanceId: string): Promise<void> => {
+  const renderTimeline = async (
+    slug: string,
+    instanceId: string,
+    view?: InstanceView
+  ): Promise<void> => {
     const section = document.createElement('section')
     section.className = 'timeline-section'
     section.dataset.timelineSection = ''
     const heading = document.createElement('h2')
     heading.textContent = 'Timeline'
     section.appendChild(heading)
+    // How many entries offer Undo (S16): the one action the read names, while
+    // its period is open, else none.
+    const undoCount = document.createElement('span')
+    undoCount.className = 'undo-count'
+    undoCount.dataset.undoCount = ''
+    undoCount.hidden = true
+    undoCount.textContent = '0'
+    section.appendChild(undoCount)
 
     const toggleLabel = document.createElement('label')
     toggleLabel.className = 'timeline-toggle'
@@ -1541,7 +1661,18 @@ export async function mountApp(options: AppOptions): Promise<void> {
           includeChanges ? '1' : undefined,
           actor
         )
-        list.replaceChildren(renderTimelineList(entries))
+        const undoable =
+          view?.undoable !== undefined && view.undoable.until > now() ? view.undoable : undefined
+        list.replaceChildren(
+          renderTimelineList(entries, view?.names, (entry) =>
+            undoable !== undefined && entry.seq === undoable.seq
+              ? renderUndo(slug, instanceId, view as InstanceView, entry.seq)
+              : undefined
+          )
+        )
+        undoCount.textContent = String(
+          undoable !== undefined && entries.some((entry) => entry.seq === undoable.seq) ? 1 : 0
+        )
       } catch (error: unknown) {
         status.textContent = reasonOf(error)
       }
@@ -1550,6 +1681,173 @@ export async function mountApp(options: AppOptions): Promise<void> {
       void load(toggle.checked)
     })
     await load(false)
+  }
+
+  /**
+   * The Undo of one timeline entry (S16, WF-5): a reason and a control. It
+   * posts the compensating intent for the event the read named as undoable
+   * and re-reads; the engine decides (A9), and a refusal shows its reason.
+   */
+  const renderUndo = (
+    slug: string,
+    instanceId: string,
+    view: InstanceView,
+    eventId: number
+  ): HTMLElement => {
+    const form = document.createElement('form')
+    form.className = 'undo-form'
+    form.dataset.undoForm = String(eventId)
+    const reasonLabel = document.createElement('label')
+    reasonLabel.textContent = 'Reason for the undo'
+    const reason = document.createElement('textarea')
+    reason.name = 'undo-reason'
+    reason.required = true
+    reason.dataset.undoReason = ''
+    reasonLabel.appendChild(reason)
+    const control = document.createElement('button')
+    control.type = 'button'
+    control.textContent = 'Undo'
+    control.dataset.undoAction = ''
+    const status = document.createElement('p')
+    status.className = 'status'
+    form.append(reasonLabel, control, status)
+    control.addEventListener('click', () => {
+      const why = reason.value.trim()
+      if (why === '') {
+        status.textContent = 'An undo needs a reason.'
+        return
+      }
+      void postUndo(slug, instanceId, view, eventId, why, status)
+    })
+    return form
+  }
+
+  /** Post the compensating intent of one event (S16, D6) and re-read; a refusal shows its reason. */
+  const postUndo = async (
+    slug: string,
+    instanceId: string,
+    view: InstanceView,
+    eventId: number,
+    reason: string,
+    status: HTMLElement
+  ): Promise<void> => {
+    const intent: Operation = {
+      id: ids(),
+      type: EVENT_UNDONE,
+      at: clock(),
+      actor,
+      payload: { instanceId, eventId, reason, version: view.version },
+    }
+    try {
+      await appendOperation(intent)
+      await renderTask(slug, instanceId, 'Undone')
+    } catch (error: unknown) {
+      if (error instanceof RequestRefused && error.status === 409 && error.errors.length === 0) {
+        await renderTask(slug, instanceId, error.error)
+        return
+      }
+      status.textContent = reasonOf(error)
+    }
+  }
+
+  /**
+   * The notification after an action (S16): what happened and Undo, while
+   * the read says the actor may undo the action it just made. A close shows
+   * no Undo here: the close state carries its own (S13).
+   */
+  const renderToast = (
+    slug: string,
+    instanceId: string,
+    flash: string,
+    view: InstanceView
+  ): HTMLElement => {
+    const toast = document.createElement('p')
+    toast.className = 'toast'
+    toast.dataset.toast = ''
+    toast.setAttribute('role', 'status')
+    const undoable = view.undoable
+    const offersUndo = undoable !== undefined && undoable.actor === actor && undoable.until > now()
+    toast.append(`${flash}.`)
+    if (offersUndo) {
+      const undo = document.createElement('button')
+      undo.type = 'button'
+      undo.textContent = 'Undo.'
+      undo.dataset.toastUndo = ''
+      undo.addEventListener('click', () => {
+        const status = document.createElement('span')
+        toast.appendChild(status)
+        void postUndo(slug, instanceId, view, undoable.seq, TOAST_UNDO_REASON, status)
+      })
+      toast.append(' ', undo)
+    }
+    return toast
+  }
+
+  /**
+   * The reassign form of a flow owner (WF-5, MVP.md 5.6): the principal that
+   * gets the task and a required reason. It posts the intent and re-reads;
+   * the engine authorizes and tells the new holder (A9, SE-2).
+   */
+  const renderReassign = (slug: string, instanceId: string, view: InstanceView): HTMLElement => {
+    const section = document.createElement('section')
+    section.className = 'reassign'
+    section.dataset.reassignSection = ''
+    const heading = document.createElement('h2')
+    heading.textContent = 'Reassign'
+    section.appendChild(heading)
+    const form = document.createElement('form')
+    const toLabel = document.createElement('label')
+    toLabel.textContent = 'To (a principal id, such as user:ana)'
+    const to = document.createElement('input')
+    to.type = 'text'
+    to.name = 'reassign-to'
+    to.required = true
+    to.dataset.reassignTo = ''
+    toLabel.appendChild(to)
+    const reasonLabel = document.createElement('label')
+    reasonLabel.textContent = 'Reason (required)'
+    const reason = document.createElement('textarea')
+    reason.name = 'reassign-reason'
+    reason.required = true
+    reason.dataset.reassignReason = ''
+    reasonLabel.appendChild(reason)
+    const submit = document.createElement('button')
+    submit.type = 'submit'
+    submit.textContent = 'Reassign'
+    submit.dataset.reassign = ''
+    const status = document.createElement('p')
+    status.className = 'status'
+    form.append(toLabel, reasonLabel, submit, status)
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const intent: Operation = {
+        id: ids(),
+        type: TASK_REASSIGNED,
+        at: clock(),
+        actor,
+        payload: {
+          instanceId,
+          version: view.version,
+          to: to.value.trim(),
+          reason: reason.value.trim(),
+        },
+      }
+      void appendOperation(intent)
+        .then(() => renderTask(slug, instanceId, `Reassigned to ${to.value.trim()}`))
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof RequestRefused &&
+            error.status === 409 &&
+            error.errors.length === 0
+          ) {
+            await renderTask(slug, instanceId, error.error)
+            return
+          }
+          showRefusal(status, form, error)
+        })
+    })
+    section.appendChild(form)
+    return section
   }
 
   /**
@@ -1617,7 +1915,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * operation, time and outcome (I13). The list is a projection; it decides
    * nothing.
    */
-  const renderTimelineList = (entries: readonly TimelineEntry[]): HTMLElement => {
+  const renderTimelineList = (
+    entries: readonly TimelineEntry[],
+    names?: Readonly<Record<string, string>>,
+    control?: (entry: TimelineEntry) => HTMLElement | undefined
+  ): HTMLElement => {
     if (entries.length === 0) {
       const empty = document.createElement('p')
       empty.className = 'empty'
@@ -1633,19 +1935,46 @@ export async function mountApp(options: AppOptions): Promise<void> {
       item.className = 'timeline-entry'
       item.dataset.timelineSeq = String(entry.seq)
       item.dataset.timelineType = entry.type
+      // An undone event stays in the log and the timeline shows it as such
+      // (S16, D6, I4); the compensating entry names what it undid.
+      if (entry.undone === true) item.dataset.timelineUndone = ''
       const type = document.createElement('span')
       type.className = 'timeline-type'
-      type.textContent = timelineLabel(entry.type)
+      type.textContent =
+        entry.undone === true ? `${timelineLabel(entry.type)} (undone)` : timelineLabel(entry.type)
       const at = document.createElement('time')
       at.className = 'timeline-at'
       at.dateTime = new Date(entry.at).toISOString()
-      at.textContent = at.dateTime
+      at.title = at.dateTime
+      at.textContent = dayLabel(entry.at, now())
       item.append(type, at)
       if (entry.actor !== undefined) {
         const actor = document.createElement('span')
         actor.className = 'timeline-actor'
-        actor.textContent = entry.actor
+        actor.textContent = nameOf(entry.actor, names)
         item.append(actor)
+      }
+      if (entry.undoes !== undefined) {
+        const undoes = document.createElement('span')
+        undoes.className = 'timeline-undoes'
+        undoes.dataset.timelineUndoes = String(entry.undoes)
+        undoes.textContent = `undid event ${entry.undoes}`
+        item.append(undoes)
+      }
+      // A side effect that already occurred is not reversed (A2): the
+      // timeline marks it "Already sent" with the person it reached.
+      for (const effect of entry.alreadySent ?? []) {
+        const sent = document.createElement('span')
+        sent.className = 'timeline-already-sent'
+        sent.dataset.alreadySent = effect.operation
+        sent.textContent = effect.status
+        const detail = document.createElement('span')
+        detail.className = 'timeline-already-sent-detail'
+        detail.textContent =
+          effect.to === undefined
+            ? ` ${effect.operation}`
+            : ` ${effect.operation} to ${nameOf(effect.to, names)}`
+        item.append(sent, detail)
       }
       if (entry.step !== undefined) {
         const step = document.createElement('span')
@@ -1665,6 +1994,8 @@ export async function mountApp(options: AppOptions): Promise<void> {
         call.textContent = `${entry.call.operation} ${entry.call.outcome} at ${new Date(entry.call.time).toISOString()}`
         item.append(call)
       }
+      const extra = control?.(entry)
+      if (extra !== undefined) item.append(extra)
       list.append(item)
     }
     return list
@@ -1724,7 +2055,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
       if (item.holder !== undefined) {
         const holder = document.createElement('span')
         holder.className = 'holder'
-        holder.textContent = item.holder
+        holder.textContent = `held by ${nameOf(item.holder, item.names)}`
         link.appendChild(holder)
       }
       if (item.dueAt !== undefined) {
@@ -1733,7 +2064,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
         due.dataset.inboxDue = ''
         due.dateTime = new Date(item.dueAt).toISOString()
         due.title = due.dateTime
-        due.textContent = relativeDue(item.dueAt, clock())
+        due.textContent = relativeDue(item.dueAt, now())
         link.appendChild(due)
       }
       if (item.lastActivityAt !== undefined) {
@@ -2265,9 +2596,68 @@ function showCreatedUser(host: HTMLElement, user: CreatedUser): void {
 }
 
 /** The status line of an instance (VT-1, VT-2, S14): position, state and holder. */
-function statusLine(status: InstanceView['status']): string {
-  const holder = status.holder === undefined ? '' : `, holder ${status.holder}`
-  return `Step ${status.step} of ${status.totalSteps}: ${status.state}${holder}`
+/**
+ * The status line of an instance in plain language (VT-3, S14, #269): where
+ * the request is, whether the step waits to be opened or is in progress and
+ * by whom, a close with its reason, or done. The engine's status decides;
+ * the page only phrases it, with the display name when the read carries one.
+ */
+function statusLine(view: InstanceView): string {
+  const { status } = view
+  const total = status.totalSteps
+  const position = `Step ${status.step} of ${total}`
+  if (status.state === 'draft') return 'Draft, not submitted yet.'
+  if (status.state === 'done') return `Done: all ${total} steps completed.`
+  if (status.state === 'withdrawn' || status.state === 'cancelled') {
+    const who = view.closedBy === undefined ? '' : ` by ${nameOf(view.closedBy, view.names)}`
+    const label = status.state === 'withdrawn' ? 'Withdrawn' : 'Cancelled'
+    const reason =
+      view.closeReason === undefined || view.closeReason === '' ? '' : `: ${view.closeReason}`
+    return `${label}${who}${reason}`
+  }
+  const step = status.currentStep ?? 'the next step'
+  if (status.queue !== undefined) {
+    return `${position}: ${step} is unroutable, waiting in the Unroutable queue.`
+  }
+  if (status.holder === undefined) return `${position}: ${step} is waiting to be opened.`
+  return `${position}: ${step} is opened, in progress by ${nameOf(status.holder, view.names)}.`
+}
+
+/** The display name of a principal when the read carries one (ID-4, VT-3), else its id. */
+function nameOf(id: string, names?: Readonly<Record<string, string>>): string {
+  return names?.[id] ?? id
+}
+
+/** The reason the notification's Undo records (S16, WF-5). */
+const TOAST_UNDO_REASON = 'Undone from the notification'
+
+/** What the notification says for one outcome (S16): "Approved", "Rejected", "Sent back", or the outcome. */
+function outcomeLabel(outcome: string): string {
+  if (outcome === 'approve') return 'Approved'
+  if (outcome === 'reject') return 'Rejected'
+  if (outcome === 'send_back') return 'Sent back'
+  return `Completed: ${outcome}`
+}
+
+/**
+ * A time as a day in plain words (VT-2, S12): "today", "tomorrow", the
+ * weekday within a week, else the date. The absolute time stays in the
+ * element's `datetime` and tooltip.
+ */
+function dayLabel(at: number, now: number): string {
+  const day = 86_400_000
+  const startOf = (time: number): number => {
+    const date = new Date(time)
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  }
+  const days = Math.round((startOf(at) - startOf(now)) / day)
+  if (days === 0) return 'today'
+  if (days === 1) return 'tomorrow'
+  if (days === -1) return 'yesterday'
+  const weekday = new Date(at).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
+  if (days > 1 && days < 7) return weekday
+  if (days < -1 && days > -7) return `last ${weekday}`
+  return new Date(at).toISOString().slice(0, 10)
 }
 
 /** The plain-language label of one tracker state (VT-2, S14). */

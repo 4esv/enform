@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { publishedByHash, publishedFlow } from '../../engine/flow.js'
-import { grantsOf } from '../../engine/grants.js'
 import { instanceOf, readInstance } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
@@ -217,7 +216,10 @@ function serveInstanceRead(
       flow: published.slug,
       definition: published.definition,
       log: state.log,
-      grants: options.grants ?? grantsOf(state.log),
+      // The grants that apply to the actor (I8): the injected set, else the
+      // bootstrap and the log through the directory, as a POST resolves them.
+      grants:
+        options.grants ?? grantsApplying(state.log, actor, options.bootstrap, options.membership),
     },
     options.resolve
   )
@@ -260,7 +262,8 @@ function serveInstanceTimeline(
     json(res, 404, { error: 'not found' })
     return
   }
-  const grants = options.grants ?? grantsOf(state.log)
+  const grants =
+    options.grants ?? grantsApplying(state.log, actor, options.bootstrap, options.membership)
   if (
     !mayRead(actor, instance, {
       flow: instance.flow,
@@ -296,7 +299,8 @@ function serveTimeline(res: ServerResponse, url: string, state: State, options: 
   }
   const flow = parsed.searchParams.get('flow') ?? undefined
   const type = parsed.searchParams.get('type') ?? undefined
-  const grants = options.grants ?? grantsOf(state.log)
+  const grants =
+    options.grants ?? grantsApplying(state.log, actor, options.bootstrap, options.membership)
   const allowed = authorize(grants, 'org.grants', 'org')
   if (!allowed && flow === undefined) {
     json(res, 403, { error: 'the change feed needs instance.timeline or org.grants' })

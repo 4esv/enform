@@ -448,7 +448,9 @@ test('#242 S10 Lee takes over Ana’s registrar task after the idle period, is r
   await anaPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
   await anaPage.click('[data-claim]')
   await anaPage.locator('[data-outcome="approve"]').waitFor({ timeout: 30_000 })
-  expect(await anaPage.textContent('.instance-status')).toContain(`holder ${ana.id}`)
+  // The status line names the holder in plain language (VT-3): the display
+  // name when the read carries one, else the id.
+  expect(await anaPage.textContent('.instance-status')).toMatch(/is opened, in progress by /)
   const held = await readInstance(anaToken, registrar.id)
   expect(held.status.holder).toBe(ana.id)
   expect(held.canTakeOver, 'the holder cannot take the task over from itself').toBe(false)
@@ -527,11 +529,16 @@ test('#242 S10 Lee takes over Ana’s registrar task after the idle period, is r
   const ready = leePage.locator('[data-takeover]')
   expect(await ready.isDisabled(), 'the idle period has passed').toBe(false)
   await leePage.fill('[data-takeover-reason]', REASON)
+  const statusBefore = await leePage.textContent('.instance-status')
   await ready.click()
   await leePage.locator('.status', { hasText: 'Taken over:' }).waitFor({ timeout: 30_000 })
+  // The status line now names Lee as the holder, in plain language (VT-3).
   await leePage.waitForFunction(
-    (holder) => document.querySelector('.instance-status')?.textContent?.includes(holder),
-    lee.id,
+    (before) => {
+      const text = document.querySelector('.instance-status')?.textContent ?? ''
+      return text !== before && text.includes('in progress by ')
+    },
+    statusBefore,
     { timeout: 30_000 }
   )
   expect(await leePage.textContent('.status')).toContain(REASON)

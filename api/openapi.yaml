@@ -2128,6 +2128,44 @@ components:
             deprovisioned (ID-5, #267).
         call:
           $ref: '#/components/schemas/TimelineCall'
+        undone:
+          type: boolean
+          description: >-
+            Whether a compensating event undid this event (S16, D6). The event
+            itself stays in the log (I4); the timeline shows it as undone.
+        undoes:
+          type: integer
+          description: >-
+            On a compensating `event.undone@1` entry, the `seq` of the event
+            it undoes (S16).
+        alreadySent:
+          type: array
+          description: >-
+            On a compensating entry, the side effects of the undone event that
+            already occurred and the undo did not reverse (S16, A2). Absent
+            when nothing had gone out.
+          items:
+            $ref: '#/components/schemas/AlreadySentEffect'
+    AlreadySentEffect:
+      type: object
+      description: >-
+        One side effect of an undone event that already occurred (S16, A2):
+        the connector operation that ran, the connector it ran on, the person
+        it reached when its payload names one, and the status the timeline
+        shows for it.
+      required: [operation, target, status]
+      properties:
+        operation:
+          type: string
+          description: The connector operation that already ran (I13).
+        target:
+          type: string
+          description: The connector or resource that ran it (SE-1).
+        to:
+          $ref: '#/components/schemas/ActorId'
+        status:
+          type: string
+          description: The status the undo gives it; always "Already sent".
     Status:
       type: object
       description: >-
@@ -2158,6 +2196,11 @@ components:
             The state in plain language (VT-2, S14). A draft is an instance
             its starter has not submitted (ADR 0014).
           enum: [draft, waiting, in-progress, done, withdrawn, cancelled]
+        queue:
+          type: string
+          description: >-
+            The Unroutable queue the current task waits in (I10, AS-5), when
+            its targets resolved to nobody; absent otherwise.
         skipped:
           type: array
           description: >-
@@ -2204,6 +2247,8 @@ components:
         - canWithdraw
         - canCancel
         - canTakeOver
+        - canRelease
+        - canReassign
       properties:
         instanceId:
           type: string
@@ -2354,6 +2399,30 @@ components:
             and another principal holds the task. The page uses it to show the
             control; the engine still authorizes the write and measures the
             idle period (A9, I8).
+        names:
+          type: object
+          description: >-
+            The display names of the principals the view names (VT-3, ID-4),
+            keyed by principal id, so the page says "held by Ana" and not an
+            id. The server fills it from its directory cache; a name never
+            identifies anyone, the id does.
+          additionalProperties:
+            type: string
+        canRelease:
+          type: boolean
+          description: >-
+            Whether the actor may release the current task to the pool (WF-5,
+            AS-2): the holder, or a flow owner with `task.reassign` on the
+            flow, while someone holds the task. The page uses it to show the
+            control; the engine still authorizes the write (A9, I8).
+        canReassign:
+          type: boolean
+          description: >-
+            Whether the actor may reassign the current task to a principal
+            (WF-5): a flow owner with `task.reassign` on the flow, while a
+            task is open. The engine still authorizes the write (A9, I8).
+        undoable:
+          $ref: '#/components/schemas/UndoableAction'
         takeoverAvailableAt:
           type: integer
           description: >-
@@ -2392,6 +2461,33 @@ components:
               type: array
               items:
                 type: string
+    UndoableAction:
+      type: object
+      description: >-
+        The one action the actor may undo now (S16, WF-5): the newest
+        standing manual action on the instance, when the actor made it, was
+        the holder a takeover took it from, or owns the flow, and the
+        instance did not complete the flow's final step. `until` is the end
+        of the flow's undo period for it, so the page offers Undo before
+        that time.
+      required: [seq, type, at, actor, until]
+      properties:
+        seq:
+          type: integer
+          description: The position of the undoable event in the log (I4).
+        type:
+          type: string
+          description: The versioned event type of the action.
+        at:
+          type: integer
+          description: When the action happened, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        until:
+          type: integer
+          description: >-
+            The end of the undo period: the action's time plus the flow's
+            `undoHours`, or 24 hours when the flow sets none (WF-5).
     Note:
       type: object
       description: >-
@@ -2459,6 +2555,23 @@ components:
             due time of the step (VT-2, SE-4), the time the instance entered
             the step plus the step's deadline. It is absent when the step sets
             no deadline or the instance never entered it.
+        reminderSentAt:
+          type: integer
+          description: >-
+            Milliseconds since the epoch: when the newest reminder for the
+            step fired since the instance entered it (S12, SE-3, VT-2), from
+            the worker's `timer.fired@1` event. Absent until one fired.
+        escalatedAt:
+          type: integer
+          description: >-
+            Milliseconds since the epoch: when the escalation of the step
+            fired (S12, SE-4, VT-2). Absent until it did.
+        queue:
+          type: string
+          description: >-
+            The Unroutable queue of the current unopened step (I10, AS-5):
+            its targets resolved to nobody. Absent when the task resolved to
+            a person.
     InstanceField:
       type: object
       description: >-
@@ -3252,3 +3365,10 @@ components:
             Milliseconds since the epoch, from the injected clock (I6): the
             time of the newest event on this instance, so a task that is
             opened shows how long it sits with its holder (VT-2, S14).
+        names:
+          type: object
+          description: >-
+            The display names of the principals the item names (VT-3, ID-4),
+            keyed by principal id.
+          additionalProperties:
+            type: string

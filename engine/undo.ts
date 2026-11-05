@@ -48,6 +48,12 @@ const ALREADY_SENT_KEY = 'alreadySent'
 /** The reserved payload key that carries the people that the undo notified (S16). */
 const NOTIFIED_KEY = 'notified'
 
+/** The undo period of a flow in hours when its definition sets none (WF-5, S13, S16). */
+export const DEFAULT_UNDO_HOURS = 24
+
+/** One hour in milliseconds, for the undo period (WF-5). */
+const HOUR_MS = 3_600_000
+
 /**
  * The final point of a flow (S16, WF-5). A later flow setting states where a
  * flow becomes final, so the engine takes it as an injected predicate, as S10
@@ -219,6 +225,68 @@ export function undoneSeqs(log: Log): ReadonlySet<number> {
 export function standingEvents(log: Log): readonly Event[] {
   const undone = undoneSeqs(log)
   return log.filter((event) => !undone.has(event.seq))
+}
+
+/**
+ * The one action on an instance that an actor may undo now (#269, S16, WF-5):
+ * the newest standing manual action, when the actor made it, was the holder a
+ * takeover took it from, or owns the flow, and the instance did not complete
+ * the flow's final step. `until` is the end of the flow's undo period for it,
+ * so a page compares it with its own clock and the engine reads none (I6).
+ */
+export type UndoableAction = {
+  readonly seq: number
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly until: number
+}
+
+/** What the read needs to name the undoable action (#269): the flow, its definition, the log and the actor's grants. */
+export type UndoableContext = {
+  readonly flow: string
+  readonly definition: FlowDefinition
+  readonly log: Log
+  readonly grants: readonly Grant[]
+}
+
+/**
+ * The action the actor may undo now, if any (#269, S16, WF-5). It applies the
+ * rules of `undoAction` that read no clock: the newest standing manual action
+ * of the instance, who may undo it, and the final step. The undo period is
+ * answered as `until`, so the page shows the control before that time and the
+ * engine refuses after it either way (A9). Pure and deterministic (I6).
+ */
+export function undoableAction(
+  instance: Instance,
+  actor: ActorId,
+  context: UndoableContext
+): UndoableAction | undefined {
+  const own = context.log.filter((event) => event.payload.instanceId === instance.instanceId)
+  const undone = undoneSeqs(own)
+  const standing = own.filter(
+    (candidate) => UNDOABLE_TYPES.includes(candidate.type) && !undone.has(candidate.seq)
+  )
+  const latest = standing[standing.length - 1]
+  if (latest === undefined) return undefined
+  const final = context.definition.finalStep
+  if (
+    final !== undefined &&
+    standing.some((candidate) => candidate.type === COMPLETED && candidate.payload.step === final)
+  ) {
+    return undefined
+  }
+  const owner = authorize(context.grants, 'task.reassign', `flow:${context.flow}`)
+  const takenFrom = latest.type === TAKEN_OVER && latest.payload.from === actor
+  if (latest.actor !== actor && !owner && !takenFrom) return undefined
+  const hours = context.definition.undoHours ?? DEFAULT_UNDO_HOURS
+  return {
+    seq: latest.seq,
+    type: latest.type,
+    at: latest.at,
+    actor: latest.actor ?? '',
+    until: latest.at + hours * HOUR_MS,
+  }
 }
 
 /** What an undo of an action needs beside the instance and the event (#256, S16, WF-5). */
@@ -417,7 +485,11 @@ function notification(to: ActorId, eventId: number, actor: ActorId, reason: stri
 }
 
 /** Read the side effects that one compensating event marks as already sent (S16, A2). */
-function readAlreadySent(event: Event): readonly AlreadySentEffect[] {
+/**
+ * The side effects that one compensating event marks "Already sent" (S16, A2),
+ * read from the event alone (I4); an event that is no undo marks nothing.
+ */
+export function readAlreadySent(event: Event): readonly AlreadySentEffect[] {
   const value = event.payload[ALREADY_SENT_KEY]
   if (value === undefined) return []
   if (!Array.isArray(value)) {

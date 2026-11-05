@@ -83,6 +83,15 @@ function typeOf(schema) {
     case 'array':
       return `readonly ${typeOf(schema.items)}[]`
     default:
+      // A map with typed values (#269): `additionalProperties` names the
+      // value schema, so a page reads the values without a cast.
+      if (
+        schema.type === 'object' &&
+        typeof schema.additionalProperties === 'object' &&
+        schema.additionalProperties !== null
+      ) {
+        return `Readonly<Record<string, ${typeOf(schema.additionalProperties)}>>`
+      }
       return 'Record<string, unknown>'
   }
 }

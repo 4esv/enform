@@ -59,6 +59,8 @@ function view(): InstanceView {
     notes: [],
     canWithdraw: false,
     canCancel: false,
+    canRelease: false,
+    canReassign: false,
     canTakeOver: false,
   }
 }

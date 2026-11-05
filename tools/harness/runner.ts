@@ -235,12 +235,18 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
         if (message.type() === 'error') errors.push(message.text())
       })
       try {
-        await page.addInitScript(guiSources(scenario.steps[first], first, clock))
-        await page.goto(guiUrl(api.port(), flowSlug, scenario.steps[first].actor, gui[i]))
-        // The app loads the flow and renders the form asynchronously; wait for
-        // the submit control before the step's actions touch the fields.
-        await page.waitForSelector('form button[type="button"]', { timeout: 5000 })
+        // A gui step that only reads sits after the last engine step it could
+        // cover (#269): its sources are the last step's, and it posts nothing.
+        const covering = scenario.steps[Math.min(first, scenario.steps.length - 1)]
+        await page.addInitScript(guiSources(covering, first, clock))
+        await page.goto(guiUrl(api.port(), flowSlug, gui[i].actor ?? covering.actor, gui[i]))
         try {
+          // The app loads the flow and renders the page asynchronously; wait
+          // for a control before the step's actions touch the fields. A page
+          // that never renders reports the browser's errors with the failure.
+          await page.waitForSelector('button[type="button"], [data-page-ready]', {
+            timeout: 5000,
+          })
           await performGuiActions(page, context, api, seedLength, gui[i].actions)
           await waitForEvent(api, seedLength + first + covered)
         } catch (error) {
@@ -345,6 +351,9 @@ function guiSources(step: Step, index: number, clock: StepClock): string {
     const clocks = ${clocks}
     return {
       clock: () => clocks[Math.min(bump('__enformClock', -1), clocks.length - 1)],
+      // The step's time without advancing the clock: what the page labels
+      // and compares with, so a read never consumes an operation's time (I6).
+      now: () => clocks[Math.min(read('__enformClock', -1) + 1, clocks.length - 1)],
       ids: () => 'op-' + bump('__enformIds', ${index})${instanceIds}
     }
   })()`
@@ -406,9 +415,11 @@ async function performGuiActions(
       if (!action.offline) await page.evaluate(() => window.dispatchEvent(new Event('online')))
     } else if ('reload' in action) {
       await page.reload()
-      await page.waitForSelector('form button[type="button"]', { timeout: 5000 })
+      await page.waitForSelector('button[type="button"], [data-page-ready]', { timeout: 5000 })
     } else if ('expectEvents' in action) {
       await waitForEvent(api, seedLength + action.expectEvents)
+    } else if ('type' in action) {
+      await page.locator(action.type.selector).first().fill(action.type.text)
     } else {
       await page.waitForFunction(
         (expected) => {
