@@ -286,7 +286,10 @@ test('#238 S13 Sam withdraws and undoes, Priya cancels and undoes, and the log k
   // close marker is gone, and the inbox shows the instance again (WF-5, I4).
   await samPage.click('[data-undo]')
   await samPage.waitForFunction(
-    () => document.querySelector('.instance-status')?.textContent?.includes('Step 1 of 4'),
+    () =>
+      document
+        .querySelector('.instance-status')
+        ?.textContent?.includes('Draft, not submitted yet.'),
     undefined,
     { timeout: 30_000 }
   )

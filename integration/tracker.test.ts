@@ -471,7 +471,9 @@ test('#250 VT-2 the tracker and the inbox show the relative due label in Chromiu
     )
     const trackerDue = page.locator('[data-tracker-step="registrar"] [data-tracker-due]')
     await trackerDue.waitFor({ timeout: 30_000 })
-    expect(await trackerDue.textContent()).toMatch(/^(due in|overdue by) /)
+    // The tracker says the day in plain words and keeps the relative label
+    // in parentheses (VT-2): "Due today (due in 2 minutes)".
+    expect(await trackerDue.textContent()).toMatch(/^Due .*\((due in|overdue by) /)
     const trackerAbsolute = await trackerDue.getAttribute('datetime')
     expect(trackerAbsolute, 'the absolute time stays on the datetime attribute').toMatch(
       /^\d{4}-\d{2}-\d{2}T/
