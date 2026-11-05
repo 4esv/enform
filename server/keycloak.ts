@@ -27,6 +27,64 @@ export type CreateDirectoryUserInput = {
 /** The user attribute that names a person's manager (AS-1, #267): `manager-of:starter` resolves to it. */
 export const MANAGER_ATTRIBUTE = 'manager'
 
+/** The realms whose user profile declares the manager attribute, so the declaration runs once per process. */
+const declaredManagerAttribute = new Map<string, Promise<void>>()
+
+/**
+ * Declare the manager attribute in the realm's user profile (AS-1, #267).
+ * Keycloak 24 and later keep only the attributes the user profile declares,
+ * so a `manager` set on a user without this declaration is dropped in
+ * silence. The declaration is idempotent: a realm that already declares the
+ * attribute is left as it is, and a declaration that fails is retried on the
+ * next call.
+ */
+export function ensureManagerAttribute(config: Config): Promise<void> {
+  const key = `${baseUrl(config)}|${config.keycloak.realm}`
+  const pending = declaredManagerAttribute.get(key)
+  if (pending !== undefined) return pending
+  const declaring = declareManagerAttribute(config).catch((error: unknown) => {
+    declaredManagerAttribute.delete(key)
+    throw error
+  })
+  declaredManagerAttribute.set(key, declaring)
+  return declaring
+}
+
+/** Read the realm's user profile and add the manager attribute when it is missing. */
+async function declareManagerAttribute(config: Config): Promise<void> {
+  const token = await adminToken(config)
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  const read = await fetch(`${adminBase(config)}/users/profile`, { headers })
+  const body = await read.text()
+  if (!read.ok) {
+    throw new Error(`keycloak: reading the user profile failed: ${read.status} ${body}`)
+  }
+  const profile = JSON.parse(body) as { attributes?: { name?: string }[] }
+  const attributes = profile.attributes ?? []
+  if (attributes.some((attribute) => attribute.name === MANAGER_ATTRIBUTE)) return
+  const written = await fetch(`${adminBase(config)}/users/profile`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      ...profile,
+      attributes: [
+        ...attributes,
+        {
+          name: MANAGER_ATTRIBUTE,
+          displayName: 'Manager',
+          multivalued: false,
+          permissions: { view: ['admin', 'user'], edit: ['admin'] },
+        },
+      ],
+    }),
+  })
+  if (!written.ok) {
+    throw new Error(
+      `keycloak: declaring the manager attribute failed: ${written.status} ${await written.text()}`
+    )
+  }
+}
+
 /** The immutable id of a created user and its one-time password (ID-6). */
 export type CreatedDirectoryUser = {
   readonly id: string
@@ -285,6 +343,7 @@ export async function createDirectoryUser(
   if ((await findUser(config, token, input.email)) !== undefined) {
     throw new DirectoryUserExistsError(input.email)
   }
+  if (input.managerId !== undefined && input.managerId !== '') await ensureManagerAttribute(config)
   const temporaryPassword = temporaryPasswordOf()
   const name = nameParts(input.displayName)
   const id = await createUser(config, token, {
@@ -319,17 +378,29 @@ export async function deleteDirectoryUser(config: Config, id: string): Promise<v
   }
 }
 
-/** Every user of the configured realm, for the administrator surface (ID-6). */
+/** How many users one page of the directory listing reads (ID-6). */
+const USERS_PAGE = 500
+
+/**
+ * Every user of the configured realm, for the administrator surface (ID-6).
+ * The listing reads page after page until a page comes back short, so a
+ * realm with more users than one page holds lists every one of them (#267).
+ */
 export async function listDirectoryUsers(config: Config): Promise<readonly DirectoryUser[]> {
   const token = await adminToken(config)
-  const response = await fetch(`${adminBase(config)}/users?max=1000&briefRepresentation=false`, {
-    headers: { authorization: `Bearer ${token}` },
-  })
-  const body = await response.text()
-  if (!response.ok)
-    throw new Error(`keycloak: listing the directory failed: ${response.status} ${body}`)
-  const users = JSON.parse(body) as KeycloakUser[]
-  return users.map(directoryUserOf)
+  const users: DirectoryUser[] = []
+  for (let first = 0; ; first += USERS_PAGE) {
+    const response = await fetch(
+      `${adminBase(config)}/users?first=${first}&max=${USERS_PAGE}&briefRepresentation=false`,
+      { headers: { authorization: `Bearer ${token}` } }
+    )
+    const body = await response.text()
+    if (!response.ok)
+      throw new Error(`keycloak: listing the directory failed: ${response.status} ${body}`)
+    const page = JSON.parse(body) as KeycloakUser[]
+    users.push(...page.map(directoryUserOf))
+    if (page.length < USERS_PAGE) return users
+  }
 }
 
 /**

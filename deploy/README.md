@@ -32,6 +32,10 @@ membership is recorded, a user disabled or deleted in the directory is
 deprovisioned and the tasks they held return to the pool, and a re-enabled
 user is provisioned again. `0` disables the schedule; a sign-in still
 synchronizes the person who signs in, and `enform admin sync` runs one pass.
+A person's manager is the `manager` attribute of their Keycloak user
+(`manager-of:starter` resolves to it); enform declares the attribute in the
+realm's user profile the first time it sets one, because Keycloak keeps only
+declared attributes.
 
 ## Demo seed
 
