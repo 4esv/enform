@@ -305,7 +305,12 @@ function viewForStep(
     outcomes,
     version: current.version ?? 0,
     previousSteps: stepsBefore(context.definition, current.currentStep),
-    notes: visibleNotes(actor, instanceNotes(context.log, current.instanceId), context),
+    notes: visibleNotes(
+      actor,
+      instanceNotes(context.log, current.instanceId),
+      context,
+      current.starter
+    ),
     ...(current.withdrawal === undefined ? {} : { withdrawal: current.withdrawal }),
     ...(current.closeReason === undefined ? {} : { closeReason: current.closeReason }),
     ...(current.closedAt === undefined ? {} : { closedAt: current.closedAt }),

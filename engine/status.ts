@@ -141,14 +141,23 @@ export function notesOf(log: Log): readonly Note[] {
  * The notes that one actor may read (VT-3, I8). An actor reads a note when it
  * wrote the note, or when it holds one of the outcome scopes of the note's
  * step (AC-4): a note is the discussion of the people who act on the step, so
- * an actor without the step's outcome scope does not read it.
+ * an actor without the step's outcome scope does not read it. The starter
+ * reads a note on the request form, the first step (ADR 0014, S11): a send
+ * back to the form addresses the starter, who holds no outcome scope on it.
  */
 export function visibleNotes(
   actor: ActorId,
   notes: readonly Note[],
-  context: StatusContext
+  context: StatusContext,
+  starter?: ActorId
 ): readonly Note[] {
-  return notes.filter((note) => note.actor === actor || holdsOutcomeScope(context, note.step))
+  const requestForm = context.definition.steps[0]?.key
+  return notes.filter(
+    (note) =>
+      note.actor === actor ||
+      holdsOutcomeScope(context, note.step) ||
+      (starter !== undefined && actor === starter && note.step === requestForm)
+  )
 }
 
 /**
@@ -185,7 +194,7 @@ export function visibleTo(
   return {
     readable: true,
     status: status(instance, context.definition, context.log),
-    notes: visibleNotes(actor, notesOf(context.log), context),
+    notes: visibleNotes(actor, notesOf(context.log), context, instance.starter),
     values: visibleValues(values, context.grants),
   }
 }

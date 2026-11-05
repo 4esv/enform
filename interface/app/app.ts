@@ -486,7 +486,6 @@ export async function mountApp(options: AppOptions): Promise<void> {
     // A claim or a completion re-enters this function, so it clears the page
     // itself; a nested read must not leave the old version above the new one.
     clearPage()
-    const view = await readInstance(instanceId, actor)
     const heading = document.createElement('h1')
     heading.textContent = slug
     main.appendChild(heading)
@@ -495,6 +494,24 @@ export async function mountApp(options: AppOptions): Promise<void> {
       completed.className = 'status'
       completed.textContent = flash
       main.appendChild(completed)
+    }
+    // The action the page just took may end the actor's right to read the
+    // instance: a send back to the request form makes it the starter's private
+    // draft (ADR 0014, D1). The page then keeps the outcome it showed and says
+    // why the instance is gone, rather than going blank (A4).
+    let view: InstanceView
+    try {
+      view = await readInstance(instanceId, actor)
+    } catch (error: unknown) {
+      if (error instanceof RequestRefused && error.status === 403) {
+        const gone = document.createElement('p')
+        gone.className = 'status'
+        gone.dataset.notReadable = ''
+        gone.textContent = `You can no longer read this instance: ${error.error}`
+        main.appendChild(gone)
+        return
+      }
+      throw error
     }
     const instanceStatus = document.createElement('p')
     instanceStatus.className = 'instance-status'
@@ -542,6 +559,9 @@ export async function mountApp(options: AppOptions): Promise<void> {
     // only the starter reads a draft, so the read already decided who is here.
     if (view.status.state === 'draft') {
       renderDraft(slug, instanceId, view, form, status)
+      // A withdrawn draft is discarded (ADR 0014, WF-4): the starter keeps
+      // the Withdraw control on the draft page.
+      if (view.canWithdraw || view.canCancel) main.appendChild(renderClose(slug, instanceId, view))
       return
     }
 

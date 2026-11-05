@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { parse, serialize } from '../engine/definition.js'
 import { contentHash } from '../engine/instance.js'
 
@@ -17,6 +17,10 @@ import { contentHash } from '../engine/instance.js'
 // an event (DR-1, I7). The output is deterministic (I6).
 
 const entry = join(import.meta.dirname, 'main.ts')
+
+// Each check spawns the bin as a user would, several times; on a loaded
+// machine that exceeds the default five-second budget without any defect.
+vi.setConfig({ testTimeout: 30_000 })
 
 /** A fresh working directory for one command run. */
 function workdir(): string {
