@@ -77,6 +77,8 @@ function interfaceAsset(urlPath: string): { file: string; type: string } | undef
 /** The path inside `interface/` that a URL names, or undefined for another route. */
 function interfaceRelative(path: string): string | undefined {
   if (path === '/' || path === '/app' || path === '/app/') return 'app/index.html'
+  // The service worker is served at the root, so its scope covers every page (RT-4, #262).
+  if (path === '/sw.js') return 'app/sw.js'
   if (path.startsWith('/app/') || path.startsWith('/client/')) return path.replace(/^\/+/, '')
   return undefined
 }
@@ -108,6 +110,7 @@ function serveInterface(c: Context) {
  */
 export function mountInterface(app: Hono): void {
   app.get('/', serveInterface)
+  app.get('/sw.js', serveInterface)
   app.get('/app', serveInterface)
   app.get('/app/', serveInterface)
   app.get('/app/*', serveInterface)

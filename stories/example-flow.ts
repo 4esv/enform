@@ -274,6 +274,19 @@ export function setupSteps(definition: FlowDefinition = definitionV1): readonly 
 /** How many setup steps `setupSteps` declares: the next story step has this index. */
 export const SETUP_LENGTH = 6
 
+/**
+ * The server state a browser path starts from (DF-2): version 1 published,
+ * as `setupSteps` records it, without the team steps. The gui runner seeds
+ * the harness server with it, so the page reads the flow and the engine
+ * resolves the intents against it.
+ */
+export function exampleFlowState(definition: FlowDefinition = definitionV1): State {
+  const deps = (id: string): OperationDeps => ({ clock: () => 0, ids: () => id })
+  const pushed = push(createFlow(SLUG), definition, deps('flow-push'), DANA)
+  const published = publish(pushed.flow, deps('flow-publish'), DANA)
+  return apply(published.operation, apply(pushed.operation, emptyState))
+}
+
 /** The instance id that Sam's start mints in every story (DX-1, I6). */
 export const INSTANCE_ID = 'inst-1'
 

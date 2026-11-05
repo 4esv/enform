@@ -57,12 +57,32 @@ export type GuiAction =
   | { readonly click: string }
   | { readonly expect: string }
   | { readonly expectDom: GuiDomExpectation }
+  /** Wait until the selector matches an element (a tracker state, a marker). */
+  | { readonly expectSelector: string }
+  /** Wait until the element's text is the given text (a sync marker, the mode). */
+  | { readonly expectText: { readonly selector: string; readonly text: string } }
+  /** Wait until the field's control holds the value (a restored draft, RT-4). */
+  | { readonly expectValue: { readonly field: string; readonly value: string } }
+  /** Cut the network of the browser context, or restore it (S07, RT-1). */
+  | { readonly offline: boolean }
+  /** Reload the page: the local state must show at once (RT-4). */
+  | { readonly reload: true }
+  /** Wait until the server holds this many events of the step, for an action that posts several. */
+  | { readonly expectEvents: number }
 
 /** One gui step, index-aligned with the scenario step at the same index (STORIES.md). */
 export type GuiStep = {
   /** An interface page within the app; absent means the default form page. */
   readonly page?: string
+  /** The instance the page opens (the draft or task page), when the step acts on one (ADR 0014). */
+  readonly instance?: string
   readonly actions: readonly GuiAction[]
+  /**
+   * How many engine steps this gui step covers (#262, RT-3): a local-first
+   * page posts the start, each edit and the submit from one page load, so one
+   * gui step may cover several engine steps, in order. Absent means one.
+   */
+  readonly steps?: number
 }
 
 export type Scenario = {
@@ -115,9 +135,14 @@ export function scenario(value: Scenario): Scenario {
   return value
 }
 
+/** How many engine steps a gui path covers (#262): the sum of its steps. */
+export function guiCoverage(gui: readonly GuiStep[]): number {
+  return gui.reduce((total, step) => total + (step.steps ?? 1), 0)
+}
+
 /** Refuse a gui path longer than the steps it maps to (STORIES.md, Golden path). */
 function assertGuiPath(value: Scenario): void {
-  if (value.gui !== undefined && value.gui.length > value.steps.length) {
+  if (value.gui !== undefined && guiCoverage(value.gui) > value.steps.length) {
     throw new Error('gui: the gui path is longer than the scenario steps')
   }
   if (value.gui !== undefined && value.flowSlug === undefined) {

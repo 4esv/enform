@@ -18,6 +18,7 @@ import {
   definitionV1,
   depsFor,
   directory,
+  exampleFlowState,
   FLOW,
   flow,
   grantsOfPerson,
@@ -134,6 +135,106 @@ export const incomplete: Scenario = scenario({
 
 /** The indexes of the story's steps after the setup, for the requirements and the tests. */
 export const STEP = { start: 6, firstEdit: 7, lastEdit: 9, submit: 10 } as const
+
+/** What Sam typed first on the page: his advisor, with the other fields still empty (FM-7). */
+const guiFirstChange: ConditionData = { summary: '', advisor: OKAFOR }
+
+/** The edits the page posts, one per changed field (RT-3): two of them typed offline, one after the refresh. */
+export const guiEdits: readonly Readonly<Record<string, JsonValue>>[] = [
+  { overload_credits: 2 },
+  { summary: 'two extra' },
+  { summary: 'two extra credits' },
+]
+
+/**
+ * The interface path of S07 (STORIES.md, #262): the browser starts the draft
+ * on the first change, loses the connection, keeps typing (each edit saved
+ * on the device and shown as such), refreshes and finds every value, submits
+ * ("Will submit when you are back online"), and the connection returns: the
+ * queued edits and the submit reach the server once each, and the tracker
+ * shows the advisor step waiting. The flow is seeded (exampleFlowState), so
+ * the steps are the start, the edits and the submit.
+ */
+function guiSteps(): readonly Step[] {
+  const steps: Step[] = []
+  const sam = grantsOfPerson(SAM)
+  const started = startInstance(
+    flow,
+    INSTANCE_ID,
+    guiFirstChange,
+    SAM,
+    depsFor(0),
+    directory(guiFirstChange),
+    sam
+  )
+  steps.push(
+    declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values: guiFirstChange })
+  )
+  let instance = started.instance
+  for (const values of guiEdits) {
+    const edited = editDraft(instance, SAM, values, depsFor(steps.length))
+    if (edited.operation === undefined) throw new Error(edited.reason)
+    instance = edited.instance
+    steps.push(declared(edited.operation, { instanceId: INSTANCE_ID, values }))
+  }
+  const merged = { ...guiFirstChange, ...Object.assign({}, ...guiEdits) }
+  const submitted = submitInstance(
+    instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionV1, resolve: directory(merged), grants: sam, owner: SAM },
+    depsFor(steps.length)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
+  return steps
+}
+
+/** The seed of the browser path: version 1 published. */
+export const guiSeed = exampleFlowState
+
+export const guiGolden: Scenario = scenario({
+  slug: 'lose-connection',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: guiSteps(),
+  gui: [
+    {
+      steps: 5,
+      actions: [
+        { fill: { field: 'advisor', value: OKAFOR } },
+        { expectText: { selector: '[data-sync-for="advisor"]', text: 'Synced' } },
+        // The connection drops: the next edits stay on the device (RT-3, I15).
+        { offline: true },
+        { expectText: { selector: '[data-connection]', text: 'Offline' } },
+        { fill: { field: 'overload_credits', value: 2 } },
+        {
+          expectText: {
+            selector: '[data-sync-for="overload_credits"]',
+            text: 'Saved on this device',
+          },
+        },
+        { fill: { field: 'summary', value: 'two extra' } },
+        { expectText: { selector: '[data-sync-for="summary"]', text: 'Saved on this device' } },
+        // A refresh while offline shows the device's copy at once (RT-4).
+        { reload: true },
+        { expectValue: { field: 'summary', value: 'two extra' } },
+        { expectValue: { field: 'overload_credits', value: '2' } },
+        { fill: { field: 'summary', value: 'two extra credits' } },
+        { expectText: { selector: '[data-sync-for="summary"]', text: 'Saved on this device' } },
+        // The submit waits for the connection (RT-5).
+        { click: '[data-submit]' },
+        { expect: 'Will submit when you are back online' },
+        // The connection returns: the queue flushes, each edit once (I1), and
+        // the submit routes the request to the advisor.
+        { offline: false },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="unopened"]' },
+      ],
+    },
+  ],
+})
 
 /**
  * What each step requires of its actor (I8), for the Actor operator: the

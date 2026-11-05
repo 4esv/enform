@@ -102,8 +102,8 @@ This table records where each story was done. Update it in the same pull request
 | S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts | e436106 5808cdc |  |  | Engine passes |
 | S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts | c38bb5e bc6b63a |  |  | Engine passes |
 | S05 | #42 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts | 501e5e3 0f1dcbf |  |  | Engine passes |
-| S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181 | 640d062 f9e809d f9e5224 | Interface in progress |
-| S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts | 8d6bb33 |  |  | Engine passes |
+| S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181, #262 | 640d062 f9e809d f9e5224 | Done |
+| S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts, stories/S07-lose-connection/gui.test.ts, interface/app/local.test.ts | 8d6bb33 | #262 | | Done |
 | S08 | #45 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts | c3d8025 27e0712 |  |  | Engine passes |
 | S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts | 8888d67 98e561c |  |  | Engine passes |
 | S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts | d165932 0f1c912 23a561a |  |  | Engine passes |
@@ -292,7 +292,7 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Interface path.** Sam opens a link while he is not signed in. SSO signs him in and returns him to the form. As he types, each field shows "Saved on this device", then "Synced". He submits. The step tracker shows "Waiting for Dr. Okafor. Not opened."
 
-The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The engine path posts the start and the submit as client intents (ADR 0010, ADR 0014, #256). The submit step still has no browser path: the interface's submit of a draft has no gui step in the harness yet.
+The `gui` path of the scenario covers the whole story: the start page is local first (RT-3), so the first change starts the draft, each later change is one draft edit and Save draft sends the values once more, with each field showing "Saved on this device", then "Synced" (I15); the draft page submits, and the tracker shows the advisor step waiting, not opened. The engine path posts the same start, edits and submit as client intents (ADR 0010, ADR 0014, #256, #262).
 
 **Acceptance**
 

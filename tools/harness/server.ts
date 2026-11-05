@@ -165,6 +165,8 @@ function transpileApp(source: string): string {
 function interfacePath(url: string): string | undefined {
   const path = url.split('?')[0]
   if (path === '/' || path === '/app' || path === '/app/') return 'app/index.html'
+  // The service worker is served at the root, so its scope covers every page (RT-4, #262).
+  if (path === '/sw.js') return 'app/sw.js'
   if (path.startsWith('/app/') || path.startsWith('/client/')) return path.replace(/^\/+/, '')
   return undefined
 }

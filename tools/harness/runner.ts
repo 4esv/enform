@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
-import { chromium, type Page } from 'playwright'
+import { type BrowserContext, chromium, type Page } from 'playwright'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { Operation } from '../../engine/operation.js'
@@ -12,6 +12,7 @@ import { runSteps as engineRunSteps } from '../../engine/run.js'
 import { oracles } from './oracles.js'
 import {
   assertGoldenDeclared,
+  continueFrom,
   type Prediction,
   postedOperation,
   predict,
@@ -26,6 +27,7 @@ import {
   type GuiFillValue,
   type GuiStep,
   goldenViewPrefix,
+  guiCoverage,
   type Scenario,
   type StateView,
   type Step,
@@ -88,7 +90,7 @@ export async function runSteps(scenario: Scenario, options: RunOptions): Promise
   if (options.mode === 'dry') return dryRun(scenario)
   if (options.mode === 'cli') return cliRun(scenario)
   if (options.mode === 'gui') return guiRun(scenario, options)
-  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? clockOf(scenario))
+  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? clockOf(scenario), options)
 }
 
 /**
@@ -195,7 +197,7 @@ function runCli(args: readonly string[]): Promise<string> {
 async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutcome> {
   const gui = scenario.gui
   if (gui === undefined) throw new Error('gui mode: the scenario declares no gui path')
-  if (gui.length > scenario.steps.length) {
+  if (guiCoverage(gui) > scenario.steps.length) {
     throw new Error('gui mode: the gui path is longer than the scenario steps')
   }
   const clock = options.clock ?? clockOf(scenario)
@@ -215,41 +217,96 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
   const browser = await chromium.launch()
   try {
     const context = await browser.newContext()
+    // A gui step covers one engine step, or several when the page posts the
+    // start, each edit and the submit itself (#262, RT-3): `first` is the
+    // index of the first engine step it covers.
+    let first = 0
     for (let i = 0; i < gui.length; i += 1) {
+      const covered = gui[i].steps ?? 1
       const page = await context.newPage()
+      // The browser's errors travel with a failure, so a step that appended
+      // nothing names the exception behind it.
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      page.on('console', (message) => {
+        if (message.type() === 'error') errors.push(message.text())
+      })
       try {
-        await page.addInitScript(guiSources(scenario.steps[i], i, clock))
-        await page.goto(guiUrl(api.port(), flowSlug, scenario.steps[i].actor, gui[i]))
+        await page.addInitScript(guiSources(scenario.steps[first], first, clock))
+        await page.goto(guiUrl(api.port(), flowSlug, scenario.steps[first].actor, gui[i]))
         // The app loads the flow and renders the form asynchronously; wait for
         // the submit control before the step's actions touch the fields.
         await page.waitForSelector('form button[type="button"]', { timeout: 5000 })
-        await performGuiActions(page, gui[i].actions)
-        await waitForEvent(api, seedLength + i + 1)
-        const state = api.state()
-        if (state.log.length !== seedLength + i + 1) {
+        try {
+          await performGuiActions(page, context, api, seedLength, gui[i].actions)
+          await waitForEvent(api, seedLength + first + covered)
+        } catch (error) {
+          const detail = errors.length === 0 ? '' : `\nbrowser errors:\n${errors.join('\n')}`
+          const status = await page
+            .locator('.status')
+            .first()
+            .textContent()
+            .catch(() => null)
+          const seen = api
+            .state()
+            .log.slice(seedLength)
+            .map((event) => event.type)
+            .join(', ')
+          // The first appended event that differs from its declared step
+          // names what the page posted instead.
+          let mismatch = ''
+          api
+            .state()
+            .log.slice(seedLength)
+            .some((event, k) => {
+              const step = scenario.steps[k]
+              if (step === undefined) return false
+              const expected = stepOperation(step, k, clock)
+              const actual = {
+                id: event.operationId,
+                type: event.type,
+                at: event.at,
+                actor: event.actor,
+                payload: event.payload,
+              }
+              if (sameOperation(actual, expected)) return false
+              mismatch = `\nfirst mismatch at engine step ${k + 1}:\n${JSON.stringify(actual)}\n${JSON.stringify(expected)}`
+              return true
+            })
           throw new Error(
-            `gui mode: step ${i + 1} appended ${state.log.length - seedLength - i} events, not one`
+            `gui mode: step ${i + 1}: ${error instanceof Error ? error.message : String(error)} (status: ${String(status)}; events so far: ${seen || 'none'})${mismatch}${detail}`
           )
         }
-        const event = state.log[state.log.length - 1]
-        const expected = stepOperation(scenario.steps[i], i, clock)
-        const actual: Operation = {
-          id: event.operationId,
-          type: event.type,
-          at: event.at,
-          actor: event.actor,
-          payload: event.payload,
+        const state = api.state()
+        if (state.log.length !== seedLength + first + covered) {
+          throw new Error(
+            `gui mode: step ${i + 1} appended ${state.log.length - seedLength - first} events, not ${covered}`
+          )
         }
-        if (!isDeepStrictEqual(actual, expected)) {
-          throw new Error(`gui mode: step ${i + 1} did not map to its engine step`)
+        for (let k = 0; k < covered; k += 1) {
+          const event = state.log[seedLength + first + k]
+          const expected = stepOperation(scenario.steps[first + k], first + k, clock)
+          const actual: Operation = {
+            id: event.operationId,
+            type: event.type,
+            at: event.at,
+            actor: event.actor,
+            payload: event.payload,
+          }
+          if (!sameOperation(actual, expected)) {
+            throw new Error(
+              `gui mode: step ${i + 1} did not map to engine step ${first + k + 1}\n${JSON.stringify(actual)}\n${JSON.stringify(expected)}`
+            )
+          }
         }
+        first += covered
       } finally {
         await page.close()
       }
     }
     const state = api.state()
     const scenarioState = replayPrefix(state, seedLength)
-    if (!isDeepStrictEqual(toView(scenarioState), goldenViewPrefix(scenario, gui.length, clock))) {
+    if (!isDeepStrictEqual(toView(scenarioState), goldenViewPrefix(scenario, first, clock))) {
       throw new Error('gui mode: the gui prefix differs from the engine prefix')
     }
     return { state: scenarioState, intents: outboxOf(scenarioState.log) }
@@ -273,7 +330,21 @@ function guiSources(step: Step, index: number, clock: StepClock): string {
   const instanceId = step.payload.instanceId
   const instanceIds =
     typeof instanceId === 'string' ? `, instanceIds: () => ${JSON.stringify(instanceId)}` : ''
-  return `globalThis.__enformSources = { clock: () => ${clock(index)}, ids: () => 'op-${index + 1}'${instanceIds} }`
+  // The sources count from the step the page covers first: a page that posts
+  // several operations gets `op-<n>`, `op-<n+1>` and the clock of each step,
+  // exactly as `stepOperation` builds them (#262, I6).
+  // The counters live in the tab's session storage, so a reload within one
+  // gui step keeps minting the next id and the next time (RT-4, I6).
+  const clocks = JSON.stringify(Array.from({ length: 64 }, (_, offset) => clock(index + offset)))
+  return `globalThis.__enformSources = (() => {
+    const read = (name, start) => Number(sessionStorage.getItem(name) ?? start)
+    const bump = (name, start) => { const next = read(name, start) + 1; sessionStorage.setItem(name, String(next)); return next }
+    const clocks = ${clocks}
+    return {
+      clock: () => clocks[Math.min(bump('__enformClock', -1), clocks.length - 1)],
+      ids: () => 'op-' + bump('__enformIds', ${index})${instanceIds}
+    }
+  })()`
 }
 
 /** The app URL of one gui step: the flow, the step's actor, and its optional page. */
@@ -282,11 +353,18 @@ function guiUrl(port: number, slug: string, actor: string, step: GuiStep): strin
   if (step.page !== undefined) url.pathname = `/app/${step.page}`
   url.searchParams.set('slug', slug)
   url.searchParams.set('actor', actor)
+  if (step.instance !== undefined) url.searchParams.set('instance', step.instance)
   return url.toString()
 }
 
 /** Perform one gui step's actions in order (STORIES.md, Interface path). */
-async function performGuiActions(page: Page, actions: readonly GuiAction[]): Promise<void> {
+async function performGuiActions(
+  page: Page,
+  context: BrowserContext,
+  api: Api,
+  seedLength: number,
+  actions: readonly GuiAction[]
+): Promise<void> {
   for (const action of actions) {
     if ('fill' in action) {
       await fillField(page, action.fill.field, action.fill.value)
@@ -294,6 +372,40 @@ async function performGuiActions(page: Page, actions: readonly GuiAction[]): Pro
       await page.locator(action.click).click()
     } else if ('expectDom' in action) {
       await expectFieldDom(page, action.expectDom)
+    } else if ('expectSelector' in action) {
+      await page.locator(action.expectSelector).first().waitFor({ timeout: 10_000 })
+    } else if ('expectValue' in action) {
+      await page.waitForFunction(
+        ({ field, value }) =>
+          (document.querySelector(`[name="${field}"]`) as HTMLInputElement | null)?.value === value,
+        action.expectValue,
+        { timeout: 10_000 }
+      )
+    } else if ('expectText' in action) {
+      await page.waitForFunction(
+        ({ selector, text }) => document.querySelector(selector)?.textContent === text,
+        action.expectText,
+        { timeout: 10_000 }
+      )
+    } else if ('offline' in action) {
+      if (action.offline) {
+        // A refresh without a connection needs the shell in the worker's
+        // cache (RT-4): wait until the worker controls the page.
+        await page
+          .waitForFunction(
+            () => document.documentElement.dataset.offlineReady === 'true',
+            undefined,
+            { timeout: 10_000 }
+          )
+          .catch(() => undefined)
+      }
+      await context.setOffline(action.offline)
+      if (!action.offline) await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    } else if ('reload' in action) {
+      await page.reload()
+      await page.waitForSelector('form button[type="button"]', { timeout: 5000 })
+    } else if ('expectEvents' in action) {
+      await waitForEvent(api, seedLength + action.expectEvents)
     } else {
       await page.waitForFunction(
         (expected) => {
@@ -511,9 +623,10 @@ export async function postStep(
 /** Start the harness server for a scenario, run `body` against it, and close it. */
 export async function withScenarioApi<T>(
   scenario: Scenario,
-  body: (api: Api) => Promise<T>
+  body: (api: Api) => Promise<T>,
+  seed: State = emptyState
 ): Promise<T> {
-  const api = startApi(emptyState, {
+  const api = startApi(seed, {
     bootstrap: scenario.bootstrap,
     membership: scenario.membership,
   })
@@ -532,16 +645,25 @@ export async function withScenarioApi<T>(
 async function apiRun(
   scenario: Scenario,
   deliveries: Deliveries,
-  clock: StepClock
+  clock: StepClock,
+  options: RunOptions
 ): Promise<RunOutcome> {
-  const prediction: Prediction = predict(scenario, clock)
-  return withScenarioApi(scenario, async (api) => {
-    for (let i = 0; i < scenario.steps.length; i++) {
-      await postStep(api, scenario.steps[i], i, clock, deliveries(i), prediction.outcomes[i])
-    }
-    const state = api.state()
-    return { state, intents: outboxOf(state.log) }
-  })
+  // A seeded run (the published flow, as gui mode reads it) predicts from
+  // the seed and answers the scenario's own events, renumbered from one, so
+  // the modes compare event for event (I4).
+  const seed = options.seed ?? emptyState
+  const prediction: Prediction = continueFrom(scenario, seed, 0, clock)
+  return withScenarioApi(
+    scenario,
+    async (api) => {
+      for (let i = 0; i < scenario.steps.length; i++) {
+        await postStep(api, scenario.steps[i], i, clock, deliveries(i), prediction.outcomes[i])
+      }
+      const state = seed.log.length === 0 ? api.state() : replayPrefix(api.state(), seed.log.length)
+      return { state, intents: outboxOf(state.log) }
+    },
+    seed
+  )
 }
 
 /**

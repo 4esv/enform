@@ -35,6 +35,10 @@ const PUBLIC_ENGINE = new Set(['engine/index.ts', 'engine/index.js'])
 // HTTP call, so it is the one file that may name a `/api/v1` path.
 const GENERATED_CLIENT = 'interface/client/client.ts'
 
+// The service worker (RT-4, #262). It calls nothing: it decides by path which
+// of the page's own reads it keeps in its cache, so it may name the prefix.
+const SERVICE_WORKER = 'interface/app/sw.js'
+
 // A `/api/v1` path inside a string or a template. A comment that names the
 // prefix without a quote before it does not match.
 const API_PATH = /['"`][^'"`\n]*\/api\/v1/
@@ -53,7 +57,7 @@ for (const file of files) {
     if (PUBLIC_ENGINE.has(fromRepo)) continue
     failures.push(`${path} imports the engine internal ${specifier}`)
   }
-  if (path !== GENERATED_CLIENT && API_PATH.test(text)) {
+  if (path !== GENERATED_CLIENT && path !== SERVICE_WORKER && API_PATH.test(text)) {
     failures.push(`${path} calls /api/v1 by hand; use the generated client (DX-4)`)
   }
 }
