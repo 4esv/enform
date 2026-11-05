@@ -96,7 +96,7 @@ function flowLog(): Log {
   return state.log
 }
 
-test.fails('#264 DF-6 S03 S04 the difference between two versions names each change and its author', async () => {
+test('#264 DF-6 S03 S04 the difference between two versions names each change and its author', async () => {
   const { definitionDiff } = await diff()
   const log = flowLog()
   const between = definitionDiff(log, 'course-overload', 1, 2)
