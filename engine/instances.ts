@@ -436,12 +436,17 @@ function fold(
         queue: undefined,
       })
     case STEP_COMPLETED: {
-      const next = nextStep(definition, stringField(event.payload, 'step'))
+      // The completion records the route it decided (WF-1, I4); an older
+      // event without it advances to the next step in definition order.
+      const recorded = 'currentStep' in event.payload || event.payload.done === true
+      const next = recorded
+        ? optionalString(event.payload.currentStep)
+        : nextStep(definition, stringField(event.payload, 'step'))?.key
       const entered = optionalAssignees(event.payload.assignees)
       const moved: ProjectedInstance = advanced({
         ...instance,
         holder: undefined,
-        currentStep: next?.key,
+        currentStep: next,
         done: next === undefined,
         queue: optionalString(event.payload.queue),
       })

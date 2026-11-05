@@ -1282,7 +1282,13 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === STEP_COMPLETED) {
     const completion = readCompletion(event)
-    const next = await nextStepOf(client, completion.instanceId, completion.step)
+    // The completion records the step it entered (WF-1, I4); an older event
+    // without the route advances in definition order.
+    const next = completion.routed
+      ? completion.currentStep === undefined
+        ? undefined
+        : await stepOfInstance(client, completion.instanceId, completion.currentStep)
+      : await nextStepOf(client, completion.instanceId, completion.step)
     await client.query(
       `update instances
        set current_step = $2, holder = null, done = $3, status = $4,
@@ -1975,8 +1981,10 @@ function readCompletion(event: Event): {
   instanceId: string
   step: string
   queue: string | null
+  routed: boolean
+  currentStep: string | undefined
 } {
-  const { instanceId, step } = event.payload
+  const { instanceId, step, currentStep, done } = event.payload
   if (typeof instanceId !== 'string' || typeof step !== 'string') {
     throw new Error(`events: malformed ${STEP_COMPLETED} payload at seq ${event.seq}`)
   }
@@ -1984,6 +1992,8 @@ function readCompletion(event: Event): {
     instanceId,
     step,
     queue: typeof event.payload.queue === 'string' ? event.payload.queue : null,
+    routed: typeof currentStep === 'string' || done === true,
+    currentStep: typeof currentStep === 'string' ? currentStep : undefined,
   }
 }
 

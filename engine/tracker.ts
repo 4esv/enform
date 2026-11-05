@@ -181,7 +181,16 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       comments.delete(step)
       activities.set(step, event.at)
       holder = undefined
-      const next = nextStep(definition, step)?.key
+      // The completion records the route it decided and the steps it skipped
+      // (WF-1, S05, I4); an older event advances in definition order.
+      for (const skipped of readSkipped(event.payload.skipped)) {
+        states.set(skipped.step, 'skipped')
+        conditions.set(skipped.step, skipped.condition)
+      }
+      const recorded = 'currentStep' in event.payload || event.payload.done === true
+      const next = recorded
+        ? stringField(event.payload, 'currentStep')
+        : nextStep(definition, step)?.key
       if (next !== undefined) starts.set(next, event.at)
       currentStep = next
       queue = stringField(event.payload, 'queue')

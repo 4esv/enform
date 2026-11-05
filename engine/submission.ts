@@ -41,7 +41,7 @@ import {
 } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
 import { route, type TargetResolver } from './routing.js'
-import { isStepSkipped, type SkippedStep } from './workflow.js'
+import { routeAfter } from './workflow.js'
 
 /**
  * The versioned event type of a start (S06, MVP.md 9.1, #192). The start
@@ -339,7 +339,7 @@ export function submitInstance(
   // A skipped key is absent from the recorded capture (FM-2, FM-7).
   const kept = Object.fromEntries(checked.captured.map((key) => [key, values[key]]))
   const merged = mergeValues(instance.values, kept)
-  const entry = routeAfter(context.definition, request, merged)
+  const entry = routeAfter(context.definition, request.key, merged)
   const routed =
     entry.step === undefined
       ? undefined
@@ -547,29 +547,6 @@ function requestStep(definition: FlowDefinition): FlowStep {
  */
 function requestEditable(step: FlowStep): readonly string[] {
   return step.editable ?? fieldsOf(step).map((field) => field.key)
-}
-
-/**
- * The route after the request form (WF-1, S05, #192): the first later step
- * whose skip condition is false, and the steps before it that the route
- * skipped, in definition order, with the condition that skipped each. No
- * later step means the instance is done at the submit.
- */
-function routeAfter(
-  definition: FlowDefinition,
-  request: FlowStep,
-  data: ConditionData
-): { readonly step: FlowStep | undefined; readonly skipped: readonly SkippedStep[] } {
-  const skipped: SkippedStep[] = []
-  const index = definition.steps.findIndex((step) => step.key === request.key)
-  for (const step of definition.steps.slice(index + 1)) {
-    if (step.skipWhen !== undefined && isStepSkipped(step, data)) {
-      skipped.push({ step: step.key, condition: step.skipWhen })
-      continue
-    }
-    return { step, skipped }
-  }
-  return { step: undefined, skipped }
 }
 
 /** Whether a value is a JSON object. */

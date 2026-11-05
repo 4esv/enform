@@ -189,6 +189,10 @@ test('#191 a completion intent resolves to the engine operation and keeps the cl
       step: 'review',
       outcome: 'approve',
       values: { decision: 'approve' },
+      // The completion records the route it decided (WF-1, I4): the review
+      // step is the last, so the instance is done and nothing was skipped.
+      done: true,
+      skipped: [],
     })
     expect(api.state().log).toHaveLength(before + 1)
     expect(api.state().log.at(-1)?.operationId).toBe('complete-1')

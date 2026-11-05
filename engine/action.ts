@@ -26,6 +26,7 @@ import { createOutboxOperation } from './outbox.js'
 import { route, type TargetResolver } from './routing.js'
 import { evaluateRules, type StepRuleState } from './rules.js'
 import { assignmentEmails } from './submission.js'
+import { routeAfter } from './workflow.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -200,8 +201,13 @@ export function complete(
     return { accepted: false, instance, reason: `step ${step}: ${checked.reason}` }
   }
   const captured = checked.captured
-  const next = nextStep(context.definition, step)
-  // The engine routes the next step exactly as a start routes the first one
+  const merged = { ...instance.values, ...capture(values, captured) }
+  // The completion routes to the first later step whose skip condition is
+  // false over the values the submission creates (WF-1, S05), and records the
+  // steps it skipped with their conditions, exactly as a submit does.
+  const entry = routeAfter(context.definition, step, merged)
+  const next = entry.step
+  // The engine routes the next step exactly as a submit routes the first one
   // (AS-4, I10, I13): a resolved step records its assignees, and a step whose
   // targets resolve to nobody records the Unroutable queue and the owner alert
   // in the same operation. A caller that gives no resolver records none, so
@@ -226,6 +232,10 @@ export function complete(
     outcome,
     // A skipped key is absent from the recorded capture (FM-2, FM-7).
     values: capture(values, captured),
+    // The route the completion decided (WF-1, I4): the step it entered, or
+    // `done`, and the steps it skipped, so a read never recomputes it.
+    ...(next === undefined ? { done: true } : { currentStep: next.key }),
+    skipped: entry.skipped,
     ...(entered === undefined ? {} : { assignees: entered }),
     ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
   }
