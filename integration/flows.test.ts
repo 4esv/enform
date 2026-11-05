@@ -192,12 +192,17 @@ test('#220 a structural draft write records version 1 and returns the definition
     body: JSON.stringify({ version: 1, definition }),
   })
   // The write answers the classified changes with their paths (DF-6, #256):
-  // the first draft is one structural creation.
+  // the create gave the flow the starter definition, so the write replaces its
+  // `start` step with the two steps of the test.
   expect(written).toEqual({
     slug: SLUG,
     version: 1,
     definition,
-    changes: [{ class: 'structural', message: 'the first draft was created', path: '/' }],
+    changes: [
+      { class: 'structural', message: 'a step was removed: start', path: '/steps/start' },
+      { class: 'structural', message: 'a step was added: request', path: '/steps/request' },
+      { class: 'structural', message: 'a step was added: approve', path: '/steps/approve' },
+    ],
   })
 })
 
