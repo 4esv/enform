@@ -194,14 +194,14 @@ Refs: WF-4, WF-5, AC-1, AC-5, SE-5, I4
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S14: Find the status of a submission (`find-status`)
 
@@ -209,14 +209,14 @@ Refs: VT-1, VT-2, VT-3, VT-4, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S15: Investigate a problem (`investigate`)
 
@@ -224,14 +224,14 @@ Refs: DF-6, VT-5, VT-6, I4, I13, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S16: Undo a mistake (`undo`)
 
@@ -239,14 +239,14 @@ Refs: WF-5, A2, I4, D6
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## Skipped cells
 
