@@ -1,12 +1,9 @@
 import { expect, test } from 'vitest'
-import { claim, STEP_COMPLETED } from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Instance } from '../../engine/instance.js'
-import type { Log, OperationDeps } from '../../engine/operation.js'
-import { createOutboxOperation, type OutboxEntry, outboxOf } from '../../engine/outbox.js'
+import { STEP_COMPLETED } from '../../engine/action.js'
+import { instanceOf } from '../../engine/instances.js'
+import { outboxOf } from '../../engine/outbox.js'
 import {
   CANCELLED_TIMERS,
-  type CompletedTask,
   completeBeforeDeadline,
   dueEscalation,
   dueReminders,
@@ -14,65 +11,35 @@ import {
   ESCALATION_RULE,
   REMINDER_EMAIL,
   REMINDER_RULE,
+  TIMER_FIRED,
 } from '../../engine/reminders.js'
-import { runSteps, type Step } from '../../engine/run.js'
-import { deliver, sideEffectIdentity, sideEffectKey } from '../../engine/sideEffects.js'
-import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
+import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
   ADVISOR_STEP,
-  APPROVE,
+  CHAIRS_GROUP,
+  definitionV1,
+  directory,
+  grantsOfPerson,
+  INSTANCE_ID,
+  LIN,
+  OKAFOR,
+  REGISTRAR_STEP,
+  SLUG,
+} from '../example-flow.js'
+import {
   DAY,
-  data,
   definition,
   ESCALATION_TARGETS,
-  flow,
-  INSTANCE,
-  NOW,
-  OKAFOR,
-  okaforGrants,
-  resolve,
-  SLUG,
-  STARTER,
-  starterGrants,
+  golden,
+  instanceAt,
+  SINCE,
+  STEP,
+  scheduled,
+  stateAt,
   timers,
+  values,
 } from './scenario.js'
-
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
-
-/** A deterministic ID generator, so two runs of the same steps give the same operations (I6). */
-function idGen(): () => string {
-  let next = 0
-  return () => {
-    next += 1
-    return `op-${next}`
-  }
-}
-
-/** The injected sources of the path (I6): the clock and the IDs come from the caller. */
-function sources(clock: () => number): OperationDeps {
-  return { clock, ids: idGen() }
-}
-
-/**
- * A log that already carries the timer side effects that fired (I3). Each timer
- * is one event, so a worker that reads the outbox reads the timers that already
- * occurred.
- */
-function fireTimers(log: Log, entries: readonly OutboxEntry[]): Log {
-  const ids = idGen()
-  let current: State = { applied: new Set(), log }
-  for (const entry of entries) {
-    const operation = createOutboxOperation(
-      'timer.fired@1',
-      { instance: INSTANCE, step: ADVISOR_STEP },
-      [entry],
-      { clock: () => NOW, ids }
-    )
-    current = apply(operation, current)
-  }
-  return current.log
-}
 
 // Issue #49: a task that waits in silence reminds people and then escalates
 // (S12). With a one-day reminder interval, one simulated day captures exactly
@@ -81,143 +48,125 @@ function fireTimers(log: Log, entries: readonly OutboxEntry[]): Log {
 // task's timers in the same event (SE-5, I2). The same timer steps give the
 // same side-effect intents dry and live (I7). The path is deterministic (I6).
 
-test('#49 a stuck task reminds at each interval, escalates at the deadline and cancels its timers (S12)', () => {
-  let now = NOW
-  const deps = sources(() => now)
+/** The injected sources of a check (I6). */
+const deps = (index: number) => ({ clock: () => SINCE + index, ids: () => `check-${index}` })
 
-  // Sam starts and submits the request; the advisor target resolves to
-  // Okafor, so the submit routes it to the advisor step (S06, WF-1, I13).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
-  const submitted = submitInstance(
-    started.instance,
-    STARTER,
-    {},
-    0,
-    { flow: SLUG, definition, resolve, grants: starterGrants },
-    deps
-  )
-  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
-  expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
-  let state = apply(submitted.operation, apply(started.operation, emptyState))
-  const assignmentEmails = outboxOf(state.log)
+test('#49 the S12 golden path runs in api, cli and dry mode: one reminder a day, then the escalation once (S12)', async () => {
+  await runGolden(golden)
+  const { state, intents } = await runModes(golden)
 
-  // Okafor claims the advisor task at NOW, so its idle time starts here (S09).
-  const view: Instance = submitted.instance
-  const claimed = claim(view, OKAFOR, view.version ?? 0, deps)
-  expect(claimed.accepted).toBe(true)
-  if (claimed.operation === undefined) throw new Error(`the claim was refused: ${claimed.reason}`)
-  state = apply(claimed.operation, state)
-  const held = claimed.instance
-
-  // (a) SE-3, I3: with a one-day interval, one simulated day captures exactly
-  // one reminder. Its I3 identity is the instance, the step, the rule and the
-  // occurrence.
-  now = NOW + DAY
-  const oneDay = dueReminders(held, timers, now)
-  expect(oneDay).toHaveLength(1)
-  expect(oneDay[0]).toEqual({
-    operation: REMINDER_EMAIL,
-    target: EMAIL_CONNECTOR,
-    payload: {
-      instance: INSTANCE,
-      step: ADVISOR_STEP,
-      rule: REMINDER_RULE,
-      occurrence: '1',
-      to: OKAFOR,
-      at: NOW + DAY,
-    },
-  })
-  expect(sideEffectIdentity(oneDay[0])).toEqual({
-    operation: REMINDER_EMAIL,
-    target: EMAIL_CONNECTOR,
-    instance: INSTANCE,
-    step: ADVISOR_STEP,
-    rule: REMINDER_RULE,
-    occurrence: '1',
-  })
-  // I6: the same inputs give the same timer and the same key.
-  expect(dueReminders(held, timers, now)).toEqual(oneDay)
-  expect(sideEffectKey(oneDay[0])).toBe(sideEffectKey(dueReminders(held, timers, now)[0]))
-
-  // (b) SE-3, I3: three simulated days capture exactly three reminders, one per
-  // elapsed interval, and each occurrence has its own key.
-  now = NOW + 3 * DAY
-  const threeDays = dueReminders(held, timers, now)
-  expect(threeDays.map((entry) => entry.payload.occurrence)).toEqual(['1', '2', '3'])
-  const keys = threeDays.map(sideEffectKey)
-  expect(new Set(keys).size).toBe(3)
-
-  // (b) SE-4, I3: the escalation is not due before the deadline, it fires once
-  // at the deadline, it adds CS-Chairs, and it keeps the current owner.
-  expect(dueEscalation(held, timers, now - 1)).toBeUndefined()
-  const escalation = dueEscalation(held, timers, now)
-  if (escalation === undefined) throw new Error('the escalation did not fire at the deadline')
-  expect(escalation).toEqual({
-    operation: ESCALATION_EMAIL,
-    target: EMAIL_CONNECTOR,
-    payload: {
-      instance: INSTANCE,
-      step: ADVISOR_STEP,
-      rule: ESCALATION_RULE,
-      occurrence: String(NOW + 3 * DAY),
-      to: OKAFOR,
-      adds: ESCALATION_TARGETS,
-    },
-  })
-  expect(held.holder).toBe(OKAFOR)
-  // A worker records the keys that it delivered, so a restart near the deadline
-  // delivers the escalation once and no reminder a second time (I3). The
-  // submit's task-assigned email sits on the same log (SE-2), so a worker that
-  // delivered nothing yet delivers it first.
-  const fired = [...threeDays, escalation]
-  const timerLog = fireTimers(state.log, fired)
-  expect(deliver(timerLog, new Set())).toEqual([...assignmentEmails, ...fired])
-  const delivered = new Set([...assignmentEmails, ...fired].map(sideEffectKey))
-  expect(deliver(timerLog, delivered)).toEqual([])
-  expect(deliver(timerLog, new Set([...assignmentEmails.map(sideEffectKey), ...keys]))).toEqual([
-    escalation,
+  // SE-3, I3: exactly one reminder fired within the first day, and one per
+  // elapsed day after it; each firing is one event with one side effect
+  // whose identity is the instance, the step, the rule and the occurrence.
+  const firings = state.log.filter((event) => event.type === TIMER_FIRED)
+  expect(firings).toHaveLength(4)
+  const reminders = firings.filter((event) => event.payload.kind === 'reminder')
+  expect(reminders.filter((event) => event.at <= SINCE + DAY)).toHaveLength(1)
+  expect(reminders.map((event) => event.at)).toEqual([
+    SINCE + DAY,
+    SINCE + 2 * DAY,
+    SINCE + 3 * DAY,
   ])
+  const sent = outboxOf(state.log).filter((entry) => entry.operation === REMINDER_EMAIL)
+  expect(sent.map((entry) => entry.payload.occurrence)).toEqual(['1', '2', '3'])
+  expect(
+    sent.every((entry) => entry.payload.to === OKAFOR && entry.payload.rule === REMINDER_RULE)
+  ).toBe(true)
+  expect(new Set(sent.map(sideEffectKey)).size).toBe(3)
 
-  // (c) SE-5, I2: the task completes before the deadline. The completion
-  // cancels the pending timers in the same event, emits no reminder and no
-  // escalation, and after the one apply no timer of the task is due.
-  const done: CompletedTask = completeBeforeDeadline(
+  // SE-4, I3: the escalation fired once, at the deadline; it added the
+  // CS-Chairs group to the advisor step and kept Okafor as the holder.
+  const escalations = outboxOf(state.log).filter((entry) => entry.operation === ESCALATION_EMAIL)
+  expect(escalations).toHaveLength(1)
+  expect(escalations[0].payload).toMatchObject({
+    step: ADVISOR_STEP,
+    rule: ESCALATION_RULE,
+    occurrence: String(SINCE + 3 * DAY),
+    to: OKAFOR,
+    adds: ESCALATION_TARGETS,
+  })
+  const escalated = instanceAt(golden.steps.slice(0, STEP.approve))
+  expect(escalated.holder).toBe(OKAFOR)
+  expect(escalated.assignees).toContainEqual({
+    step: ADVISOR_STEP,
+    target: { group: CHAIRS_GROUP },
+    members: [LIN],
+  })
+
+  // I7: the dry run captured the same intents as the live run, in order: the
+  // assignment email, the three reminders, the escalation and the registrar
+  // assignments after the approval.
+  expect(intents.map((entry) => entry.operation)).toEqual([
+    'send-assignment',
+    REMINDER_EMAIL,
+    REMINDER_EMAIL,
+    REMINDER_EMAIL,
+    ESCALATION_EMAIL,
+    'send-assignment',
+    'send-assignment',
+    'send-assignment',
+  ])
+  expect(instanceOf(state.log, INSTANCE_ID)?.currentStep).toBe(REGISTRAR_STEP)
+}, 60_000)
+
+test('#49 a timer fires a maximum of one time, and a restart near the deadline fires the escalation once (S12, I3)', () => {
+  // The log with every timer fired: a worker that delivered nothing yet
+  // delivers the assignment email and the four timers once, in log order.
+  const log = stateAt(golden.steps.slice(0, STEP.approve)).log
+  const fired = scheduled.map((timer) => timer.entry)
+  const all = outboxOf(log)
+  expect(all.slice(1)).toEqual(fired)
+  expect(deliver(log, new Set())).toEqual(all)
+  // A worker that recorded every key delivers nothing again (I3).
+  expect(deliver(log, new Set(all.map(sideEffectKey)))).toEqual([])
+  // A worker that stops after the reminders and restarts near the deadline
+  // delivers the escalation exactly one time (SE-4, I3).
+  const delivered = new Set(all.slice(0, 4).map(sideEffectKey))
+  expect(deliver(log, delivered)).toEqual([fired[3]])
+
+  // The engine's due checks agree with the firings (SE-3, SE-4, I6).
+  const held = instanceAt(golden.steps.slice(0, STEP.reminder1))
+  expect(dueReminders(held, timers, SINCE + DAY)).toHaveLength(1)
+  expect(dueReminders(held, timers, SINCE + 3 * DAY)).toHaveLength(3)
+  expect(dueEscalation(held, timers, SINCE + 3 * DAY - 1)).toBeUndefined()
+  expect(dueEscalation(held, timers, SINCE + 3 * DAY)).toEqual(fired[3])
+})
+
+test('#49 a completion before the deadline cancels the pending timers in the same event (S12, SE-5, I2)', () => {
+  // Dr. Okafor approves after the first reminder, two days before the
+  // deadline: the one completion event records the keys of the timers it
+  // cancelled, emits no reminder and no escalation, and afterwards no timer of
+  // the task is due.
+  const held = instanceAt(golden.steps.slice(0, STEP.reminder2))
+  const done = completeBeforeDeadline(
     held,
     OKAFOR,
-    APPROVE,
+    'approve',
     held.version ?? 0,
-    { flow: SLUG, definition, grants: okaforGrants },
+    { flow: SLUG, definition, grants: grantsOfPerson(OKAFOR), resolve: directory(values) },
     timers,
-    deps
+    deps(STEP.reminder2)
   )
   expect(done.accepted).toBe(true)
   expect(done.operation?.type).toBe(STEP_COMPLETED)
-  if (done.operation === undefined) throw new Error(`the completion was refused: ${done.reason}`)
-  // The completion records the keys of the timers that it cancelled, in the one
-  // event (SE-5, I2).
-  expect(done.cancelled).toEqual(fired)
-  expect(done.operation.payload[CANCELLED_TIMERS]).toEqual(fired.map(sideEffectKey))
-  // It emits no timer side effect (SE-5): the log carries only the submit's
-  // task-assigned email (SE-2).
-  expect(done.operation.payload.outbox).toBeUndefined()
-  const after = apply(done.operation, state)
-  expect(outboxOf(after.log)).toEqual(assignmentEmails)
-  // The task is no longer open, so none of its timers is due any more (SE-5).
-  expect(done.instance.currentStep).toBeUndefined()
-  expect(dueReminders(done.instance, timers, NOW + 3 * DAY)).toEqual([])
-  expect(dueEscalation(done.instance, timers, NOW + 3 * DAY)).toBeUndefined()
-
-  // (d) I7: the same timer steps run dry and live give the same side-effect
-  // intents, and a live run commits them with the state change (I2).
-  const steps: readonly Step[] = fired.map((entry) => ({
-    type: 'timer.fired@1',
-    payload: { instance: INSTANCE, step: ADVISOR_STEP },
-    outbox: [entry],
-  }))
-  const live = runSteps(steps, { clock: () => NOW, ids: idGen(), sink: 'live' })
-  const dry = runSteps(steps, { clock: () => NOW, ids: idGen(), sink: 'dry' })
-  expect(live.intents).toEqual(fired)
-  expect(dry.intents).toEqual(live.intents)
-  expect(outboxOf(live.state.log)).toEqual(fired)
-  expect(dry.state.log).toEqual([])
+  const cancelled = scheduled.map((timer) => sideEffectKey(timer.entry))
+  expect(done.cancelled.map(sideEffectKey)).toEqual(cancelled)
+  expect(done.operation?.payload[CANCELLED_TIMERS]).toEqual(cancelled)
+  // The completion carries the registrar step's assignment emails and no
+  // timer side effect (SE-5, SE-2).
+  const outbox =
+    done.operation === undefined
+      ? []
+      : outboxOf([{ ...done.operation, seq: 1, operationId: done.operation.id }])
+  expect(outbox.map((entry) => entry.operation)).toEqual([
+    'send-assignment',
+    'send-assignment',
+    'send-assignment',
+  ])
+  expect(done.instance.currentStep).toBe(REGISTRAR_STEP)
+  expect(
+    dueReminders({ ...done.instance, currentStep: undefined }, timers, SINCE + 3 * DAY)
+  ).toEqual([])
+  // The fixture's definition without timers schedules nothing on the step (SE-3).
+  expect(definitionV1.steps[1].reminderMinutes).toBeUndefined()
 })
