@@ -549,7 +549,25 @@ export async function mountApp(options: AppOptions): Promise<void> {
    * holder. An accepted claim or completion re-reads the instance, so the page
    * never shows the version it just left (I5).
    */
+  // The newest render of the task page wins (#260, RT-1): an action re-enters
+  // renderTask with its outcome while the change it made also reaches the page
+  // over the channel, and two reads in flight must not each paint the page.
+  let taskRender = 0
   const renderTask = async (slug: string, instanceId: string, flash?: string): Promise<void> => {
+    const token = ++taskRender
+    // The action the page just took may end the actor's right to read the
+    // instance: a send back to the request form makes it the starter's private
+    // draft (ADR 0014, D1). The page then keeps the outcome it showed and says
+    // why the instance is gone, rather than going blank (A4).
+    let view: InstanceView | undefined
+    let refused: RequestRefused | undefined
+    try {
+      view = await readInstance(instanceId, actor)
+    } catch (error: unknown) {
+      if (!(error instanceof RequestRefused && error.status === 403)) throw error
+      refused = error
+    }
+    if (token !== taskRender) return
     // A claim or a completion re-enters this function, so it clears the page
     // itself; a nested read must not leave the old version above the new one.
     clearPage()
@@ -562,23 +580,13 @@ export async function mountApp(options: AppOptions): Promise<void> {
       completed.textContent = flash
       main.appendChild(completed)
     }
-    // The action the page just took may end the actor's right to read the
-    // instance: a send back to the request form makes it the starter's private
-    // draft (ADR 0014, D1). The page then keeps the outcome it showed and says
-    // why the instance is gone, rather than going blank (A4).
-    let view: InstanceView
-    try {
-      view = await readInstance(instanceId, actor)
-    } catch (error: unknown) {
-      if (error instanceof RequestRefused && error.status === 403) {
-        const gone = document.createElement('p')
-        gone.className = 'status'
-        gone.dataset.notReadable = ''
-        gone.textContent = `You can no longer read this instance: ${error.error}`
-        main.appendChild(gone)
-        return
-      }
-      throw error
+    if (view === undefined) {
+      const gone = document.createElement('p')
+      gone.className = 'status'
+      gone.dataset.notReadable = ''
+      gone.textContent = `You can no longer read this instance: ${refused?.error ?? ''}`
+      main.appendChild(gone)
+      return
     }
     const instanceStatus = document.createElement('p')
     instanceStatus.className = 'instance-status'

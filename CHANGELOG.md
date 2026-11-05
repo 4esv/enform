@@ -125,6 +125,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- The task page paints once when an action and the realtime change it caused both re-render it: the newest render wins over a read still in flight, so the done control and the outcome buttons no longer appear twice (#260, RT-1, A4).
 - The instance projection folds the worker's connector call records, so an undo through the API marks the side effects that already occurred as "Already sent" (#53, S16, A2, I13).
 - A takeover by the holder of the task is refused, and the person a takeover took the task from may undo it, like its actor and a flow owner (#47, S10, AS-3, WF-5).
 - An intent the engine refuses for what the principal may do (a missing start scope, a claim by a non-assignee, a completion by someone who does not hold the step, an outcome the holder's grants do not cover) answers 403, not 400 or 409 (#256, I8, AC-1, AC-4).
