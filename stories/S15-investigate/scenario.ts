@@ -1,7 +1,9 @@
 import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import type { State } from '../../engine/apply.js'
 import { DEFINITION_CHANGED } from '../../engine/definition.js'
 import { createFlow, DEFINITION_PUBLISHED, publish, push } from '../../engine/flow.js'
 import { addGrant, GRANT_CHANGE_TYPE } from '../../engine/grants.js'
+import { instanceOf, type ProjectedInstance } from '../../engine/instances.js'
 import {
   INSTANCE_STARTED,
   INSTANCE_SUBMITTED,
@@ -33,11 +35,13 @@ import {
   LIN,
   membership,
   OKAFOR,
+  PRIYA,
   REGISTRAR_TEAM,
   SAM,
   SLUG,
   samValues,
   setupSteps,
+  stateAfter,
   stepResource,
 } from '../example-flow.js'
 
@@ -171,3 +175,108 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S15: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/**
+ * The server state the interface path starts from (#269, S15): the request
+ * submitted and Dana's four changes recorded. The seed's operation ids are
+ * prefixed, so the browser's `op-1` is a new operation and not a retry of
+ * the seed's first one (I1).
+ */
+export function guiSeed(): State {
+  const state = stateAfter(golden.steps.slice(0, STEP.okaforClaim))
+  const log = state.log.map((event) => ({ ...event, operationId: `seed-${event.operationId}` }))
+  return { applied: new Set(log.map((event) => event.operationId)), log }
+}
+
+/**
+ * The interface path of S15 (STORIES.md): Priya opens the instance timeline,
+ * toggles the flow's changes in and reads them between the instance events
+ * in one order, each with its author and the definition change with a link
+ * to its difference (VT-5, I4, I14); then Dr. Okafor claims and approves.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const instanceAt = (): ProjectedInstance => {
+    const log = [...seed.log, ...stateAfter(steps).log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S15 gui: no instance')
+    return instance
+  }
+  const resolve = resolverFor(
+    SAM,
+    values,
+    new Map([[REGISTRAR_TEAM, [LEE, ANA]]]),
+    new Map([[CHAIRS_GROUP, [LIN]]])
+  )
+  const okaforClaim = claim(instanceAt(), OKAFOR, 1, depsFor(0))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const okaforApprove = complete(
+    instanceAt(),
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    depsFor(1)
+  )
+  if (okaforApprove.operation === undefined) throw new Error(okaforApprove.reason)
+  steps.push(
+    declared(okaforApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'investigate',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      // Priya, who follows the flow, toggles its changes into the timeline: the publication,
+      // the grant and the team change show in log order with their author,
+      // and the definition change links to its difference (VT-5, DF-6).
+      instance: INSTANCE_ID,
+      actor: PRIYA,
+      steps: 0,
+      actions: [
+        { click: '[data-timeline-changes]' },
+        { expectSelector: '[data-timeline-type="config.definition.published@1"]' },
+        { expectSelector: '[data-timeline-type="config.grant.changed@1"]' },
+        { expectSelector: '[data-timeline-type="config.team.changed@1"]' },
+        {
+          expectSelector:
+            '[data-timeline-type="config.definition.published@1"] [data-timeline-diff]',
+        },
+        {
+          expectOrder: [
+            '[data-timeline-type="instance.submitted@1"]',
+            '[data-timeline-type="config.definition.published@1"]',
+            '[data-timeline-type="config.grant.changed@1"]',
+            '[data-timeline-type="config.team.changed@1"]',
+          ],
+        },
+      ],
+    },
+    { instance: INSTANCE_ID, actions: [{ click: '[data-claim]' }, { expect: 'Claimed' }] },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-outcome="approve"]' },
+        // The notification names the outcome; Dr. Okafor's read of the instance
+        // ends with the step, so the page says so beside it (A4).
+        { expectSelector: '[data-toast]' },
+      ],
+    },
+  ],
+})

@@ -330,3 +330,79 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S12: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/**
+ * The server state the interface path starts from (#269, S12): the three
+ * reminders and the escalation fired. The seed's operation ids are prefixed,
+ * so the browser's `op-1` is a new operation and not a retry of the seed's
+ * first one (I1).
+ */
+export function guiSeed(): State {
+  const state = stateAt(golden.steps.slice(0, STEP.approve))
+  const log = state.log.map((event) => ({ ...event, operationId: `seed-${event.operationId}` }))
+  return { applied: new Set(log.map((event) => event.operationId)), log }
+}
+
+/**
+ * The interface path of S12 (STORIES.md): in live, the step tracker shows
+ * the due date, the reminders the worker sent and the escalation (VT-2, SE-3,
+ * SE-4); then Dr. Okafor approves. The seed holds the fired timers; the gui
+ * run posts only the approval, which the api run posts the same way.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const resolve = directory(values)
+  const instance = instanceOf(seed.log, INSTANCE_ID)
+  if (instance === undefined) throw new Error('S12 gui: no instance')
+  const approved = complete(
+    instance,
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    // The gui scenario's first step: its id and time are the browser's (I6).
+    { clock: () => clock(STEP.approve), ids: () => 'op-1' }
+  )
+  if (approved.operation === undefined) throw new Error(approved.reason)
+  return [
+    declared(approved.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    }),
+  ]
+}
+
+export const guiGolden = scenario({
+  slug: 'reminders-escalation',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  clock: (index) => clock(STEP.approve + index),
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      // Dr. Okafor reads his task: due at the deadline, three reminders sent
+      // and the escalation fired, as the worker recorded them (VT-2).
+      instance: INSTANCE_ID,
+      actor: OKAFOR,
+      steps: 0,
+      actions: [
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="opened"]' },
+        { expectSelector: '[data-tracker-step="advisor"] [data-tracker-due]' },
+        { expectSelector: '[data-tracker-step="advisor"] [data-tracker-reminder]' },
+        { expectSelector: '[data-tracker-step="advisor"] [data-tracker-escalated]' },
+      ],
+    },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-outcome="approve"]' },
+        // The notification names the outcome; Dr. Okafor's read of the instance
+        // ends with the step, so the page says so beside it (A4).
+        { expectSelector: '[data-toast]' },
+      ],
+    },
+  ],
+})

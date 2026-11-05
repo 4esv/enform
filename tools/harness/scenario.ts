@@ -59,6 +59,8 @@ export type GuiAction =
   | { readonly expectDom: GuiDomExpectation }
   /** Wait until the selector matches an element (a tracker state, a marker). */
   | { readonly expectSelector: string }
+  /** Wait until each selector matches, and the newest match of each appears in this document order (S15, I4). */
+  | { readonly expectOrder: readonly string[] }
   /** Wait until the element's text is the given text (a sync marker, the mode). */
   | { readonly expectText: { readonly selector: string; readonly text: string } }
   /** Wait until the field's control holds the value (a restored draft, RT-4). */

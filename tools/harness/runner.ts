@@ -386,6 +386,29 @@ async function performGuiActions(
       await expectFieldDom(page, action.expectDom)
     } else if ('expectSelector' in action) {
       await page.locator(action.expectSelector).first().waitFor({ timeout: 10_000 })
+    } else if ('expectOrder' in action) {
+      // The elements the selectors name appear in document order (I4): a
+      // timeline keeps the log's one global order. Each selector names its
+      // newest match, so a type that occurs twice is read at its last entry.
+      await page.waitForFunction(
+        (selectors) => {
+          const elements = selectors.map((selector) => {
+            const matches = document.querySelectorAll(selector)
+            return matches.length === 0 ? null : matches[matches.length - 1]
+          })
+          if (elements.some((element) => element === null)) return false
+          for (let i = 1; i < elements.length; i += 1) {
+            const before = elements[i - 1]
+            const after = elements[i]
+            if (before === null || after === null) return false
+            if (!(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING))
+              return false
+          }
+          return true
+        },
+        [...action.expectOrder],
+        { timeout: 10_000 }
+      )
     } else if ('expectValue' in action) {
       await page.waitForFunction(
         ({ field, value }) =>
