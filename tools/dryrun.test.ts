@@ -73,7 +73,7 @@ const resolve: TargetResolver = (target) => {
 
 const DAY = 24 * 60 * 60_000
 
-test.fails('#264 DR-1 S05 S08 a dry run routes the data, names the skipped step with its condition, and explains who each step goes to', async () => {
+test('#264 DR-1 S05 S08 a dry run routes the data, names the skipped step with its condition, and explains who each step goes to', async () => {
   const { dryRun } = await dryrun()
   const small = dryRun({
     definition,
@@ -113,7 +113,7 @@ test.fails('#264 DR-1 S05 S08 a dry run routes the data, names the skipped step 
   expect(large.route.skipped).toEqual([])
 })
 
-test.fails('#264 DR-4 S12 a simulated clock moved forward fires the reminders and the escalation of the first step', async () => {
+test('#264 DR-4 S12 a simulated clock moved forward fires the reminders and the escalation of the first step', async () => {
   const { dryRun } = await dryrun()
   const data = { overload_credits: 2, advisor: 'user:okafor' }
   const base = { definition, data, actor: 'user:sam', resolve, now: 1_000 }
