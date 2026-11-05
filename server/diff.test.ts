@@ -167,7 +167,7 @@ type Diff = {
   changes: { path: string; class: string; actor?: string; at?: number }[]
 }
 
-test.fails('#264 DF-6 S03 S04 the diff between two points names each change with its author, and defaults to the parent', async () => {
+test('#264 DF-6 S03 S04 the diff between two points names each change with its author, and defaults to the parent', async () => {
   appended.length = 0
   const pool = sessionPool([editGrant])
   const between = await read(pool, '?from=1&to=2')
@@ -201,7 +201,7 @@ test.fails('#264 DF-6 S03 S04 the diff between two points names each change with
   expect(appended).toEqual([])
 })
 
-test.fails('#264 I8 a version needs a flow read scope, the draft needs a draft scope, and a bad point is refused', async () => {
+test('#264 I8 a version needs a flow read scope, the draft needs a draft scope, and a bad point is refused', async () => {
   const starter = sessionPool([startGrant])
   expect((await read(starter, '?from=1&to=2')).status).toBe(200)
   expect((await read(starter, '?to=draft')).status).toBe(403)
