@@ -19,7 +19,7 @@ import { nextStep, STEP_CLAIMED, STEP_COMPLETED } from './action.js'
 import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
-import { MINUTE_MS } from './reminders.js'
+import { MINUTE_MS, TIMER_FIRED } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
@@ -75,6 +75,14 @@ export type TrackerStep = {
   readonly dueAt?: number
   /** The Unroutable queue of the current unopened step (I10, AS-5); absent when the task resolved to a person. */
   readonly queue?: string
+  /**
+   * When the newest reminder for the step fired (S12, SE-3, VT-2), from the
+   * worker's `timer.fired@1` event; absent until one fired since the instance
+   * entered the step.
+   */
+  readonly reminderSentAt?: number
+  /** When the escalation of the step fired (S12, SE-4, VT-2); absent until it did. */
+  readonly escalatedAt?: number
 }
 
 /**
@@ -105,6 +113,10 @@ type Folded = {
   readonly starts: ReadonlyMap<string, number>
   /** The newest event for each step (VT-2, S14). */
   readonly activities: ReadonlyMap<string, number>
+  /** The newest reminder that fired for each step (S12, SE-3). */
+  readonly reminders: ReadonlyMap<string, number>
+  /** The escalation that fired for each step (S12, SE-4). */
+  readonly escalations: ReadonlyMap<string, number>
   readonly currentStep?: string
   readonly holder?: ActorId
   readonly queue?: string
@@ -122,6 +134,8 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
   const comments = new Map<string, string>()
   const starts = new Map<string, number>()
   const activities = new Map<string, number>()
+  const reminders = new Map<string, number>()
+  const escalations = new Map<string, number>()
   let currentStep = instance.currentStep
   let holder = instance.holder
   let queue = instance.queue
@@ -237,6 +251,16 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       queue = stringField(event.payload, 'queue')
       continue
     }
+    if (event.type === TIMER_FIRED) {
+      // The worker's record of a reminder or the escalation (S12, SE-3,
+      // SE-4): the step shows when it fired, as the live view of the timers.
+      const step = stringField(event.payload, 'step')
+      const kind = stringField(event.payload, 'kind')
+      if (step === undefined) continue
+      if (kind === 'reminder') reminders.set(step, event.at)
+      if (kind === 'escalation') escalations.set(step, event.at)
+      continue
+    }
     if (event.type === STEP_SKIPPED) {
       const step = stringField(event.payload, 'step')
       if (step === undefined) continue
@@ -261,7 +285,18 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       queue = undefined
     }
   }
-  return { states, conditions, comments, starts, activities, currentStep, holder, queue }
+  return {
+    states,
+    conditions,
+    comments,
+    starts,
+    activities,
+    reminders,
+    escalations,
+    currentStep,
+    holder,
+    queue,
+  }
 }
 
 /** The events that name this instance (I4); an instance without an id owns none. */
@@ -308,7 +343,23 @@ function entry(step: FlowStep, folded: Folded): TrackerStep {
     ...(state === 'unopened' && key === folded.currentStep && folded.queue !== undefined
       ? { queue: folded.queue }
       : {}),
+    ...firedSince(folded.reminders.get(key), folded.starts.get(key), 'reminderSentAt'),
+    ...firedSince(folded.escalations.get(key), folded.starts.get(key), 'escalatedAt'),
   }
+}
+
+/**
+ * One fired timer of the step as the tracker shows it (S12): only a firing
+ * since the instance entered the step counts, so a step that a send back
+ * reopened shows no reminder of its earlier round.
+ */
+function firedSince(
+  firedAt: number | undefined,
+  startAt: number | undefined,
+  key: 'reminderSentAt' | 'escalatedAt'
+): Partial<Record<'reminderSentAt' | 'escalatedAt', number>> {
+  if (firedAt === undefined || startAt === undefined || firedAt < startAt) return {}
+  return { [key]: firedAt }
 }
 
 /** One step that a `skipped` array records, with the condition that skipped it (S05, WF-1). */

@@ -329,6 +329,21 @@ export interface TimelineEntry {
   readonly comment?: string
   readonly reason?: string
   readonly call?: TimelineCall
+  readonly undone?: boolean
+  readonly undoes?: number
+  readonly alreadySent?: readonly AlreadySentEffect[]
+}
+
+/**
+ * One side effect of an undone event that already occurred (S16, A2): the connector operation
+ * that ran, the connector it ran on, the person it reached when its payload names one, and the
+ * status the timeline shows for it.
+ */
+export interface AlreadySentEffect {
+  readonly operation: string
+  readonly target: string
+  readonly to?: ActorId
+  readonly status: string
 }
 
 /**
@@ -376,6 +391,9 @@ export interface InstanceView {
   readonly canWithdraw: boolean
   readonly canCancel: boolean
   readonly canTakeOver: boolean
+  readonly canRelease: boolean
+  readonly canReassign: boolean
+  readonly undoable?: Record<string, unknown>
   readonly takeoverAvailableAt?: number
   readonly rebound?: Record<string, unknown>
 }
@@ -407,6 +425,8 @@ export interface TrackerStep {
   readonly startAt?: number
   readonly lastActivityAt?: number
   readonly dueAt?: number
+  readonly reminderSentAt?: number
+  readonly escalatedAt?: number
 }
 
 /**
