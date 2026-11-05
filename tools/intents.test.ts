@@ -102,13 +102,14 @@ test('#256 a submit intent resolves into the routed submission with its assignme
   ])
 })
 
-test.fails('#256 I8 an intent the engine refuses for authorization answers 403, not 400 or 409', async () => {
+test('#256 I8 an intent the engine refuses for authorization answers 403, not 400 or 409', async () => {
   const { resolveClientOperation } = await import('../server/intents.js')
   let state = publishedState()
+  // The grants that apply to the acting principal, as the server reads them (AC-1).
   const context = (actor: string) => ({
     log: state.log,
     principal: { id: actor, groups: [] },
-    grants,
+    grants: grants.filter((grant) => grant.principal === actor),
     resolver: () => resolve,
     now: () => 10,
   })

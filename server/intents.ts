@@ -253,12 +253,16 @@ export function resolveClientOperation(
     return { status: 400, error: `the operation type ${String(body.type)} is not served` }
   } catch (error) {
     if (error instanceof CompletionRefused) {
-      return { status: 409, error: error.message, errors: error.errors }
+      return { status: refusalStatus(error.message), error: error.message, errors: error.errors }
     }
     if (error instanceof SubmitRefused) {
       return { status: error.status, error: error.message, errors: error.errors }
     }
-    return { status: 400, error: messageOf(error) }
+    const message = messageOf(error)
+    // The start refuses a principal without instance.start by throwing (AC-1):
+    // that is an authorization refusal, and answers 403 like the others.
+    if (refusalStatus(message) === 403) return { status: 403, error: message }
+    return { status: 400, error: message }
   }
 }
 
@@ -294,7 +298,7 @@ function claimOperation(
     ids: () => body.id as string,
   })
   if (!result.accepted || result.operation === undefined) {
-    return { status: 409, error: result.reason ?? 'the claim was refused' }
+    return { status: refusalStatus(result.reason), error: result.reason ?? 'the claim was refused' }
   }
   return { operation: result.operation }
 }
@@ -723,6 +727,30 @@ function reassignOperation(context: IntentContext, body: Record<string, unknown>
 /** The engine fields that only a resolved takeover carries (S10, ADR 0010). */
 function hasEngineTakeoverField(payload: Record<string, unknown>): boolean {
   return ['step', 'from', 'to', 'when', 'why', 'outbox'].some((key) => payload[key] !== undefined)
+}
+
+/**
+ * The HTTP status of an engine refusal (MVP.md 5.6, I8, #256): 403 when the
+ * engine refused the principal for what it may do (a scope it lacks, a task
+ * it is not assigned to or does not hold, an instance it did not start), and
+ * 409 when it refused the state the principal acted on (a stale view, a task
+ * already held, a draft, a closed instance).
+ */
+function refusalStatus(reason: string | undefined): 403 | 409 {
+  if (reason === undefined) return 409
+  const authorization = [
+    'requires the scope',
+    'lacks ',
+    'is not an assignee',
+    'does not hold the step',
+    'is not the starter',
+    'neither holds the task nor holds',
+    'did not withdraw or cancel',
+    '(AC-1)',
+    '(AC-4)',
+    '(AC-5)',
+  ]
+  return authorization.some((phrase) => reason.includes(phrase)) ? 403 : 409
 }
 
 /** The HTTP status of a takeover refusal: authorization is 403, every other refusal is 409. */
