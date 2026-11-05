@@ -109,24 +109,19 @@ function submitted(): State {
   return apply(sent.operation, state)
 }
 
-/** The outcomes the actor may choose, as the view will carry them (#264). */
-function allowed(view: unknown): readonly string[] | undefined {
-  return (view as { allowedOutcomes?: readonly string[] } | undefined)?.allowedOutcomes
-}
-
-test.fails('#264 S02 AC-4 the read names the outcomes the actor may choose, and only those', () => {
+test('#264 S02 AC-4 the read names the outcomes the actor may choose, and only those', () => {
   const state = submitted()
   const instance = instanceOf(state.log, INSTANCE_ID)
   if (instance === undefined) throw new Error('the log holds no instance')
   const context = (grants: readonly Grant[]) => ({ flow: SLUG, definition, log: state.log, grants })
   const jordan = readInstance(JORDAN, instance, context(jordanGrants), resolve)
   expect(jordan?.outcomes).toEqual(['approve', 'reject', 'send_back'])
-  expect(allowed(jordan)).toEqual(['send_back'])
+  expect(jordan?.allowedOutcomes).toEqual(['send_back'])
   // A grant on the flow covers its steps (MVP.md 5.6).
   const lee = readInstance(LEE, instance, context(leeGrants), resolve)
-  expect(allowed(lee)).toEqual(['approve', 'reject'])
+  expect(lee?.allowedOutcomes).toEqual(['approve', 'reject'])
   // The starter reads the instance but may choose no outcome of the registrar step.
   const sam = readInstance(SAM, instance, context(samGrants), resolve)
   expect(sam?.outcomes).toEqual(['approve', 'reject', 'send_back'])
-  expect(allowed(sam)).toEqual([])
+  expect(sam?.allowedOutcomes).toEqual([])
 })

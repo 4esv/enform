@@ -2141,6 +2141,7 @@ components:
         - values
         - fields
         - outcomes
+        - allowedOutcomes
         - version
         - previousSteps
         - notes
@@ -2220,6 +2221,15 @@ components:
           description: >-
             The outcomes the current step offers (AC-4, WF-2), in definition
             order; empty when the step declares none or no step is open.
+          items:
+            type: string
+        allowedOutcomes:
+          type: array
+          description: >-
+            The outcomes of the current step the acting principal may choose
+            (AC-4, S02): a `step.outcome:<name>` scope on the step or on the
+            flow allows that outcome and no other. The page offers these
+            alone, so a reviewer with `send_back` only sees Send back.
           items:
             type: string
         previousSteps:

@@ -128,6 +128,13 @@ export type InstanceView = {
   /** The outcomes the current step offers (AC-4, WF-2); empty when it declares none. */
   readonly outcomes: readonly string[]
   /**
+   * The outcomes of the current step the acting principal may choose (AC-4,
+   * S02, #264): a `step.outcome:<name>` scope on the step or on the flow
+   * allows that outcome and no other. The page offers these alone, so it
+   * never shows a control the engine would refuse (A9, I8).
+   */
+  readonly allowedOutcomes: readonly string[]
+  /**
    * The version of the instance that this read reflects (I5, #222). A client
    * sends it back with a completion or a claim, so a stale view is refused at
    * once rather than overwriting a newer decision.
@@ -294,6 +301,7 @@ function viewForStep(
   let collapsed: readonly string[] = []
   let fields: readonly InstanceViewField[] = []
   let outcomes: readonly string[] = []
+  let allowedOutcomes: readonly string[] = []
   if (formStep !== undefined) {
     const state = evaluateRules(formStep, current.values ?? {}, actor)
     visible = fieldKeys(formStep).filter(
@@ -313,6 +321,10 @@ function viewForStep(
         ...(field.options === undefined ? {} : { options: [...field.options] }),
       }))
     outcomes = formStep.outcomes ?? []
+    const resource = `flow:${context.flow}/step:${formStep.key}`
+    allowedOutcomes = outcomes.filter((outcome) =>
+      authorize(context.grants, `step.outcome:${outcome}`, resource)
+    )
   }
   const takeover = takeoverView(current, actor, currentStep, context.log)
   return {
@@ -326,6 +338,7 @@ function viewForStep(
     values: restrict(current.values, visible),
     fields,
     outcomes,
+    allowedOutcomes,
     version: current.version ?? 0,
     previousSteps: stepsBefore(context.definition, current.currentStep),
     notes: visibleNotes(
