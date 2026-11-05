@@ -155,3 +155,5 @@ vite.config.ts.timestamp-*
 
 # Test runner artifacts
 .vitest/
+# Site output
+site/

@@ -28,18 +28,14 @@ let pages: readonly Page[] = []
 
 beforeAll(() => {
   out = mkdtempSync(join(tmpdir(), 'enform-site-'))
-  try {
-    pages = buildSite({ outDir: out, baseUrl: BASE }) as readonly Page[]
-  } catch {
-    pages = []
-  }
+  pages = buildSite({ outDir: out, baseUrl: BASE }) as readonly Page[]
 })
 
 afterAll(() => {
   if (out !== '') rmSync(out, { recursive: true, force: true })
 })
 
-test.fails('#266 the site renders every guide page, the charter and the ADRs with SEO metadata', () => {
+test('#266 the site renders every guide page, the charter and the ADRs with SEO metadata', () => {
   const guide = readdirSync(join(REPO, 'docs')).filter((name) => name.endsWith('.md'))
   const adrs = readdirSync(join(REPO, 'docs', 'adr')).filter(
     (name) => /^\d{4}-.*\.md$/.test(name) && !name.startsWith('0000-')
@@ -73,7 +69,7 @@ test.fails('#266 the site renders every guide page, the charter and the ADRs wit
   }
 })
 
-test.fails('#266 every internal link of the site resolves to a page, and the sitemap and robots name them all', () => {
+test('#266 every internal link of the site resolves to a page, and the sitemap and robots name them all', () => {
   const written = new Set(pages.map((page) => `${BASE}${page.path}`))
   for (const page of pages) {
     const html = readFileSync(join(out, page.path, 'index.html'), 'utf8')
@@ -93,7 +89,7 @@ test.fails('#266 every internal link of the site resolves to a page, and the sit
   expect(existsSync(join(out, '.nojekyll'))).toBe(true)
 })
 
-test.fails('#266 the API page lists every operation of the OpenAPI document', () => {
+test('#266 the API page lists every operation of the OpenAPI document', () => {
   const api = readFileSync(join(out, 'api', 'index.html'), 'utf8')
   for (const operation of [
     'POST /api/v1/operations',
