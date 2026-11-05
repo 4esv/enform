@@ -83,7 +83,7 @@ function routedState(): State {
   return apply(submitted.operation, state)
 }
 
-test.fails('#267 AS-4 a claim resolves a team live: a member who joined after routing claims the task', () => {
+test('#267 AS-4 a claim resolves a team live: a member who joined after routing claims the task', () => {
   const state = routedState()
   const instance = instanceOf(state.log, 'inst-1')
   if (instance === undefined) throw new Error('not projected')

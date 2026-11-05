@@ -221,7 +221,7 @@ export function resolveClientOperation(
       return { operation }
     }
     if (body.type === STEP_CLAIMED) {
-      return claimOperation(log, principal, body)
+      return claimOperation(context, body)
     }
     if (body.type === GRANT_CHANGE_TYPE) {
       return grantOperation(body, principal, grants)
@@ -267,16 +267,14 @@ export function resolveClientOperation(
 }
 
 /**
- * Apply a claim through the engine (S09, AS-2, I5, #222). The request carries
- * the instance version it read as `expectedVersion`; the engine checks it and
- * records the claim, so the field never reaches the log. The session principal
- * is the actor, and a refusal answers 409 with the reason.
+ * Apply a claim through the engine (S09, AS-2, AS-4, I5, #222, #267). The
+ * request carries the instance version it read as `expectedVersion`; the
+ * engine checks it and records the claim, so the field never reaches the log.
+ * The session principal is the actor, the team and group targets resolve live
+ * through the request's directory, and a refusal answers 409 with the reason.
  */
-function claimOperation(
-  log: Log,
-  principal: ActingPrincipal,
-  body: Record<string, unknown>
-): IntentResult {
+function claimOperation(context: IntentContext, body: Record<string, unknown>): IntentResult {
+  const { log, principal } = context
   const payload = isRecord(body.payload) ? body.payload : undefined
   const instanceId = stringValue(payload?.instanceId)
   const expectedVersion = payload?.expectedVersion
@@ -293,10 +291,15 @@ function claimOperation(
   if (instance === undefined) {
     return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
   }
-  const result = claim(instance, principal.id, expectedVersion, {
-    clock: () => body.at as number,
-    ids: () => body.id as string,
-  })
+  // The team and the group targets resolve live at the claim (AS-4, #267):
+  // the directory of the request answers who the team holds now.
+  const result = claim(
+    instance,
+    principal.id,
+    expectedVersion,
+    { clock: () => body.at as number, ids: () => body.id as string },
+    context.resolver(instance.starter, instance.values ?? {})
+  )
   if (!result.accepted || result.operation === undefined) {
     return { status: refusalStatus(result.reason), error: result.reason ?? 'the claim was refused' }
   }

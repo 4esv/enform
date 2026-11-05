@@ -31,7 +31,7 @@ import {
   randomState,
 } from 'openid-client'
 import type { Pool } from 'pg'
-import { STEP_COMPLETED } from '../engine/action.js'
+import { STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { type FlowDefinition, type JsonValue, parse } from '../engine/definition.js'
 import { definitionDiff, type VersionRef } from '../engine/diff.js'
@@ -144,6 +144,7 @@ const ROUTING_INTENTS: ReadonlySet<string> = new Set([
   INSTANCE_SUBMITTED,
   STEP_COMPLETED,
   STEP_SENT_BACK,
+  STEP_CLAIMED,
 ])
 
 /** The running HTTP server and the way to drain it (DE-3). */
@@ -1257,10 +1258,10 @@ async function serveOperation(
   }
   const log = await readLog(pool)
   // The directory is read once per request (AS-4, #252), and only for an
-  // intent that routes a step: the team projection and the Keycloak groups,
-  // so every resolution in this request reads one snapshot. A grant or a
-  // claim never touches the directory. The resolver itself is pure
-  // (server/intents.ts).
+  // intent that routes a step or claims one (#267): the team projection and
+  // the Keycloak groups, so every resolution in this request reads one
+  // snapshot. A grant never touches the directory. The resolver itself is
+  // pure (server/intents.ts).
   const routes = ROUTING_INTENTS.has(String(body.type))
   const teamMembers = routes ? await teamMembersFor(pool, log) : new Map()
   const groupMembers = routes ? await groupMembersFor(config) : new Map()

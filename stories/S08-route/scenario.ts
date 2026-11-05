@@ -322,7 +322,9 @@ export const requires: Requirements = (step, index) => {
     case INSTANCE_SUBMITTED:
       return { actors: [SAM] }
     case STEP_CLAIMED:
-      return { actors: index === STEP.okaforClaim ? [OKAFOR] : INITIAL_REGISTRARS }
+      // The registrar claim is open to the team's current members (AS-4,
+      // #267): Lee and Jordan, and Ana once she joined at the step before.
+      return { actors: index === STEP.okaforClaim ? [OKAFOR] : [...INITIAL_REGISTRARS, ANA] }
     case STEP_COMPLETED:
       return index === STEP.okaforApprove
         ? { scope: 'step.outcome:approve', resource: stepResource(ADVISOR_STEP), actors: [OKAFOR] }

@@ -134,6 +134,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- A claim resolves a team or a group live through the directory, like a read does, so a member who joined the team while the task was open can claim it with no new publication; the instance keeps the snapshot it recorded at routing (#267, AS-4, I13, S08).
 - The task page paints once when an action and the realtime change it caused both re-render it: the newest render wins over a read still in flight, so the done control and the outcome buttons no longer appear twice (#260, RT-1, A4).
 - The instance projection folds the worker's connector call records, so an undo through the API marks the side effects that already occurred as "Already sent" (#53, S16, A2, I13).
 - A takeover by the holder of the task is refused, and the person a takeover took the task from may undo it, like its actor and a flow owner (#47, S10, AS-3, WF-5).

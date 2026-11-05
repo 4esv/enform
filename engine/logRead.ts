@@ -14,7 +14,7 @@ import { authorize, type Grant } from './authorize.js'
 import { publishedByHash } from './flow.js'
 import { instanceOf, type ProjectedInstance } from './instances.js'
 import type { ActorId, Event, Log } from './operation.js'
-import { isLiveTarget } from './resolve.js'
+import { refreshLiveTargets } from './resolve.js'
 import type { TargetResolver } from './routing.js'
 import { mayRead } from './status.js'
 import { flowOf, isConfigChange } from './timeline.js'
@@ -95,10 +95,5 @@ function refreshLive(
   resolve: TargetResolver | undefined
 ): ProjectedInstance {
   if (resolve === undefined) return instance
-  return {
-    ...instance,
-    assignees: instance.assignees.map((assignee) =>
-      isLiveTarget(assignee.target) ? { ...assignee, members: resolve(assignee.target) } : assignee
-    ),
-  }
+  return { ...instance, assignees: refreshLiveTargets(instance.assignees, resolve) }
 }

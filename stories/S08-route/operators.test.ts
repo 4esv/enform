@@ -16,11 +16,14 @@ test('#45 the Actor operator does each S08 step as each person of the cast (S08)
 }, async () => {
   const variants = await operators.actor()
   expect(variants).toHaveLength(golden.steps.length * PEOPLE.length)
-  // Only Lee and Jordan, the team's members when the task was routed, may
-  // claim it (AS-4, I13); only Dana may change a team (AS-6).
+  // Lee and Jordan, the team's members when the task was routed, and Ana,
+  // who joined while the task was open, may claim it: a team resolves live at
+  // the claim (AS-4, #267), while the snapshot keeps Lee and Jordan (I13).
+  // Only Dana may change a team (AS-6).
   const claims = variants.filter((variant) => variant.stepIndex === STEP.leeClaim)
   expect(claims.filter((variant) => variant.expected === 'reached').map((v) => v.actor)).toEqual([
     'user:lee',
+    'user:ana',
     'user:jordan',
   ])
   const joins = variants.filter((variant) => variant.stepIndex === STEP.anaJoins)
