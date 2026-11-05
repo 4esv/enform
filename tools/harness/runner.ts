@@ -163,6 +163,8 @@ async function cliApply(operation: Operation, state: State, scenario: Scenario):
     JSON.stringify(scenario.bootstrap ?? []),
     '--membership',
     JSON.stringify(scenario.membership ?? {}),
+    '--managers',
+    JSON.stringify(scenario.managers ?? {}),
   ])
   let parsed: unknown
   try {
@@ -210,6 +212,7 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
     grants: options.grants,
     bootstrap: scenario.bootstrap,
     membership: scenario.membership,
+    managers: scenario.managers,
   })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -629,6 +632,7 @@ export async function withScenarioApi<T>(
   const api = startApi(seed, {
     bootstrap: scenario.bootstrap,
     membership: scenario.membership,
+    managers: scenario.managers,
   })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))

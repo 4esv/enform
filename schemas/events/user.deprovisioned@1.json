@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/user.deprovisioned@1.json",
+  "title": "enform user.deprovisioned@1 event payload",
+  "description": "The payload of a user.deprovisioned@1 event (#267, ID-5, I4, I14). The directory no longer holds the principal: the event names the account and the tasks the deprovision returned to the pool, each of which is its own task.released@1 event with the reason. The actor is the person with org.grants who deprovisioned the account, or system:directory when the directory synchronization did.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["principal", "released"],
+  "properties": {
+    "principal": {
+      "description": "The immutable id of the deprovisioned user (ID-4).",
+      "type": "string"
+    },
+    "released": {
+      "description": "The tasks the user held and the deprovision released (A1, WF-5), in the order of the release events.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["instanceId", "step"],
+        "properties": {
+          "instanceId": {
+            "description": "The id of the instance (DX-1).",
+            "type": "string"
+          },
+          "step": {
+            "description": "The step whose task was released (WF-1).",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

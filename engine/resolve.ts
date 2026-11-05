@@ -93,6 +93,23 @@ export function refreshAssignees(
 }
 
 /**
+ * Re-resolve the live targets of an instance through a target resolver (AS-4,
+ * #267): the same refresh as `refreshAssignees`, for a caller that holds the
+ * resolver of a request rather than a membership. A group or a team is asked
+ * again, so a member who joined after routing is an assignee and a member who
+ * left is not; a dynamic target keeps the members the instance recorded (I13)
+ * and the resolver is not asked for it.
+ */
+export function refreshLiveTargets(
+  assignees: readonly Assignee[],
+  resolve: TargetResolver
+): readonly Assignee[] {
+  return assignees.map((assignee) =>
+    isLiveTarget(assignee.target) ? { ...assignee, members: resolve(assignee.target) } : assignee
+  )
+}
+
+/**
  * The reason that the timeline records for an unroutable task (AS-5, A8, I10):
  * the step and the targets that resolved to nobody, so a reader finds why the
  * task is in the queue. It is a pure function of the step and its assignees

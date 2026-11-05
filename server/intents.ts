@@ -18,7 +18,7 @@
 import { claim, STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { CompletionRefused, resolveCompletion } from '../engine/completions.js'
-import { takeoverIdleMs } from '../engine/definition.js'
+import { type Target, takeoverIdleMs } from '../engine/definition.js'
 import { publishedByHash } from '../engine/flow.js'
 import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf, revokeGrant } from '../engine/grants.js'
 import { instanceOf } from '../engine/instances.js'
@@ -221,7 +221,7 @@ export function resolveClientOperation(
       return { operation }
     }
     if (body.type === STEP_CLAIMED) {
-      return claimOperation(log, principal, body)
+      return claimOperation(context, body)
     }
     if (body.type === GRANT_CHANGE_TYPE) {
       return grantOperation(body, principal, grants)
@@ -267,16 +267,14 @@ export function resolveClientOperation(
 }
 
 /**
- * Apply a claim through the engine (S09, AS-2, I5, #222). The request carries
- * the instance version it read as `expectedVersion`; the engine checks it and
- * records the claim, so the field never reaches the log. The session principal
- * is the actor, and a refusal answers 409 with the reason.
+ * Apply a claim through the engine (S09, AS-2, AS-4, I5, #222, #267). The
+ * request carries the instance version it read as `expectedVersion`; the
+ * engine checks it and records the claim, so the field never reaches the log.
+ * The session principal is the actor, the team and group targets resolve live
+ * through the request's directory, and a refusal answers 409 with the reason.
  */
-function claimOperation(
-  log: Log,
-  principal: ActingPrincipal,
-  body: Record<string, unknown>
-): IntentResult {
+function claimOperation(context: IntentContext, body: Record<string, unknown>): IntentResult {
+  const { log, principal } = context
   const payload = isRecord(body.payload) ? body.payload : undefined
   const instanceId = stringValue(payload?.instanceId)
   const expectedVersion = payload?.expectedVersion
@@ -293,10 +291,15 @@ function claimOperation(
   if (instance === undefined) {
     return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
   }
-  const result = claim(instance, principal.id, expectedVersion, {
-    clock: () => body.at as number,
-    ids: () => body.id as string,
-  })
+  // The team and the group targets resolve live at the claim (AS-4, #267):
+  // the directory of the request answers who the team holds now.
+  const result = claim(
+    instance,
+    principal.id,
+    expectedVersion,
+    { clock: () => body.at as number, ids: () => body.id as string },
+    context.resolver(instance.starter, instance.values ?? {})
+  )
   if (!result.accepted || result.operation === undefined) {
     return { status: refusalStatus(result.reason), error: result.reason ?? 'the claim was refused' }
   }
@@ -921,21 +924,36 @@ function teamHolds(members: readonly string[], principal: ActingPrincipal): bool
  * holds resolves to nobody, so the engine routes to the Unroutable queue (I10).
 
 /**
- * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252).
- * `starter` resolves to the principal that started the instance, `user` to
- * itself, `field` to the principal in the data or the instance values, `team`
- * to the team membership, and `group` to the members that the Keycloak group
- * holds now. A missing or unknown group resolves to nobody, and the engine
- * routes the task to the Unroutable queue (I10); `manager-of` has no directory
- * source either.
+ * What the directory answers beside the teams and the groups (ID-5, AS-1,
+ * #267): whether a principal is provisioned, and the manager of a person.
+ */
+export type ResolverDirectory = {
+  /** Whether the directory holds the principal (ID-5); absent means every principal is provisioned. */
+  readonly provisioned?: (principal: string) => boolean
+  /** The manager of a person, for `manager-of:starter` (AS-1); absent means nobody has one. */
+  readonly managerOf?: (principal: string) => string | undefined
+}
+
+/**
+ * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252,
+ * #267). `starter` resolves to the principal that started the instance,
+ * `user` to itself, `field` to the principal in the data or the instance
+ * values, `team` to the team membership, `group` to the members that the
+ * Keycloak group holds now, and `manager-of:starter` to the starter's manager
+ * through the directory. A missing or unknown group, a missing manager, and
+ * every principal the directory no longer holds (a deprovisioned user, ID-5)
+ * resolve to nobody, and the engine routes the task to the Unroutable queue
+ * (I10).
  */
 export function resolverFor(
   starter: string | undefined,
   data: Readonly<Record<string, unknown>>,
   teamMembers: ReadonlyMap<string, readonly string[]>,
-  groupMembers: ReadonlyMap<string, readonly string[]>
+  groupMembers: ReadonlyMap<string, readonly string[]>,
+  directory: ResolverDirectory = {}
 ): TargetResolver {
-  return (target) => {
+  const provisioned = directory.provisioned ?? (() => true)
+  const named = (target: Target): readonly string[] => {
     if ('user' in target) return [target.user]
     if ('starter' in target) return starter === undefined ? [] : [starter]
     if ('field' in target) {
@@ -944,8 +962,11 @@ export function resolverFor(
     }
     if ('team' in target) return teamMembers.get(target.team) ?? []
     if ('group' in target) return groupMembers.get(target.group) ?? []
-    return []
+    if (starter === undefined || target['manager-of'] !== 'starter') return []
+    const manager = directory.managerOf?.(starter)
+    return manager === undefined || manager === '' ? [] : [manager]
   }
+  return (target) => named(target).filter(provisioned)
 }
 
 /**

@@ -43,6 +43,17 @@ export type MailConfig = {
   readonly from: string
 }
 
+/** The directory settings of an installation (ID-5, #267). */
+export type DirectoryConfig = {
+  /**
+   * How often the worker synchronizes every known account with the directory,
+   * in seconds (ID-5): group membership, a disabled or deleted user
+   * deprovisioned, a re-enabled user provisioned again. Zero disables the
+   * schedule; sign-in still synchronizes the person who signs in.
+   */
+  readonly syncSeconds: number
+}
+
 /** The configuration that `serve`, `migrate`, `worker`, `admin` and `doctor` read. */
 export type Config = {
   readonly publicUrl: string
@@ -51,6 +62,7 @@ export type Config = {
   readonly keycloak: KeycloakConfig
   readonly session: SessionConfig
   readonly mail: MailConfig
+  readonly directory: DirectoryConfig
   readonly logLevel: string
 }
 
@@ -80,6 +92,9 @@ export const defaultConfig: Config = {
     smtpUrl: '',
     from: 'enform@localhost',
   },
+  directory: {
+    syncSeconds: 300,
+  },
   logLevel: 'info',
 }
 
@@ -101,6 +116,7 @@ const FLAG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   '--session-encryption-key': ['session', 'encryptionKey'],
   '--smtp-url': ['mail', 'smtpUrl'],
   '--mail-from': ['mail', 'from'],
+  '--directory-sync-seconds': ['directory', 'syncSeconds'],
 }
 
 /** The environment variables that name a configuration value, and the key they set. */
@@ -121,6 +137,7 @@ const ENV_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ENFORM_SESSION_ENCRYPTION_KEY: ['session', 'encryptionKey'],
   ENFORM_SMTP_URL: ['mail', 'smtpUrl'],
   ENFORM_MAIL_FROM: ['mail', 'from'],
+  ENFORM_DIRECTORY_SYNC_SECONDS: ['directory', 'syncSeconds'],
 }
 
 /** The deprecated OIDC names that an existing Compose file and unit may still carry. */
@@ -153,6 +170,9 @@ type Draft = {
   mail: {
     smtpUrl: string
     from: string
+  }
+  directory: {
+    syncSeconds: number
   }
 }
 
@@ -327,6 +347,11 @@ function applyValues(draft: Draft, values: Record<string, unknown>): void {
     draft.mail.smtpUrl = text(mail.smtpUrl, draft.mail.smtpUrl)
     draft.mail.from = text(mail.from, draft.mail.from)
   }
+
+  const directory = section(values.directory)
+  if (directory !== undefined) {
+    draft.directory.syncSeconds = numberValue(directory.syncSeconds, draft.directory.syncSeconds)
+  }
 }
 
 /** A string field, or the value already in the draft. */
@@ -359,6 +384,7 @@ function draftOf(config: Config): Draft {
     keycloak: { ...config.keycloak },
     session: { ...config.session },
     mail: { ...config.mail },
+    directory: { ...config.directory },
   }
 }
 
@@ -387,7 +413,19 @@ function finalize(draft: Draft): Config {
       smtpUrl: String(draft.mail.smtpUrl),
       from: String(draft.mail.from),
     },
+    directory: {
+      syncSeconds: nonNegativeNumber(draft.directory.syncSeconds, 'directory.syncSeconds'),
+    },
   }
+}
+
+/** Coerce a configuration number that may be zero, or name the field. */
+function nonNegativeNumber(value: unknown, field: string): number {
+  const number = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`invalid ${field}: ${String(value)}`)
+  }
+  return number
 }
 
 /** Coerce a configuration number, or name the field. */
@@ -409,5 +447,6 @@ function tomlOf(config: Config): Record<string, unknown> {
     keycloak: { ...config.keycloak },
     session: { ...config.session },
     mail: { ...config.mail },
+    directory: { ...config.directory },
   }
 }

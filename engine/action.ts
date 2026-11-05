@@ -23,6 +23,7 @@ import { type FieldError, validateField } from './fields.js'
 import { type Instance, recordAssignees } from './instance.js'
 import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
 import { createOutboxOperation } from './outbox.js'
+import { refreshLiveTargets } from './resolve.js'
 import { route, type TargetResolver } from './routing.js'
 import { evaluateRules, type StepRuleState } from './rules.js'
 import { assignmentEmails } from './submission.js'
@@ -87,8 +88,9 @@ export type CompletionContext = {
 /**
  * Claim the current step of an instance (S09, AS-2, AC-4, I5). The first
  * person to claim the task owns it, so the engine accepts the claim only when
- * the acting principal is an assignee of the current step and the claim is
- * based on the current version of the log (I5). When the version is stale it
+ * the acting principal is an assignee of the current step, live through the
+ * resolver when the caller gives one (AS-4), and the claim is based on the
+ * current version of the log (I5). When the version is stale it
  * refuses at once and names the holder, so a second person sees that the first
  * claimed the task just now; when the principal is not an assignee it refuses
  * too. Nobody waits and the caller re-reads (I5). On acceptance the instance
@@ -98,7 +100,8 @@ export function claim(
   instance: Instance,
   actor: ActorId,
   expectedVersion: Version,
-  deps: OperationDeps
+  deps: OperationDeps,
+  resolve?: TargetResolver
 ): ActionResult {
   const step = instance.currentStep
   if (step === undefined) {
@@ -111,7 +114,15 @@ export function claim(
   if (expectedVersion !== version) {
     return { accepted: false, instance, reason: claimRefusal(step, instance.holder) }
   }
-  if (!isAssignee(instance, actor)) {
+  // A group or a team resolves live at the claim (AS-4, #267): through the
+  // resolver the caller gives, a member who joined while the task was open is
+  // an assignee, as the read already shows them; the recorded snapshot stays
+  // what the instance records (I13), and a dynamic target keeps it.
+  const current =
+    resolve === undefined
+      ? instance
+      : { ...instance, assignees: refreshLiveTargets(instance.assignees, resolve) }
+  if (!isAssignee(current, actor)) {
     return { accepted: false, instance, reason: `step ${step}: ${actor} is not an assignee` }
   }
   const claimed: Instance = { ...instance, holder: actor, version: version + 1 }

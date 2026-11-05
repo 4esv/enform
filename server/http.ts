@@ -31,7 +31,7 @@ import {
   randomState,
 } from 'openid-client'
 import type { Pool } from 'pg'
-import { STEP_COMPLETED } from '../engine/action.js'
+import { STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { type FlowDefinition, type JsonValue, parse } from '../engine/definition.js'
 import { definitionDiff, type VersionRef } from '../engine/diff.js'
@@ -62,7 +62,7 @@ import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
-import { INSTANCE_SUBMITTED } from '../engine/submission.js'
+import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../engine/timeline.js'
 import { rebindDraft } from '../engine/version.js'
@@ -102,6 +102,9 @@ import { grantsFor, resolveClientOperation, resolverFor } from './intents.js'
 import {
   createDirectoryUser,
   DirectoryUserExistsError,
+  directoryGroupMembers,
+  directoryUser,
+  disableDirectoryUser,
   endIdpSession,
   groupIds,
   listDirectoryGroups,
@@ -112,6 +115,7 @@ import {
 } from './keycloak.js'
 import { attachRealtime, createHub, followLog, type Hub, type Scope } from './realtime.js'
 import { mountInterface } from './static.js'
+import { DeprovisionRefused, deprovisionPrincipal, directoryFor } from './sync.js'
 import { versionLine } from './version.js'
 
 /** The injected sources of a server-created operation (I6, ADR 0004). */
@@ -144,6 +148,7 @@ const ROUTING_INTENTS: ReadonlySet<string> = new Set([
   INSTANCE_SUBMITTED,
   STEP_COMPLETED,
   STEP_SENT_BACK,
+  STEP_CLAIMED,
 ])
 
 /** The running HTTP server and the way to drain it (DE-3). */
@@ -393,6 +398,35 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
   // read is the administrator surface, so it requires `org.grants` on the
   // organization exactly as the user list does. A group target names the id
   // that this read lists (I10).
+  // Issue #267, ID-5, ID-6, I8, I14, WF-5: an administrator deprovisions one
+  // directory user. The account is disabled in the identity provider first,
+  // so it signs in no more; then the engine releases every task the person
+  // holds with the reason and records the account, in one transaction. The
+  // scope is checked before the directory is touched (I8).
+  app.post('/api/v1/admin/users/:id/deprovision', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    if (!authorize(grants, 'org.grants', 'org')) {
+      return c.json({ error: 'the principal may not deprovision a directory user' }, 403)
+    }
+    const id = c.req.param('id')
+    const user = await directoryUser(config, id)
+    if (user === undefined && (await principalById(pool, id)) === undefined) {
+      return c.json({ error: `neither the directory nor the log knows ${id}` }, 404)
+    }
+    if (user !== undefined) await disableDirectoryUser(config, id)
+    try {
+      return c.json(
+        await deprovisionPrincipal(pool, id, Date.now(), { actor: auth.principal.id, grants })
+      )
+    } catch (error) {
+      if (error instanceof DeprovisionRefused) return c.json({ error: error.message }, 403)
+      throw error
+    }
+  })
+
   app.get('/api/v1/admin/groups', async (c) => {
     const auth = await authenticate(c, pool, config)
     if (auth === undefined) return unauthorized(c)
@@ -455,6 +489,7 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
       const created = await createDirectoryUser(config, {
         email: input.email,
         displayName: input.displayName,
+        ...(input.managerId === undefined ? {} : { managerId: input.managerId }),
       })
       return c.json(
         {
@@ -464,6 +499,7 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
           status: 'active',
           groups: [],
           temporaryPassword: created.temporaryPassword,
+          ...(input.managerId === undefined ? {} : { managerId: input.managerId }),
         },
         201
       )
@@ -724,14 +760,16 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     // A dry run resolves the live targets through the directory, like a live
     // run (AS-4); when the identity provider cannot be reached it answers
     // from the membership the profile cache recorded at the last sign-in or
-    // sync (ID-5), so a rehearsal never depends on the directory being up.
+    // sync (ID-5), with nobody deprovisioned and no manager known, so a
+    // rehearsal never depends on the directory being up.
     const groupMembers = await groupMembersFor(config).catch(() => groupMembersFromPrincipals(pool))
+    const directory = await directoryFor(config, log, [actor]).catch(() => ({}))
     const now = Date.now()
     const result = dryRun({
       definition,
       data,
       actor,
-      resolve: resolverFor(actor, data, teamMembers, groupMembers),
+      resolve: resolverFor(actor, data, teamMembers, groupMembers, directory),
       now,
       advanceMs: advance * 60_000,
     })
@@ -1257,19 +1295,32 @@ async function serveOperation(
   }
   const log = await readLog(pool)
   // The directory is read once per request (AS-4, #252), and only for an
-  // intent that routes a step: the team projection and the Keycloak groups,
-  // so every resolution in this request reads one snapshot. A grant or a
-  // claim never touches the directory. The resolver itself is pure
-  // (server/intents.ts).
+  // intent that routes a step or claims one (#267): the team projection and
+  // the Keycloak groups, so every resolution in this request reads one
+  // snapshot. A grant never touches the directory. The resolver itself is
+  // pure (server/intents.ts).
   const routes = ROUTING_INTENTS.has(String(body.type))
+  const claims = body.type === STEP_CLAIMED
   const teamMembers = routes ? await teamMembersFor(pool, log) : new Map()
-  const groupMembers = routes ? await groupMembersFor(config) : new Map()
+  // A claim refreshes only the groups the task names (AS-4, #267), never the
+  // whole realm; a routing intent may reach any group of the definition.
+  const groupMembers = claims
+    ? await directoryGroupMembers(config, claimedGroups(log, body))
+    : routes
+      ? await groupMembersFor(config)
+      : new Map()
+  // The deprovisioned accounts come from the log and the manager of the
+  // starter from the directory (ID-5, AS-1, #267); a claim resolves no
+  // dynamic target, so it reads no manager.
+  const directory = routes
+    ? await directoryFor(config, log, routingStarters(log, body, auth.principal.id))
+    : {}
   const resolved = resolveClientOperation(
     {
       log,
       principal: auth.principal,
       grants: grantsFor(log, auth.principal),
-      resolver: (starter, data) => resolverFor(starter, data, teamMembers, groupMembers),
+      resolver: (starter, data) => resolverFor(starter, data, teamMembers, groupMembers, directory),
       now: () => Date.now(),
     },
     body
@@ -1324,7 +1375,9 @@ async function groupMembersFor(config: Config): Promise<ReadonlyMap<string, read
 /**
  * The target resolver of one request, with both directory reads (AS-4, #252).
  * The team projection comes from the log and the `team_members` rows, and the
- * group membership comes from Keycloak through the service account.
+ * group membership comes from Keycloak through the service account. A read
+ * refreshes the live targets only, so the seam carries the deprovisioned
+ * accounts (ID-5) and reads no manager.
  */
 async function resolverForRequest(
   config: Config,
@@ -1335,7 +1388,36 @@ async function resolverForRequest(
 ): Promise<TargetResolver> {
   const teamMembers = await teamMembersFor(pool, log)
   const groupMembers = await groupMembersFor(config)
-  return resolverFor(starter, data, teamMembers, groupMembers)
+  return resolverFor(starter, data, teamMembers, groupMembers, await directoryFor(config, log, []))
+}
+
+/** The group ids the claimed task's current step names (AS-4, #267), so the claim refreshes those alone. */
+function claimedGroups(log: Log, body: Record<string, unknown>): readonly string[] {
+  const payload = isRecord(body.payload) ? body.payload : {}
+  const instanceId = payload.instanceId
+  const instance = typeof instanceId === 'string' ? instanceOf(log, instanceId) : undefined
+  if (instance === undefined) return []
+  return instance.assignees
+    .filter((assignee) => assignee.step === instance.currentStep && 'group' in assignee.target)
+    .map((assignee) => ('group' in assignee.target ? assignee.target.group : ''))
+    .filter((group) => group !== '')
+}
+
+/**
+ * The starters whose manager a routing intent may need (AS-1, #267): the
+ * actor of a start, or the starter of the instance the intent names. A claim
+ * resolves only live targets and names none.
+ */
+function routingStarters(
+  log: Log,
+  body: Record<string, unknown>,
+  actor: string
+): readonly (string | undefined)[] {
+  if (body.type === STEP_CLAIMED) return []
+  if (body.type === INSTANCE_STARTED) return [actor]
+  const payload = isRecord(body.payload) ? body.payload : {}
+  const instanceId = payload.instanceId
+  return typeof instanceId === 'string' ? [instanceOf(log, instanceId)?.starter] : []
 }
 
 /** A string payload value, or undefined when it is another type. */
@@ -1616,11 +1698,11 @@ async function readJsonObject(c: Context): Promise<Record<string, unknown> | und
   }
 }
 
-/** Read the body of `POST /api/v1/admin/users` (#228, ID-6). */
+/** Read the body of `POST /api/v1/admin/users` (#228, #267, ID-6, AS-1). */
 function readCreateUser(
   body: Record<string, unknown>
-): { email: string; displayName: string; sendInvite: boolean } | undefined {
-  const { email, displayName, sendInvite, groups } = body
+): { email: string; displayName: string; sendInvite: boolean; managerId?: string } | undefined {
+  const { email, displayName, sendInvite, groups, managerId } = body
   if (typeof email !== 'string' || !email.includes('@')) return undefined
   if (typeof displayName !== 'string' || displayName.trim() === '') return undefined
   if (typeof sendInvite !== 'boolean') return undefined
@@ -1630,7 +1712,15 @@ function readCreateUser(
   ) {
     return undefined
   }
-  return { email: email.trim(), displayName: displayName.trim(), sendInvite }
+  if (managerId !== undefined && (typeof managerId !== 'string' || managerId.trim() === '')) {
+    return undefined
+  }
+  return {
+    email: email.trim(),
+    displayName: displayName.trim(),
+    sendInvite,
+    ...(typeof managerId === 'string' ? { managerId: managerId.trim() } : {}),
+  }
 }
 
 /** Read the body of `POST /api/v1/flows` (#220). */

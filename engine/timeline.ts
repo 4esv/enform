@@ -61,6 +61,8 @@ export type TimelineEntry = {
   readonly step?: string
   /** The comment that the payload carries, for a note or a send back (VT-5, VT-6). */
   readonly comment?: string
+  /** The reason that the payload carries, for a release, a reassign, a takeover, a close or an undo (VT-5, WF-5). */
+  readonly reason?: string
   /** The connector call, when the event records one (I13). */
   readonly call?: TimelineCall
 }
@@ -99,6 +101,7 @@ function entryOf(event: Event): TimelineEntry {
   const flow = flowOf(event)
   const step = stepOf(event)
   const comment = commentOf(event)
+  const reason = reasonOf(event)
   const call = event.type === CONNECTOR_CALLED ? callOf(event) : undefined
   return {
     seq: event.seq,
@@ -108,6 +111,7 @@ function entryOf(event: Event): TimelineEntry {
     ...(flow === undefined ? {} : { flow }),
     ...(step === undefined ? {} : { step }),
     ...(comment === undefined ? {} : { comment }),
+    ...(reason === undefined ? {} : { reason }),
     ...(call === undefined ? {} : { call }),
   }
 }
@@ -154,6 +158,12 @@ function stepOf(event: Event): string | undefined {
 function commentOf(event: Event): string | undefined {
   const comment = event.payload.comment
   return typeof comment === 'string' ? comment : undefined
+}
+
+/** The reason an event carries (WF-5, VT-5): why a task was released, reassigned, taken over, closed or undone. */
+function reasonOf(event: Event): string | undefined {
+  const reason = event.payload.reason
+  return typeof reason === 'string' && reason !== '' ? reason : undefined
 }
 
 /** The slug in a resource of the form `flow:<slug>...` (MVP.md 5.6, VT-6). */

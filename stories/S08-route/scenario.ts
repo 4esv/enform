@@ -9,6 +9,7 @@ import {
 import { createFlow, DEFINITION_PUBLISHED, type Flow, publish, push } from '../../engine/flow.js'
 import { addGrant, GRANT_CHANGE_TYPE } from '../../engine/grants.js'
 import { contentHash } from '../../engine/instance.js'
+import { deprovision, USER_DEPROVISIONED } from '../../engine/membership.js'
 import type { ActorId } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import {
@@ -289,6 +290,149 @@ export const golden = scenario({
   steps: goldenSteps(),
 })
 
+/**
+ * The flow of the deprovision acceptance (S08, AS-1, ID-5): the request form
+ * and a manager step that names the starter's manager, resolved once at the
+ * submit through the directory (AS-4).
+ */
+export const MANAGER_STEP = 'manager'
+export const managerDefinition: FlowDefinition = parse(`{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "${REQUEST_STEP}",
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text", "required": true },
+        { "key": "overload_credits", "control": "number", "required": true },
+        { "key": "advisor", "control": "user", "required": true }
+      ],
+      "editable": ["summary", "overload_credits", "advisor"]
+    },
+    {
+      "key": "${MANAGER_STEP}",
+      "targets": [{ "manager-of": "starter" }],
+      "outcomes": ["approve", "send_back"]
+    }
+  ]
+}
+`)
+
+/** The managers of the cast (AS-1): Dr. Okafor manages Sam. */
+export const managers: Readonly<Record<string, string>> = { [SAM]: OKAFOR }
+
+/** The directory of the manager acceptance (AS-1, ID-5): Dr. Okafor manages Sam, unless he is deprovisioned. */
+function managerDirectory(gone?: ActorId): TargetResolver {
+  return resolverFor(SAM, values, new Map([[REGISTRAR_TEAM, INITIAL_REGISTRARS]]), new Map(), {
+    provisioned: (principal) => principal !== gone,
+    managerOf: (principal) => managers[principal],
+  })
+}
+
+/** The manager flow ready for a start: version 1 published (DF-2). */
+const managerFlow: Flow = {
+  slug: SLUG,
+  versions: [
+    { version: 1, contentHash: contentHash(managerDefinition), definition: managerDefinition },
+  ],
+}
+
+/**
+ * The manager acceptance of S08 (AS-1, AS-4, ID-5, AS-5, I10): Dana publishes
+ * the manager flow; with `deprovisioned` she deprovisions Dr. Okafor, Sam's
+ * manager, first. Sam's submit resolves `manager-of:starter` once, through
+ * the directory: to Dr. Okafor, who claims the task, or, deprovisioned, to
+ * nobody, so the task goes to the Unroutable queue and Priya, the owner, gets
+ * the alert with the reason.
+ */
+function managerSteps(deprovisioned: boolean): readonly Step[] {
+  const steps: Step[] = []
+  const at = () => steps.length
+  const pushed = push(createFlow(SLUG), managerDefinition, depsFor(0), DANA)
+  const published = publish(pushed.flow, depsFor(1), DANA)
+  steps.push(declared(pushed.operation), declared(published.operation))
+  const owner = { principal: PRIYA, scopes: ['task.reassign'], resource: FLOW }
+  steps.push(declared(addGrant(owner, DANA, depsFor(at())), owner))
+
+  if (deprovisioned) {
+    // Dana deprovisions Dr. Okafor: no task is held, so the account record
+    // is the one event, attributed to her (ID-5, I14). It is no client
+    // intent; the release server appends it through the admin API.
+    const gone = deprovision(OKAFOR, () => [], [], depsFor(at()), {
+      actor: DANA,
+      grants: grantsOfPerson(DANA),
+    })
+    if (gone.operation === undefined) throw new Error(gone.reason)
+    steps.push(declared(gone.operation))
+  }
+
+  const resolve = managerDirectory(deprovisioned ? OKAFOR : undefined)
+  const sam = grantsOfPerson(SAM)
+  const started = startInstance(managerFlow, INSTANCE_ID, values, SAM, depsFor(at()), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: managerDefinition, resolve, grants: sam, owner: PRIYA },
+    depsFor(at())
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
+  if (deprovisioned) return steps
+
+  // Dr. Okafor claims the manager task (AS-1, I13): the snapshot names him.
+  const claimed = claim(instanceAfter(steps), OKAFOR, 1, depsFor(at()))
+  if (claimed.operation === undefined) throw new Error(claimed.reason)
+  steps.push(declared(claimed.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  return steps
+}
+
+export const managerGolden = scenario({
+  slug: 'route-manager',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  managers,
+  steps: managerSteps(false),
+})
+
+export const deprovisionedGolden = scenario({
+  slug: 'route-deprovisioned',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  managers,
+  steps: managerSteps(true),
+})
+
+/** The indexes of the manager acceptance's steps. */
+export const MANAGER_STEP_INDEX = { ownerGrant: 2, start: 3, submit: 4, okaforClaim: 5 } as const
+
+/** The indexes of the deprovision acceptance's steps. */
+export const DEPROVISIONED_STEP = { ownerGrant: 2, deprovision: 3, start: 4, submit: 5 } as const
+
+/** What each step of the manager acceptances requires of its actor (I8). */
+export const requiresManager: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case GRANT_CHANGE_TYPE:
+    case USER_DEPROVISIONED:
+      return { scope: 'org.grants', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      return { actors: [OKAFOR] }
+    default:
+      throw new Error(`S08: step ${index + 1} has no requirement (${step.type})`)
+  }
+}
+
 /** The indexes of the story's steps, for the requirements and the tests. */
 export const STEP = {
   ownerGrant: 6,
@@ -322,7 +466,9 @@ export const requires: Requirements = (step, index) => {
     case INSTANCE_SUBMITTED:
       return { actors: [SAM] }
     case STEP_CLAIMED:
-      return { actors: index === STEP.okaforClaim ? [OKAFOR] : INITIAL_REGISTRARS }
+      // The registrar claim is open to the team's current members (AS-4,
+      // #267): Lee and Jordan, and Ana once she joined at the step before.
+      return { actors: index === STEP.okaforClaim ? [OKAFOR] : [...INITIAL_REGISTRARS, ANA] }
     case STEP_COMPLETED:
       return index === STEP.okaforApprove
         ? { scope: 'step.outcome:approve', resource: stepResource(ADVISOR_STEP), actors: [OKAFOR] }

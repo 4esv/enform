@@ -52,6 +52,20 @@ function publishedLog() {
   return apply(released.operation, apply(pushed.operation, emptyState)).log
 }
 
+// The directory of the checks (ID-6, #267): the identity provider answers the
+// administrator token, no group and no user, so the route reads an empty
+// directory and the checks need no running Keycloak.
+vi.stubGlobal('fetch', (input: string | URL) => {
+  const path = new URL(String(input)).pathname
+  if (path.endsWith('/protocol/openid-connect/token')) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ access_token: 'admin-token' }), { status: 200 })
+    )
+  }
+  if (path.endsWith('/groups')) return Promise.resolve(new Response('[]', { status: 200 }))
+  return Promise.resolve(new Response('not found', { status: 404 }))
+})
+
 /** The appended operations the route wrote, so a test can read the impersonation record. */
 const appended: Record<string, unknown>[] = []
 

@@ -104,7 +104,7 @@ This table records where each story was done. Update it in the same pull request
 | S05 | #42, #264 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts, tools/dryrun.test.ts | 501e5e3 0f1dcbf | #264 | d086700 b7a73b7 28f960b | Done |
 | S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181, #262 | 640d062 f9e809d f9e5224 | Done |
 | S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts, stories/S07-lose-connection/gui.test.ts, interface/app/local.test.ts | 8d6bb33 | #262 | | Done |
-| S08 | #45, #264 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts, tools/dryrun.test.ts | c3d8025 27e0712 | #264 | b7a73b7 28f960b | Done |
+| S08 | #45, #264, #267 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts, tools/dryrun.test.ts, stories/S08-route/deprovisioned.test.ts, tools/claim-live.test.ts, tools/deprovision.test.ts, server/deprovision.test.ts, integration/deprovision.test.ts | c3d8025 27e0712 0d3e6c4 2c6f69a 4f9251d | #264 | b7a73b7 28f960b | Done |
 | S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts | 8888d67 98e561c |  |  | Engine passes |
 | S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts | d165932 0f1c912 23a561a |  |  | Engine passes |
 | S11 | #48 | stories/S11-send-back/scenario.test.ts, stories/S11-send-back/operators.test.ts | 981b365 07da674 |  |  | Engine passes |

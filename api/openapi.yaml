@@ -911,6 +911,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/admin/users/{id}/deprovision:
+    post:
+      operationId: deprovisionUser
+      summary: Deprovision a directory user
+      description: >-
+        Deprovisions one user (ID-5, ID-6, #267). The server disables the
+        account in the identity provider, so it signs in no more, and the
+        engine releases every task the person holds through one
+        `task.released@1` per task with the reason "<user> was deprovisioned",
+        so each task returns to the pool, the timeline says why and a flow
+        owner may undo the release like any manual one (A1, WF-5); one
+        `user.deprovisioned@1` records the account and the released tasks
+        (I4, I14). From then on a `user`, `field`, `starter` or `manager-of`
+        target that names the person resolves to nobody and its task goes to
+        the Unroutable queue with the owner alert (I10). The request requires
+        `org.grants` on `org` (I8, `MVP.md` 5.6). A second deprovision of the
+        same account appends nothing and says so (I1).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The immutable id of the user (ID-4).
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: The account is deprovisioned and its tasks are back in the pool.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeprovisionResult'
+        '403':
+          description: >-
+            The principal does not hold `org.grants` on the organization (I8).
+            Nothing is changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: >-
+            Neither the directory nor the log knows the principal. Nothing is
+            changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
   /api/v1/flows:
     get:
       operationId: listFlows
@@ -2070,6 +2118,14 @@ components:
           description: >-
             The comment that the payload carries, for a note or a send back
             (VT-5, VT-6).
+        reason:
+          type: string
+          description: >-
+            The reason that the payload carries, when the event records one
+            (VT-5, WF-5): why a task was released, reassigned or taken over,
+            why an instance was withdrawn or cancelled, or why an action was
+            undone. A release made by a deprovision says that the holder was
+            deprovisioned (ID-5, #267).
         call:
           $ref: '#/components/schemas/TimelineCall'
     Status:
@@ -2640,6 +2696,40 @@ components:
             The immutable ids of the groups that the user belongs to (ID-4).
           items:
             $ref: '#/components/schemas/ActorId'
+        managerId:
+          $ref: '#/components/schemas/ActorId'
+          description: >-
+            The immutable id of the user's manager, from the directory's
+            `manager` attribute (AS-1, #267); absent when the directory names
+            none. A `manager-of:starter` target resolves to it.
+    DeprovisionedTask:
+      type: object
+      description: One task a deprovision returned to the pool (ID-5, A1, #267).
+      required: [instanceId, step]
+      properties:
+        instanceId:
+          type: string
+          description: The id of the instance (DX-1).
+        step:
+          type: string
+          description: The step whose task was released (WF-1).
+    DeprovisionResult:
+      type: object
+      description: >-
+        What a deprovision did (ID-5, #267): the account and the tasks it
+        released, each of which is one `task.released@1` with the reason on
+        the log. `alreadyDeprovisioned` is true when the log already named
+        the account deprovisioned, and then nothing was appended (I1).
+      required: [principal, released]
+      properties:
+        principal:
+          $ref: '#/components/schemas/ActorId'
+        released:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeprovisionedTask'
+        alreadyDeprovisioned:
+          type: boolean
     CreatedUser:
       type: object
       description: >-
@@ -2678,6 +2768,9 @@ components:
             The generated password that signs the user in (ID-6, ADR 0012).
             The server returns it once, in this response, and logs it never;
             the administrator copies it and hands it to the user.
+        managerId:
+          $ref: '#/components/schemas/ActorId'
+          description: The immutable id of the user's manager, when the create named one (AS-1, #267).
     CreateUser:
       type: object
       description: >-
@@ -2711,6 +2804,12 @@ components:
             transport is not configured in this slice, so `true` answers 409
             `mail-not-configured`; `false` creates the user with a generated
             temporary password.
+        managerId:
+          $ref: '#/components/schemas/ActorId'
+          description: >-
+            The immutable id of the user's manager (AS-1, #267). The directory
+            stores it as the user's `manager` attribute, and a
+            `manager-of:starter` target resolves to it.
     CreateFlow:
       type: object
       description: >-

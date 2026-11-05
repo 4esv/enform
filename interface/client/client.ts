@@ -327,6 +327,7 @@ export interface TimelineEntry {
   readonly flow?: string
   readonly step?: string
   readonly comment?: string
+  readonly reason?: string
   readonly call?: TimelineCall
 }
 
@@ -512,6 +513,26 @@ export interface DirectoryUser {
   readonly email: string
   readonly status: string
   readonly groups: readonly ActorId[]
+  readonly managerId?: ActorId
+}
+
+/**
+ * One task a deprovision returned to the pool (ID-5, A1,
+ */
+export interface DeprovisionedTask {
+  readonly instanceId: string
+  readonly step: string
+}
+
+/**
+ * What a deprovision did (ID-5, #267): the account and the tasks it released, each of which is
+ * one `task.released@1` with the reason on the log. `alreadyDeprovisioned` is true when the log
+ * already named the account deprovisioned, and then nothing was appended (I1).
+ */
+export interface DeprovisionResult {
+  readonly principal: ActorId
+  readonly released: readonly DeprovisionedTask[]
+  readonly alreadyDeprovisioned?: boolean
 }
 
 /**
@@ -527,6 +548,7 @@ export interface CreatedUser {
   readonly status: string
   readonly groups: readonly ActorId[]
   readonly temporaryPassword: string
+  readonly managerId?: ActorId
 }
 
 /**
@@ -539,6 +561,7 @@ export interface CreateUser {
   readonly displayName: string
   readonly groups?: readonly ActorId[]
   readonly sendInvite: boolean
+  readonly managerId?: ActorId
 }
 
 /**
@@ -861,6 +884,16 @@ export async function createUser(createUser: CreateUser): Promise<CreatedUser> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as CreatedUser
+}
+
+export async function deprovisionUser(id: string): Promise<DeprovisionResult> {
+  const url = `${configured().baseUrl}/api/v1/admin/users/${id}/deprovision`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DeprovisionResult
 }
 
 export async function dryRunFlow(

@@ -23,6 +23,19 @@ public URL. It reads `.env` and the `ENFORM_*` variables of the environment.
 | `ENFORM_KEYCLOAK_ADMIN_PASSWORD` | `admin` |
 | `ENFORM_ADMIN_EMAIL` | `admin@example.com` |
 | `ENFORM_ADMIN_PASSWORD` | `admin-dev-password` |
+| `ENFORM_DIRECTORY_SYNC_SECONDS` | `300` |
+
+`ENFORM_DIRECTORY_SYNC_SECONDS` (`directory.syncSeconds` in the file,
+`--directory-sync-seconds` on the command line) is how often the worker
+synchronizes every known account with the directory (ID-5): changed group
+membership is recorded, a user disabled or deleted in the directory is
+deprovisioned and the tasks they held return to the pool, and a re-enabled
+user is provisioned again. `0` disables the schedule; a sign-in still
+synchronizes the person who signs in, and `enform admin sync` runs one pass.
+A person's manager is the `manager` attribute of their Keycloak user
+(`manager-of:starter` resolves to it); enform declares the attribute in the
+realm's user profile the first time it sets one, because Keycloak keeps only
+declared attributes.
 
 ## Demo seed
 

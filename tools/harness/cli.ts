@@ -3,7 +3,13 @@ import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { Operation } from '../../engine/operation.js'
 import { isClientIntent, resolveClientOperation } from '../../server/intents.js'
-import { directoryOf, grantsApplying, groupsOf, type Membership } from './directory.js'
+import {
+  directoryOf,
+  grantsApplying,
+  groupsOf,
+  type Managers,
+  type Membership,
+} from './directory.js'
 import { fromView, type StateView, toView } from './scenario.js'
 
 // Issue #25, STORIES.md Golden path: the harness CLI. One operation goes in
@@ -14,13 +20,15 @@ import { fromView, type StateView, toView } from './scenario.js'
 // the IDs in the operation itself, so the result is deterministic (I6).
 //
 // Usage: node --import tools/harness/ts-resolve.ts tools/harness/cli.ts \
-//   [--json <operation>] [--state <state>]
+//   [--json <operation>] [--state <state>] [--bootstrap <grants>]
+//   [--membership <groups>] [--managers <managers>]
 //
 // The operation is a JSON string, via --json or on stdin. --state is the prior
 // state, in the shape that /api/v1/state returns, and defaults to the empty
 // state. The exit code is 0 on success and 1 on bad input.
 
-const USAGE = 'usage: cli.ts [--json <operation>] [--state <state>]'
+const USAGE =
+  'usage: cli.ts [--json <operation>] [--state <state>] [--bootstrap <grants>] [--membership <groups>] [--managers <managers>]'
 
 function fail(message: string): never {
   throw new Error(message)
@@ -77,8 +85,8 @@ function parseState(text: string): State {
  * client intent resolves through the same resolver as the release server
  * (ADR 0010, #256), with the intent's own time as the clock, the grants the
  * log and `--bootstrap` hold for its actor, the groups `--membership` gives
- * it, and the harness directory (directory.ts); an operation that is no
- * intent is appended as it is.
+ * it, the managers `--managers` names, and the harness directory
+ * (directory.ts); an operation that is no intent is appended as it is.
  */
 function run(argv: readonly string[]): State {
   const json = argument(argv, '--json')
@@ -89,13 +97,14 @@ function run(argv: readonly string[]): State {
   if (!isClientIntent(body)) return apply(operation, prior)
   const bootstrap = JSON.parse(argument(argv, '--bootstrap') ?? '[]') as readonly Grant[]
   const membership = JSON.parse(argument(argv, '--membership') ?? '{}') as Membership
+  const managers = JSON.parse(argument(argv, '--managers') ?? '{}') as Managers
   const actor = operation.actor ?? ''
   const resolved = resolveClientOperation(
     {
       log: prior.log,
       principal: { id: actor, groups: groupsOf(membership, actor) },
       grants: grantsApplying(prior.log, actor, bootstrap, membership),
-      resolver: directoryOf(prior.log, membership),
+      resolver: directoryOf(prior.log, membership, managers),
       now: () => operation.at,
     },
     body

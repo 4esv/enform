@@ -108,6 +108,14 @@ export type Scenario = {
    */
   readonly membership?: Readonly<Record<string, readonly string[]>>
   /**
+   * The manager of each principal of the cast (AS-1, #267), keyed by
+   * principal id, as the directory's `manager` attribute names it on a
+   * release server. A `manager-of:starter` target resolves to it once, when
+   * the engine routes the step; a starter the map does not name has no
+   * manager, and the step goes to Unroutable (I10).
+   */
+  readonly managers?: Readonly<Record<string, string>>
+  /**
    * The step clock of the story (I6): the time of each step. Absent, step i
    * happens at time i + 1. A story whose engine reads elapsed time (an idle
    * limit, a deadline, an undo period) declares a clock that places its

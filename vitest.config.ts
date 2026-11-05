@@ -34,6 +34,12 @@ export default defineConfig({
           name: 'stories',
           include: ['stories/**/*.test.ts'],
           exclude: ['stories/**/gui.test.ts'],
+          // An operator suite runs every variant of a golden path through the
+          // harness API, and the Actor operator alone runs one api run per
+          // person and step; under the load of the whole check that exceeds
+          // the five-second default, so the project allows what the
+          // operator suites that set their own timeout already allow.
+          testTimeout: 120_000,
         },
       },
       {
