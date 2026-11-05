@@ -590,6 +590,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/auth/cli:
+    get:
+      operationId: readCliAuth
+      summary: Describe the device sign-in of the CLI
+      description: >-
+        Which identity provider and which client the `enform` CLI signs in
+        with (DX-3, S01). The CLI requests a device code at the device
+        authorization endpoint, shows the person the verification URL and the
+        user code, and polls the token endpoint until the person approved
+        (RFC 8628). The answer is public, because a sign-in has no credential
+        yet, and it names no secret: the CLI client is a public client.
+      security: []
+      responses:
+        '200':
+          description: The client id and the two endpoints of the device flow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CliAuth'
   /api/v1/session:
     get:
       operationId: readSession
@@ -2310,6 +2329,22 @@ components:
             belongs to (ID-4, ID-5).
           items:
             $ref: '#/components/schemas/ActorId'
+    CliAuth:
+      type: object
+      description: >-
+        What the CLI needs to sign in through the device authorization flow
+        (DX-3, RFC 8628): the public client id, the device authorization
+        endpoint and the token endpoint of the identity provider.
+      required: [clientId, deviceAuthorizationEndpoint, tokenEndpoint]
+      properties:
+        clientId:
+          type: string
+        deviceAuthorizationEndpoint:
+          type: string
+          format: uri
+        tokenEndpoint:
+          type: string
+          format: uri
     Session:
       type: object
       description: >-
