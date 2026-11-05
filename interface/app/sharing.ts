@@ -72,7 +72,7 @@ export type GrantInput = {
 export function grantFor(input: GrantInput): Grant | { readonly error: string } {
   const principal = principalOf(input.principal)
   if (principal === '') {
-    return { error: 'name a principal: user:<id>, group:<name> or team:<slug>' }
+    return { error: 'name a principal: a user id, group:<name> or team:<slug>' }
   }
   const step = input.step === undefined || input.step.trim() === '' ? undefined : input.step.trim()
   const preset = PRESETS.find((candidate) => candidate.key === input.preset)
@@ -122,11 +122,14 @@ export function describeGrant(grant: Grant): string {
   return `${grant.principal} holds ${grant.scopes.join(', ')} on ${grant.resource}`
 }
 
-/** A principal as typed, normalized to the id the engine stores: a bare name is a user (ID-4). */
+/**
+ * A principal as typed, normalized to the id the engine stores (ID-4): a
+ * user is its directory id, as the builder's targets name it, so a `user:`
+ * prefix is dropped; a group is `group:<name>` and a team `team:<slug>`.
+ */
 export function principalOf(text: string): string {
   const trimmed = text.trim()
-  if (trimmed === '') return ''
-  return /^(user|group|team):/.test(trimmed) ? trimmed : `user:${trimmed}`
+  return trimmed.startsWith('user:') ? trimmed.slice('user:'.length) : trimmed
 }
 
 /** The entries of a comma or space separated list, trimmed and non-empty. */
@@ -271,7 +274,7 @@ function renderAdd(state: SharingState, panel: HTMLElement): HTMLElement {
   principalLabel.textContent = 'Principal '
   const principal = document.createElement('input')
   principal.name = 'principal'
-  principal.placeholder = 'user:<id>, group:<name> or team:<slug>'
+  principal.placeholder = '<user id>, group:<name> or team:<slug>'
   principal.dataset.sharePrincipal = ''
   principalLabel.appendChild(principal)
   const onLabel = document.createElement('label')

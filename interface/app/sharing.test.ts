@@ -53,7 +53,7 @@ test('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and onl
       preset: 'approver',
     })
   ).toEqual({
-    principal: 'user:lee',
+    principal: 'lee',
     scopes: ['step.outcome:approve', 'step.outcome:reject'],
     resource: 'flow:course-overload/step:registrar',
   })
@@ -65,7 +65,7 @@ test('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and onl
       preset: 'reviewer',
     })
   ).toEqual({
-    principal: 'user:jordan',
+    principal: 'jordan',
     scopes: ['step.outcome:send_back'],
     resource: 'flow:course-overload/step:registrar',
   })
@@ -77,12 +77,12 @@ test('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and onl
     resource: 'flow:course-overload',
   })
   expect(grantFor({ slug: 'course-overload', principal: 'user:priya', preset: 'editor' })).toEqual({
-    principal: 'user:priya',
+    principal: 'priya',
     scopes: ['flow.edit', 'flow.dryrun', 'instance.read', 'instance.timeline', 'task.reassign'],
     resource: 'flow:course-overload',
   })
   expect(grantFor({ slug: 'course-overload', principal: 'user:dana', preset: 'builder' })).toEqual({
-    principal: 'user:dana',
+    principal: 'dana',
     scopes: [
       'flow.build',
       'flow.edit',
@@ -109,7 +109,7 @@ test('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and onl
     error: 'the preset Approver applies to a step; choose one',
   })
   expect(grantFor({ slug: 'course-overload', principal: '', preset: 'starter' })).toEqual({
-    error: 'name a principal: user:<id>, group:<name> or team:<slug>',
+    error: 'name a principal: a user id, group:<name> or team:<slug>',
   })
   expect(grantFor({ slug: 'course-overload', principal: 'user:lee' })).toEqual({
     error: 'choose a preset or list the scopes',
@@ -150,7 +150,8 @@ test('#264 S02 AC-4 the panel answers who can choose an outcome at a step from t
   expect(describeGrant(grants[0])).toBe(
     'user:lee holds step.outcome:approve, step.outcome:reject on flow:course-overload/step:registrar'
   )
-  expect(principalOf(' lee ')).toBe('user:lee')
+  expect(principalOf(' lee ')).toBe('lee')
+  expect(principalOf('user:lee')).toBe('lee')
   expect(principalOf('group:CS-Chairs')).toBe('group:CS-Chairs')
   expect(principalOf('team:registrar-office')).toBe('team:registrar-office')
 })
