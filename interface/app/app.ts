@@ -844,6 +844,40 @@ export async function mountApp(options: AppOptions): Promise<void> {
     submit.dataset.submit = ''
     submit.addEventListener('click', () => local.submit())
     form.append(save, submit, status)
+    // The draft moved to a newer published version since it was opened (RT-6,
+    // S04): the read names the required fields of the new form the draft
+    // leaves empty and the values that no longer fit. The page says so,
+    // highlights them and deletes nothing (A7); the engine kept every value.
+    const rebound = reboundOf(view.rebound)
+    if (rebound !== undefined) {
+      const notice = document.createElement('p')
+      notice.className = 'status'
+      notice.dataset.formChanged = ''
+      const count = rebound.newRequired.length
+      notice.textContent =
+        count === 0
+          ? 'This form changed.'
+          : `This form changed. ${count === 1 ? 'One new field needs' : `${count} new fields need`} your answer.`
+      main.appendChild(notice)
+      for (const key of rebound.newRequired) {
+        const row = form.querySelector<HTMLElement>(`[data-field-row="${key}"]`)
+        if (row !== null) row.dataset.newRequired = 'true'
+      }
+      if (rebound.misfits.length > 0) {
+        const list = document.createElement('ul')
+        list.dataset.misfits = ''
+        for (const misfit of rebound.misfits) {
+          const item = document.createElement('li')
+          item.dataset.misfit = misfit.key
+          const held = view.values[misfit.key]
+          item.textContent = `${misfit.key}: ${misfit.reason}. ${held === undefined ? 'The value is kept.' : `The value ${JSON.stringify(held)} is kept.`}`
+          list.appendChild(item)
+          const row = form.querySelector<HTMLElement>(`[data-field-row="${misfit.key}"]`)
+          if (row !== null) row.dataset.misfit = 'true'
+        }
+        main.appendChild(list)
+      }
+    }
     main.appendChild(form)
   }
 
@@ -2132,6 +2166,31 @@ const inboxTabs = [
   { key: 'available', label: 'Available' },
   { key: 'started', label: 'Started by me' },
 ] as const
+
+/** The rebind the instance read carries (RT-6, S04), narrowed from the generated type. */
+function reboundOf(value: unknown):
+  | {
+      readonly misfits: readonly { key: string; reason: string }[]
+      readonly newRequired: readonly string[]
+    }
+  | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { misfits, newRequired } = value as { misfits?: unknown; newRequired?: unknown }
+  return {
+    misfits: Array.isArray(misfits)
+      ? misfits.filter(
+          (entry): entry is { key: string; reason: string } =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as { key?: unknown }).key === 'string' &&
+            typeof (entry as { reason?: unknown }).reason === 'string'
+        )
+      : [],
+    newRequired: Array.isArray(newRequired)
+      ? newRequired.filter((key): key is string => typeof key === 'string')
+      : [],
+  }
+}
 
 /** The tab the URL names, or `my` for an absent or unknown value (VT-1). */
 function inboxTabOf(value: string): 'my' | 'available' | 'started' {
