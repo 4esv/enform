@@ -14,6 +14,9 @@ import { grantsFor, resolverFor } from '../../server/intents.js'
 /** The groups of the cast, keyed by principal id (ID-4): the `membership` seam of a scenario. */
 export type Membership = Readonly<Record<string, readonly string[]>>
 
+/** The manager of each principal, keyed by principal id (AS-1, #267): the `managers` seam of a scenario. */
+export type Managers = Readonly<Record<string, string>>
+
 /** The groups one principal holds (ID-4): none when the membership does not name it. */
 export function groupsOf(membership: Membership | undefined, actor: ActorId): readonly string[] {
   return membership?.[actor] ?? []
@@ -46,8 +49,10 @@ export function grantsApplying(
  */
 export function directoryOf(
   log: Log,
-  membership: Membership | undefined
+  membership: Membership | undefined,
+  managers?: Managers
 ): (starter: ActorId | undefined, data: Readonly<Record<string, unknown>>) => TargetResolver {
+  void managers
   const teamMembers = new Map(teamsOf(log).map((team) => [team.name, team.members]))
   const groupMembers = new Map<string, string[]>()
   for (const [principal, groups] of Object.entries(membership ?? {})) {

@@ -13,7 +13,13 @@ import type { TargetResolver } from '../../engine/routing.js'
 import { mayRead } from '../../engine/status.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../../engine/timeline.js'
 import { isClientIntent, resolveClientOperation } from '../../server/intents.js'
-import { directoryOf, grantsApplying, groupsOf, type Membership } from './directory.js'
+import {
+  directoryOf,
+  grantsApplying,
+  groupsOf,
+  type Managers,
+  type Membership,
+} from './directory.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
 // describes. It delegates to the engine (apply, the append-only log). It is
@@ -56,6 +62,8 @@ export type ApiOptions = {
    * map does not name holds no group here.
    */
   readonly membership?: Membership
+  /** The manager of each principal (AS-1, #267), keyed by principal id; a release server reads it from the directory. */
+  readonly managers?: Managers
   /** The directory resolver, pre-built (a seam); absent reads the teams from the log and the groups from `membership`. */
   readonly resolve?: TargetResolver
 }
@@ -358,7 +366,7 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
           const actor = typeof parsed.actor === 'string' ? parsed.actor : ''
           const at = typeof parsed.at === 'number' ? parsed.at : 0
           const groups = groupsOf(options.membership, actor)
-          const directory = directoryOf(current.log, options.membership)
+          const directory = directoryOf(current.log, options.membership, options.managers)
           const resolved = resolveClientOperation(
             {
               log: current.log,

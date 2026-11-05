@@ -85,7 +85,7 @@ export function decide(
       log: state.log,
       principal: { id: actor, groups: groupsOf(scenario.membership, actor) },
       grants: grantsApplying(state.log, actor, scenario.bootstrap, scenario.membership),
-      resolver: directoryOf(state.log, scenario.membership),
+      resolver: directoryOf(state.log, scenario.membership, scenario.managers),
       now: () => posted.at,
     },
     body
