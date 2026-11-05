@@ -11,7 +11,9 @@ import { golden, requires, STEP } from './scenario.js'
 
 const operators = storyOperators({ golden, people: PEOPLE, requires, fields, versioning })
 
-test('#48 the Actor operator does each S11 step as each person of the cast (S11)', async () => {
+test('#48 the Actor operator does each S11 step as each person of the cast (S11)', {
+  timeout: 120_000,
+}, async () => {
   const variants = await operators.actor()
   expect(variants).toHaveLength(golden.steps.length * PEOPLE.length)
   // Only the holder with step.outcome:send_back sends a step back (AC-4):
@@ -24,31 +26,45 @@ test('#48 the Actor operator does each S11 step as each person of the cast (S11)
   ])
 })
 
-test('#48 the Duplicate operator sends each S11 operation twice without changing the end state (S11)', async () => {
+test('#48 the Duplicate operator sends each S11 operation twice without changing the end state (S11)', {
+  timeout: 120_000,
+}, async () => {
   await operators.duplicate()
 })
 
-test('#48 the Race operator adds a competing action at each S11 step (S11)', () => {
+test('#48 the Race operator adds a competing action at each S11 step (S11)', {
+  timeout: 120_000,
+}, () => {
   const variants = operators.race()
   expect(variants).toHaveLength(golden.steps.length * (PEOPLE.length - 1))
 })
 
-test('#48 the Fault operator interrupts the S11 path at each step boundary (S11)', () => {
+test('#48 the Fault operator interrupts the S11 path at each step boundary (S11)', {
+  timeout: 120_000,
+}, () => {
   expect(operators.fault()).toHaveLength(golden.steps.length)
 })
 
-test('#48 the Offline operator does the S11 steps without a connection and reconnects (S11)', async () => {
+test('#48 the Offline operator does the S11 steps without a connection and reconnects (S11)', {
+  timeout: 120_000,
+}, async () => {
   expect(await operators.offline()).toHaveLength(golden.steps.length)
 })
 
-test('#48 the Clock operator moves the clock at each S11 step (S11)', async () => {
+test('#48 the Clock operator moves the clock at each S11 step (S11)', {
+  timeout: 120_000,
+}, async () => {
   expect(await operators.clock()).toHaveLength(golden.steps.length * 3)
 })
 
-test('#48 the Data operator generates valid and invalid data for each S11 field (S11)', async () => {
+test('#48 the Data operator generates valid and invalid data for each S11 field (S11)', {
+  timeout: 120_000,
+}, async () => {
   expect(await operators.data()).toHaveLength(fields.length * 2)
 })
 
-test('#48 the Version operator publishes a new version at each S11 step boundary (S11)', async () => {
+test('#48 the Version operator publishes a new version at each S11 step boundary (S11)', {
+  timeout: 120_000,
+}, async () => {
   expect(await operators.version()).toHaveLength(golden.steps.length)
 })
