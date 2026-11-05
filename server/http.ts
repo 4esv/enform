@@ -102,6 +102,7 @@ import { grantsFor, resolveClientOperation, resolverFor } from './intents.js'
 import {
   createDirectoryUser,
   DirectoryUserExistsError,
+  directoryGroupMembers,
   directoryUser,
   disableDirectoryUser,
   endIdpSession,
@@ -1299,8 +1300,15 @@ async function serveOperation(
   // snapshot. A grant never touches the directory. The resolver itself is
   // pure (server/intents.ts).
   const routes = ROUTING_INTENTS.has(String(body.type))
+  const claims = body.type === STEP_CLAIMED
   const teamMembers = routes ? await teamMembersFor(pool, log) : new Map()
-  const groupMembers = routes ? await groupMembersFor(config) : new Map()
+  // A claim refreshes only the groups the task names (AS-4, #267), never the
+  // whole realm; a routing intent may reach any group of the definition.
+  const groupMembers = claims
+    ? await directoryGroupMembers(config, claimedGroups(log, body))
+    : routes
+      ? await groupMembersFor(config)
+      : new Map()
   // The deprovisioned accounts come from the log and the manager of the
   // starter from the directory (ID-5, AS-1, #267); a claim resolves no
   // dynamic target, so it reads no manager.
@@ -1381,6 +1389,18 @@ async function resolverForRequest(
   const teamMembers = await teamMembersFor(pool, log)
   const groupMembers = await groupMembersFor(config)
   return resolverFor(starter, data, teamMembers, groupMembers, await directoryFor(config, log, []))
+}
+
+/** The group ids the claimed task's current step names (AS-4, #267), so the claim refreshes those alone. */
+function claimedGroups(log: Log, body: Record<string, unknown>): readonly string[] {
+  const payload = isRecord(body.payload) ? body.payload : {}
+  const instanceId = payload.instanceId
+  const instance = typeof instanceId === 'string' ? instanceOf(log, instanceId) : undefined
+  if (instance === undefined) return []
+  return instance.assignees
+    .filter((assignee) => assignee.step === instance.currentStep && 'group' in assignee.target)
+    .map((assignee) => ('group' in assignee.target ? assignee.target.group : ''))
+    .filter((group) => group !== '')
 }
 
 /**

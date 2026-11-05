@@ -499,6 +499,32 @@ export async function listDirectoryGroups(config: Config): Promise<readonly Dire
 }
 
 /**
+ * The members of the named groups only (AS-4, #267), keyed by group id: what
+ * a claim refreshes, so a claim reads the groups the task names and never
+ * the whole realm. A group the directory no longer holds maps to nobody.
+ */
+export async function directoryGroupMembers(
+  config: Config,
+  groupIds: Iterable<string>
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const ids = [...new Set(groupIds)]
+  if (ids.length === 0) return new Map()
+  const token = await adminToken(config)
+  const members = new Map<string, readonly string[]>()
+  for (const id of ids) {
+    try {
+      members.set(
+        id,
+        (await groupMembers(config, token, id)).map((member) => member.id)
+      )
+    } catch {
+      members.set(id, [])
+    }
+  }
+  return members
+}
+
+/**
  * The ids of the groups that one directory user holds (ID-6, AS-1). The local
  * realm configures no group-membership mapper, so this Admin API read is the
  * directory answer that a group grant and a group target authorize on.
