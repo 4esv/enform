@@ -578,6 +578,46 @@ export interface DefinitionChange {
 }
 
 /**
+ * What a dry run takes (DR-1, DR-4, DR-5): the version to run (a published version number, or
+ * `draft`; absent means the draft), the data of the request form, the person to run as, and how
+ * far to move the simulated clock forward, in minutes.
+ */
+export interface DryRunRequest {
+  readonly version?: Record<string, unknown>
+  readonly data: Record<string, unknown>
+  readonly as?: ActorId
+  readonly advanceMinutes?: number
+}
+
+/**
+ * One timer of the next step and whether the moved clock fired it (DR-4).
+ */
+export interface DryRunTimer {
+  readonly step: string
+  readonly kind: string
+  readonly fireAt: number
+  readonly fired: boolean
+}
+
+/**
+ * What a dry run shows (DR-1, DR-3, DR-4, S05, S08): the flow and the version it ran, the
+ * person it ran as, the simulated start time, the route with the skipped steps and their
+ * conditions, who each active step resolves to and why, the step a submit routes to, the
+ * preview inbox, and the timers of that step.
+ */
+export interface DryRunResult {
+  readonly flow: string
+  readonly version: Record<string, unknown>
+  readonly actor: ActorId
+  readonly now: number
+  readonly route: Record<string, unknown>
+  readonly assignees: readonly Record<string, unknown>[]
+  readonly next?: string
+  readonly intents: readonly Record<string, unknown>[]
+  readonly timers: readonly DryRunTimer[]
+}
+
+/**
  * One write of a draft definition (DF-4, I5). `version` is the draft version that the edit is
  * based on, so the server refuses a stale write and appends nothing (I5, A1); `definition` is
  * the whole canonical v2 definition, because the server diffs it against the draft and
@@ -745,6 +785,20 @@ export async function createUser(createUser: CreateUser): Promise<CreatedUser> {
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as CreatedUser
+}
+
+export async function dryRunFlow(
+  dryRunRequest: DryRunRequest,
+  slug: string
+): Promise<DryRunResult> {
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}/dry-run`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers(), 'content-type': 'application/json' },
+    body: JSON.stringify(dryRunRequest),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as DryRunResult
 }
 
 export function instancePdfUrl(instanceId: string, step?: string): string {

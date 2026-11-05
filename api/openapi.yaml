@@ -1012,6 +1012,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/flows/{slug}/dry-run:
+    post:
+      operationId: dryRunFlow
+      summary: Run a version or the draft of a flow as a dry run
+      description: >-
+        A dry run of any published version or of the draft (DR-1) with the
+        given data: the route with the steps a condition skipped and their
+        conditions (S05), who each active step resolves to and through which
+        target (S08, AS-1), the assignment emails of the next step as the
+        preview inbox (DR-3), and, with the simulated clock moved forward,
+        the reminders and the escalation that step fires by then (DR-4, S12).
+        The run writes no event and sends nothing (A6, I7). It needs
+        `flow.dryrun`, `flow.edit` or `flow.build` on the flow. Running as
+        another person needs `org.impersonate` on `org`, and the log records
+        each such use as `dryrun.ran@1` (DR-5, I14); nothing else of a dry
+        run is stored (DR-6).
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DryRunRequest'
+      responses:
+        '200':
+          description: The dry run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DryRunResult'
+        '400':
+          description: The body names no data, or a version that is neither a number nor `draft`.
+        '401':
+          description: There is no session.
+        '403':
+          description: The person may not dry-run the flow, or may not run as another person.
+        '404':
+          description: No flow has the slug, or the version is not published, or the draft is empty.
   /api/v1/flows/{slug}/publish:
     post:
       operationId: publishFlow
@@ -2676,6 +2719,118 @@ components:
           description: The value before the change, when one place changed.
         after:
           description: The value after the change, when one place changed.
+    DryRunRequest:
+      type: object
+      description: >-
+        What a dry run takes (DR-1, DR-4, DR-5): the version to run (a
+        published version number, or `draft`; absent means the draft), the
+        data of the request form, the person to run as, and how far to move
+        the simulated clock forward, in minutes.
+      required: [data]
+      properties:
+        version:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: string
+              enum: [draft]
+        data:
+          type: object
+          additionalProperties: true
+        as:
+          $ref: '#/components/schemas/ActorId'
+        advanceMinutes:
+          type: integer
+          minimum: 0
+    DryRunTimer:
+      type: object
+      description: One timer of the next step and whether the moved clock fired it (DR-4).
+      required: [step, kind, fireAt, fired]
+      properties:
+        step:
+          type: string
+        kind:
+          type: string
+          enum: [reminder, escalation]
+        fireAt:
+          type: integer
+        fired:
+          type: boolean
+    DryRunResult:
+      type: object
+      description: >-
+        What a dry run shows (DR-1, DR-3, DR-4, S05, S08): the flow and the
+        version it ran, the person it ran as, the simulated start time, the
+        route with the skipped steps and their conditions, who each active
+        step resolves to and why, the step a submit routes to, the preview
+        inbox, and the timers of that step.
+      required: [flow, version, actor, now, route, assignees, intents, timers]
+      properties:
+        flow:
+          type: string
+        version:
+          oneOf:
+            - type: integer
+            - type: string
+              enum: [draft]
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        now:
+          type: integer
+        route:
+          type: object
+          required: [active, skipped]
+          properties:
+            active:
+              type: array
+              items:
+                type: string
+            skipped:
+              type: array
+              items:
+                type: object
+                required: [step, condition]
+                properties:
+                  step:
+                    type: string
+                  condition: {}
+        assignees:
+          type: array
+          items:
+            type: object
+            required: [step, target, members]
+            properties:
+              step:
+                type: string
+              target:
+                type: object
+                additionalProperties: true
+              members:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActorId'
+        next:
+          type: string
+        intents:
+          type: array
+          description: >-
+            The preview inbox (DR-3): each side effect as the outbox would
+            carry it, with what it would send and to whom.
+          items:
+            type: object
+            required: [operation, target, payload]
+            properties:
+              operation:
+                type: string
+              target:
+                type: string
+              payload:
+                type: object
+                additionalProperties: true
+        timers:
+          type: array
+          items:
+            $ref: '#/components/schemas/DryRunTimer'
     DraftWrite:
       type: object
       description: >-
