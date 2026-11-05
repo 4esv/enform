@@ -194,6 +194,7 @@ export async function runMigrations(pool: Pool): Promise<readonly string[]> {
     )
     const applied = await client.query<{ version: string }>('select version from schema_migrations')
     const done = new Set(applied.rows.map((row) => row.version))
+    const appliedNow: string[] = []
     for (const file of versions) {
       if (done.has(file.version)) continue
       await client.query(readFileSync(file.path, 'utf8'))
@@ -201,9 +202,12 @@ export async function runMigrations(pool: Pool): Promise<readonly string[]> {
         file.version,
         Date.now(),
       ])
+      appliedNow.push(file.version)
     }
     await client.query('commit')
-    return versions.map((file) => file.version)
+    // The versions applied by this run: an upgrade on a migrated store applies
+    // none and says so (DE-5).
+    return appliedNow
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -2543,4 +2547,151 @@ function isMissingTable(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '42P01'
   )
+}
+
+// Issue #266, DE-5, I4, D3: the backup and the restore of one store. The log
+// is canonical (D3) and every projection folds out of it, so a backup is the
+// log plus the two kinds of operational state a rebuild keeps beside it: the
+// seed records (DE-4) and the delivery columns of the outbox (SE-1, I3). A
+// restore loads that into an empty store and rebuilds the projections, so the
+// restored store answers exactly like the one that was backed up. Sessions and
+// sign-in attempts expire and are not part of a backup (ADR 0013).
+
+/** The content of one backup file, format 1. */
+export type StoreBackup = {
+  readonly format: 1
+  /** The enform version that wrote the file. */
+  readonly version: string
+  /** When the backup was taken, in milliseconds since the epoch. */
+  readonly takenAt: number
+  readonly events: readonly Event[]
+  readonly seedRecords: readonly SeedRecordRow[]
+  readonly outboxDelivery: readonly OutboxDelivery[]
+}
+
+/** One row of `seed_records`, as a backup carries it (DE-4). */
+export type SeedRecordRow = {
+  readonly profile: string
+  readonly kind: string
+  readonly id: string
+  readonly createdAt: number
+  readonly clearedAt: number | null
+}
+
+/** Read everything a backup carries (DE-5). */
+export async function exportStore(
+  pool: Pool,
+  version: string,
+  takenAt: number
+): Promise<StoreBackup> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin isolation level repeatable read read only')
+    const events = await readLogWith(client)
+    const seeds = await client.query<{
+      profile: string
+      kind: string
+      id: string
+      created_at: string
+      cleared_at: string | null
+    }>('select profile, kind, id, created_at, cleared_at from seed_records order by 1, 2, 3')
+    const outboxDelivery = await readOutboxDelivery(client)
+    await client.query('commit')
+    return {
+      format: 1,
+      version,
+      takenAt,
+      events,
+      seedRecords: seeds.rows.map((row) => ({
+        profile: row.profile,
+        kind: row.kind,
+        id: row.id,
+        createdAt: Number(row.created_at),
+        clearedAt: row.cleared_at === null ? null : Number(row.cleared_at),
+      })),
+      outboxDelivery,
+    }
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Load a backup into an empty store and rebuild the projections (DE-5). A
+ * store that already holds an event refuses the restore: the log is
+ * append-only (I4), and two logs do not merge. The events keep their sequence
+ * numbers and operation IDs, so every reference by `seq` stays valid.
+ */
+export async function importStore(pool: Pool, backup: StoreBackup): Promise<number> {
+  if (backup.format !== 1) throw new Error(`unknown backup format ${String(backup.format)}`)
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const existing = await client.query<{ count: string }>('select count(*) as count from events')
+    if (Number(existing.rows[0]?.count ?? 0) > 0) {
+      throw new Error(
+        'the store is not empty: a restore needs an empty log; create a new database and point --database-url at it'
+      )
+    }
+    for (const event of backup.events) {
+      await client.query(
+        `insert into events (seq, operation_id, type, at, actor, payload)
+         overriding system value values ($1, $2, $3, $4, $5, $6)`,
+        [event.seq, event.operationId, event.type, event.at, event.actor ?? null, event.payload]
+      )
+    }
+    await client.query(
+      `select setval(pg_get_serial_sequence('events', 'seq'), coalesce(max(seq), 1), max(seq) is not null) from events`
+    )
+    for (const record of backup.seedRecords) {
+      await client.query(
+        `insert into seed_records (profile, kind, id, created_at, cleared_at)
+         values ($1, $2, $3, $4, $5)
+         on conflict (profile, kind, id) do update set created_at = excluded.created_at, cleared_at = excluded.cleared_at`,
+        [record.profile, record.kind, record.id, record.createdAt, record.clearedAt]
+      )
+    }
+    await client.query('commit')
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined)
+    throw error
+  } finally {
+    client.release()
+  }
+  const events = await rebuild(pool)
+  const client2 = await pool.connect()
+  try {
+    await client2.query('begin')
+    await restoreOutboxDelivery(client2, backup.outboxDelivery)
+    await client2.query('commit')
+  } catch (error) {
+    await client2.query('rollback').catch(() => undefined)
+    throw error
+  } finally {
+    client2.release()
+  }
+  return events
+}
+
+/** The log through one client, in order (I4). */
+async function readLogWith(client: PoolClient): Promise<readonly Event[]> {
+  const result = await client.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>('select seq, operation_id, type, at, actor, payload from events order by seq')
+  return result.rows.map((row) => ({
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }))
 }
