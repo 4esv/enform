@@ -116,6 +116,19 @@ test('#262 RT-5 queued operations flush in order and stop at the first that does
   expect(second.refused.map((operation) => operation.id)).toEqual(['op-3'])
   expect(second.stopped).toBe(false)
   expect(await again.pending()).toEqual([])
+
+  // An operation enqueued while another is in flight is sent after it, not
+  // dropped (I15).
+  await again.enqueue({ id: 'op-4', type: 'draft.edited@1' })
+  const order: string[] = []
+  const third = await again.flush(async (operation) => {
+    order.push(String(operation.id))
+    if (operation.id === 'op-4') await again.enqueue({ id: 'op-5', type: 'draft.edited@1' })
+    return 'sent'
+  })
+  expect(order).toEqual(['op-4', 'op-5'])
+  expect(third.sent).toBe(2)
+  expect(await again.pending()).toEqual([])
 })
 
 test('#262 I11 destroy removes the key and every ciphertext, so nothing is recoverable', async () => {

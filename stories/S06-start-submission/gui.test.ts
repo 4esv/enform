@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest'
 import { outboxOf } from '../../engine/outbox.js'
 import { runSteps } from '../../tools/harness/runner.js'
-import { goldenViewPrefix, toView } from '../../tools/harness/scenario.js'
-import { flowState, guiGolden as golden, resolve, samGrants } from './scenario.js'
+import { goldenViewPrefix, guiCoverage, toView } from '../../tools/harness/scenario.js'
+import { flowState, guiGolden as golden } from './scenario.js'
 
 // Issue #27, STORIES.md Golden path and Interface path: gui mode runs a
 // scenario's steps in a browser, and each covered GUI step maps to the engine
@@ -20,19 +20,14 @@ import { flowState, guiGolden as golden, resolve, samGrants } from './scenario.j
 // `at = 1` exactly, and the resolved event equals the engine's start (I6).
 
 test('#27 the S06 gui path maps its declared prefix to the engine steps', async () => {
-  const declared = golden.gui?.length ?? 0
+  const declared = guiCoverage(golden.gui ?? [])
   expect(declared, 'the gui path declares a non-empty prefix').toBeGreaterThan(0)
-  expect(declared, 'the gui path covers only the prefix the interface path declares').toBeLessThan(
+  expect(declared, 'the gui path covers at most the scenario steps').toBeLessThanOrEqual(
     golden.steps.length
   )
 
-  const api = await runSteps(golden, { mode: 'api' })
-  const gui = await runSteps(golden, {
-    mode: 'gui',
-    resolve,
-    grants: samGrants,
-    seed: flowState(),
-  })
+  const api = await runSteps(golden, { mode: 'api', seed: flowState() })
+  const gui = await runSteps(golden, { mode: 'gui', seed: flowState() })
 
   // The gui run equals the api run for the declared prefix: the same applied
   // IDs and the same events, event by event (I4, I6).
@@ -50,4 +45,4 @@ test('#27 the S06 gui path maps its declared prefix to the engine steps', async 
   expect(gui.intents, 'the gui prefix and api prefix differ in side effects').toEqual(
     outboxOf(apiPrefix.log)
   )
-}, 30_000)
+}, 90_000)

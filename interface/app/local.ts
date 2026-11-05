@@ -183,6 +183,15 @@ export async function openLocal(options: {
   const secrets = options.secrets instanceof Map ? memorySecrets(options.secrets) : options.secrets
   const key = await sessionKey(secrets)
 
+  // The queue is read, changed and written as one step (I15): one mutation
+  // at a time, so an enqueue during a flush never overwrites the other.
+  let chain: Promise<unknown> = Promise.resolve()
+  const locked = <T>(action: () => Promise<T>): Promise<T> => {
+    const next = chain.then(action)
+    chain = next.catch(() => undefined)
+    return next
+  }
+
   const readQueue = async (): Promise<QueuedOperation[]> => {
     const raw = await storage.get(QUEUE_KEY)
     if (raw === undefined) return []
@@ -241,27 +250,29 @@ export async function openLocal(options: {
       const raw = await storage.get(`${FLOW_PREFIX}${flow}`)
       return raw === undefined ? undefined : open(key, raw)
     },
-    enqueue: async (operation) => {
-      await writeQueue([...(await readQueue()), operation])
-    },
+    enqueue: (operation) =>
+      locked(async () => {
+        await writeQueue([...(await readQueue()), operation])
+      }),
     pending: readQueue,
     flush: async (send) => {
-      const queue = await readQueue()
       const refused: QueuedOperation[] = []
       let sent = 0
-      let index = 0
-      while (index < queue.length) {
-        const outcome = await send(queue[index])
-        if (outcome === 'offline') {
-          await writeQueue(queue.slice(index))
-          return { sent, refused, stopped: true }
-        }
+      // The queue is re-read after every send, so an operation enqueued
+      // while one was in flight is never dropped (I15).
+      for (;;) {
+        const queue = await readQueue()
+        const next = queue[0]
+        if (next === undefined) return { sent, refused, stopped: false }
+        const outcome = await send(next)
+        if (outcome === 'offline') return { sent, refused, stopped: true }
         if (outcome === 'sent') sent += 1
-        else refused.push(queue[index])
-        index += 1
-        await writeQueue(queue.slice(index))
+        else refused.push(next)
+        await locked(async () => {
+          const current = await readQueue()
+          await writeQueue(current.filter((operation) => operation.id !== next.id))
+        })
       }
-      return { sent, refused, stopped: false }
     },
     destroy: async () => {
       secrets.delete(SESSION_KEY_NAME)

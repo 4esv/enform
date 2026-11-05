@@ -104,14 +104,14 @@ Refs: RT-1, RT-3, RT-4, RT-5, I1, I11, I15, I16
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | skip | run | - |
-| Duplicate | run | skip | run | - |
-| Race | run | skip | run | - |
-| Fault | run | skip | run | - |
-| Offline | run | skip | run | - |
-| Clock | run | skip | run | - |
-| Data | run | skip | run | - |
-| Version | run | skip | run | - |
+| Actor | run | skip | run | run |
+| Duplicate | run | skip | run | run |
+| Race | run | skip | run | run |
+| Fault | run | skip | run | run |
+| Offline | run | skip | run | run |
+| Clock | run | skip | run | run |
+| Data | run | skip | run | run |
+| Version | run | skip | run | run |
 
 ## S08: Route to the correct people (`route`)
 

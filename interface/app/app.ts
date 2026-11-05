@@ -58,6 +58,7 @@ import {
   type StepForm,
   stepKeys,
 } from './form.js'
+import { indexedDbStore, type LocalStore, openLocal, sessionSecrets } from './local.js'
 import { modeLabel, openRealtime, type Present, type Realtime, type Scope } from './realtime.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
@@ -229,7 +230,9 @@ export async function mountApp(options: AppOptions): Promise<void> {
     signOut.textContent = 'Sign out'
     signOut.dataset.logout = ''
     signOut.addEventListener('click', () => {
-      void logout()
+      // The local copy goes first (I11): a shared computer keeps nothing.
+      void (store?.destroy() ?? Promise.resolve())
+        .then(() => logout())
         .then(() => location.assign('/'))
         .catch((error: unknown) => {
           main.textContent = messageOf(error)
@@ -267,6 +270,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
       onMode: (mode) => {
         connection.dataset.mode = mode
         connection.textContent = modeLabel(mode)
+        if (mode !== 'offline') void flushQueue()
       },
       onChanged: (change) => onChanged?.(change),
       ...(onPresence === undefined ? {} : { onPresence }),
@@ -289,6 +293,320 @@ export async function mountApp(options: AppOptions): Promise<void> {
                 `${person.displayName}${person.where === undefined ? '' : ` (${person.where})`}`
             )
             .join(', ')}`
+  }
+
+  // Issue #262, RT-3, RT-4, RT-5, I11, I15, I16, ADR 0007: the local-first
+  // store. Each edit is sealed and stored on the device before it is sent as
+  // one idempotent operation; what could not reach the server waits in a
+  // queue that flushes when the connection returns. Sign-out and the idle
+  // timeout destroy the key and the ciphertext.
+  let store: LocalStore | undefined
+  try {
+    store = await openLocal({ storage: indexedDbStore(), secrets: sessionSecrets() })
+  } catch {
+    store = undefined
+  }
+  // The service worker keeps the shell and the reads a page needs, so a
+  // refresh without a connection shows the local state at once (RT-4).
+  if ('serviceWorker' in navigator) {
+    void navigator.serviceWorker
+      .register('/sw.js')
+      .then(() => navigator.serviceWorker.ready)
+      .then((registration) => {
+        const worker = registration.active
+        if (worker === null) return
+        // The worker caches what this page already loaded, and answers once
+        // it has; the document then says it is available offline, which the
+        // harness and a person can read.
+        const urls = performance
+          .getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .concat(location.href)
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if ((event.data as { type?: unknown } | null)?.type === 'cached') {
+            document.documentElement.dataset.offlineReady = 'true'
+          }
+        })
+        worker.postMessage({ type: 'cache', urls })
+      })
+      .catch(() => undefined)
+  }
+  /** What the page does with a refused queued operation: show the reason where it belongs. */
+  let onRefused: (operation: Record<string, unknown>, error: RequestRefused) => void = () => {}
+  /** What the page does once the queue is empty: follow a queued submit, mark the draft synced. */
+  let onFlushed: () => void = () => {}
+  let flushing: Promise<boolean> | undefined
+  const sendOne = async (
+    operation: Record<string, unknown>
+  ): Promise<'sent' | 'refused' | 'offline'> => {
+    try {
+      await appendOperation(operation as unknown as Operation)
+      return 'sent'
+    } catch (error: unknown) {
+      if (error instanceof RequestRefused) {
+        onRefused(operation, error)
+        return 'refused'
+      }
+      return 'offline'
+    }
+  }
+  /** Send the queue until it is empty or the server is out of reach; one flush runs at a time. */
+  const flushQueue = (): Promise<boolean> => {
+    if (store === undefined) return Promise.resolve(true)
+    if (flushing !== undefined) return flushing
+    const held = store
+    const run = async (): Promise<boolean> => {
+      let sent = 0
+      for (;;) {
+        const result = await held.flush(sendOne)
+        sent += result.sent
+        if (result.stopped) return false
+        if ((await held.pending()).length === 0) {
+          // Only a flush that sent something confirms anything (I16).
+          if (sent > 0) onFlushed()
+          return true
+        }
+      }
+    }
+    flushing = run().then(async (flushed) => {
+      flushing = undefined
+      // An operation queued while the run was finishing goes with the next run.
+      if (flushed && (await held.pending()).length > 0) return flushQueue()
+      return flushed
+    })
+    return flushing
+  }
+  window.addEventListener('online', () => void flushQueue())
+  // The idle timeout of ADR 0007: thirty minutes without a key or a pointer
+  // destroy the local copy; the server copy stays (I11).
+  const IDLE_MS = 30 * 60_000
+  let idle: ReturnType<typeof setTimeout> | undefined
+  const armIdle = (): void => {
+    if (idle !== undefined) clearTimeout(idle)
+    idle = setTimeout(() => void store?.destroy(), IDLE_MS)
+  }
+  for (const type of ['keydown', 'pointerdown']) window.addEventListener(type, armIdle)
+  armIdle()
+
+  /**
+   * The page of one instance, on the same origin and with the same
+   * principal as this page: the release server's `/?flow=` link and the
+   * harness link that carries the actor both keep their other parameters.
+   */
+  const instanceUrl = (slug: string, id: string): string => {
+    const url = new URL(location.href)
+    url.searchParams.set('flow', slug)
+    url.searchParams.set('instance', id)
+    return `${url.pathname}${url.search}`
+  }
+
+  /** The sync marker of one field (I15): "Saved on this device" until the server acknowledged the edit, then "Synced". */
+  const markSync = (key: string | undefined, state: 'saved' | 'synced'): void => {
+    const rows = key === undefined ? [...page.rows.values()] : [page.rows.get(key)]
+    for (const row of rows) {
+      const marker = row?.querySelector<HTMLElement>('[data-sync]')
+      if (marker === undefined || marker === null) continue
+      marker.dataset.sync = state
+      marker.textContent = state === 'saved' ? 'Saved on this device' : 'Synced'
+    }
+  }
+
+  /** Put stored values back into the form's controls (RT-4). */
+  const setValues = (form: HTMLElement, values: Readonly<Record<string, unknown>>): void => {
+    for (const [key, value] of Object.entries(values)) {
+      const controls = form.querySelectorAll<
+        HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+      >(`[name="${key}"]`)
+      for (const control of controls) {
+        if (control instanceof HTMLInputElement && control.type === 'checkbox') {
+          control.checked = Array.isArray(value) ? value.includes(control.value) : value === true
+        } else if (control instanceof HTMLInputElement && control.type === 'radio') {
+          control.checked = control.value === String(value)
+        } else if (!(control instanceof HTMLInputElement && control.type === 'file')) {
+          control.value = value === undefined || value === null ? '' : String(value)
+        }
+      }
+    }
+  }
+
+  /**
+   * Wire a request form to the local-first store (RT-3, RT-5): every change
+   * is saved on the device, then sent as the start of the draft or as one
+   * draft edit; a submit is queued when the server is out of reach and
+   * follows when it returns.
+   */
+  const localFirst = (
+    form: HTMLFormElement,
+    status: HTMLElement,
+    slug: string,
+    instanceId: string,
+    draft: { started: boolean; version: number }
+  ): { submit: () => void; post: (operation: Operation, key?: string) => Promise<void> } => {
+    const instancePath = instanceUrl(slug, instanceId)
+    let navigateAfterFlush = false
+    onRefused = (operation, error) => {
+      showRefusal(status, form, error)
+      if (operation.type === INSTANCE_SUBMITTED) navigateAfterFlush = false
+    }
+    onFlushed = () => {
+      void store?.markSynced(instanceId)
+      if (navigateAfterFlush) {
+        navigateAfterFlush = false
+        location.assign(instancePath)
+      }
+    }
+    /** How many operations wait for the server (A4, I15), readable on the status line. */
+    const showQueued = async (): Promise<void> => {
+      const count = store === undefined ? 0 : (await store.pending()).length
+      status.dataset.queued = String(count)
+    }
+    const send = async (operation: Operation, key?: string): Promise<void> => {
+      // Without a local store (no IndexedDB) the operation goes straight out.
+      if (store === undefined) {
+        try {
+          await appendOperation(operation)
+          markSync(key, 'synced')
+          status.textContent = 'Synced'
+        } catch (error: unknown) {
+          showRefusal(status, form, error)
+        }
+        return
+      }
+      await store.enqueue(operation as unknown as Record<string, unknown>)
+      await showQueued()
+      let flushed = await flushQueue()
+      while (flushed && store !== undefined && (await store.pending()).length > 0) {
+        flushed = await flushQueue()
+      }
+      await showQueued()
+      if (!flushed) {
+        markSync(key, 'saved')
+        status.textContent = navigateAfterFlush
+          ? 'Will submit when you are back online'
+          : 'Saved on this device'
+        return
+      }
+      // The server acknowledged this field's edit (I15, I16): only it, and
+      // only now, shows Synced.
+      markSync(key, 'synced')
+      status.textContent = 'Synced'
+    }
+    const startIntent = (values: Record<string, JsonValue>): Operation => ({
+      id: ids(),
+      type: INSTANCE_STARTED,
+      at: clock(),
+      actor,
+      payload: { flow: slug, instanceId, values },
+    })
+    // A field that did not change since its last save posts nothing again: a
+    // blur after a pause, or a repeated event, is not a second edit (I1).
+    const lastSaved = new Map<string, string>()
+    const onEdit = async (key: string): Promise<void> => {
+      const values = readValues()
+      const current = JSON.stringify(values[key] ?? null)
+      if (lastSaved.get(key) === current) return
+      if (!draft.started) {
+        for (const [each, value] of Object.entries(values))
+          lastSaved.set(each, JSON.stringify(value))
+      }
+      lastSaved.set(key, current)
+      clearErrors()
+      await store?.saveDraft(instanceId, values, 'saved', draft.version)
+      await store?.rememberDraft(slug, instanceId)
+      markSync(key, 'saved')
+      status.textContent = 'Saved on this device'
+      if (!draft.started) {
+        draft.started = true
+        await send(startIntent(values), key)
+        return
+      }
+      const value = values[key]
+      if (value === undefined) return
+      // A draft edit advances no version (ADR 0014): the submit carries the
+      // version the start or the last submit-side event gave.
+      await send(
+        {
+          id: ids(),
+          type: DRAFT_EDITED,
+          at: clock(),
+          actor,
+          payload: { instanceId, values: { [key]: value } },
+        },
+        key
+      )
+    }
+    // Typing saves after a short pause, and leaving the field saves at once,
+    // so a keystroke never posts on its own and no edit waits for a blur.
+    const timers = new Map<string, ReturnType<typeof setTimeout>>()
+    const keyOf = (event: Event): string | undefined => {
+      const target = event.target
+      return target instanceof HTMLElement
+        ? target.closest<HTMLElement>('[data-field-row]')?.dataset.fieldRow
+        : undefined
+    }
+    form.addEventListener('input', (event) => {
+      const key = keyOf(event)
+      if (key === undefined) return
+      const pending = timers.get(key)
+      if (pending !== undefined) clearTimeout(pending)
+      timers.set(
+        key,
+        setTimeout(() => {
+          timers.delete(key)
+          void onEdit(key)
+        }, 300)
+      )
+    })
+    // A change (a blur, a checkbox, a file) joins the same short pause, so
+    // the edits post in the order the person made them.
+    form.addEventListener('change', (event) => {
+      const key = keyOf(event)
+      if (key === undefined) return
+      const pending = timers.get(key)
+      if (pending !== undefined) clearTimeout(pending)
+      timers.set(
+        key,
+        setTimeout(() => {
+          timers.delete(key)
+          void onEdit(key)
+        }, 300)
+      )
+    })
+    /** Post the edits still waiting for their pause, in order, before a save or a submit. */
+    const settleEdits = async (): Promise<void> => {
+      for (const [key, timer] of [...timers]) {
+        clearTimeout(timer)
+        timers.delete(key)
+        await onEdit(key)
+      }
+    }
+    return {
+      post: async (operation, key) => {
+        await settleEdits()
+        await send(operation, key)
+      },
+      submit: () => {
+        void (async () => {
+          await settleEdits()
+          clearErrors()
+          const values = readValues()
+          if (!draft.started) {
+            draft.started = true
+            await store?.saveDraft(instanceId, values, 'saved', 0)
+            await store?.rememberDraft(slug, instanceId)
+            await store?.enqueue(startIntent(values) as unknown as Record<string, unknown>)
+          }
+          navigateAfterFlush = true
+          await send({
+            id: ids(),
+            type: INSTANCE_SUBMITTED,
+            at: clock(),
+            actor,
+            payload: { instanceId, version: draft.version, values: {} },
+          })
+        })()
+      },
+    }
   }
 
   /** Re-render when no control of the page has the focus, else after it loses it (A4, RT-3). */
@@ -331,6 +649,13 @@ export async function mountApp(options: AppOptions): Promise<void> {
     }
     row.appendChild(label)
     row.appendChild(renderControl(field, page.readers, readValue))
+    row.dataset.fieldRow = field.key
+    // The sync marker of the field (I15): empty until the field changed.
+    const sync = document.createElement('span')
+    sync.className = 'sync'
+    sync.dataset.sync = ''
+    sync.dataset.syncFor = field.key
+    row.appendChild(sync)
     page.rows.set(field.key, row)
     return row
   }
@@ -396,32 +721,56 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const form = buildForm(formModel(flow.definition, stepKey), () => true)
     const status = document.createElement('p')
     status.className = 'status'
-    // The start creates a private draft on the request form (ADR 0014, D1):
-    // Save draft posts the start intent alone, so the person can come back to
-    // the draft from Started by me. Submit posts the start and then the submit
-    // intent, two engine steps (ADR 0010), and the engine validates the form,
-    // routes the instance and notifies the assignees (FM-4, SE-2).
-    const instancePath = (instanceId: string): string =>
-      `/?flow=${encodeURIComponent(slug)}&instance=${encodeURIComponent(instanceId)}`
-    const startIntent = (instanceId: string): Operation => ({
-      id: ids(),
-      type: INSTANCE_STARTED,
-      at: clock(),
-      actor,
-      payload: { flow: slug, instanceId, values: readValues() },
-    })
+    // The start creates a private draft on the request form (ADR 0014, D1).
+    // The page is local first (RT-3): the first change starts the draft with
+    // the values typed so far, each later change is one draft edit, and the
+    // device keeps every edit sealed until the server acknowledged it (I15).
+    // A refresh shows the device's copy at once (RT-4): the page remembers
+    // which draft this flow holds and puts its values back. Submit posts the
+    // start when nothing was typed, then the submit intent; the engine
+    // validates the form, routes the instance and notifies the assignees.
+    const remembered = store === undefined ? undefined : await store.draftOf(slug)
+    const held = remembered === undefined ? undefined : await store?.readDraft(remembered)
+    const instanceId = remembered !== undefined && held !== undefined ? remembered : instanceIds()
+    const draft = { started: held !== undefined, version: held?.version ?? 0 }
+    if (held !== undefined) {
+      setValues(form, held.values)
+      markSync(undefined, held.state)
+      status.textContent = held.state === 'saved' ? 'Saved on this device' : 'Synced'
+    }
+    const instancePath = (id: string): string => instanceUrl(slug, id)
+    const local = localFirst(form, status, slug, instanceId, draft)
     const save = document.createElement('button')
     save.type = 'button'
     save.textContent = 'Save draft'
     save.dataset.start = ''
     save.addEventListener('click', () => {
-      const instanceId = instanceIds()
-      void appendOperation(startIntent(instanceId))
-        .then(() => {
-          clearErrors()
-          status.textContent = 'Synced'
-          // The start minted the instance; the person follows the link to the
-          // draft (S06, DX-1).
+      void (async () => {
+        clearErrors()
+        const values = readValues()
+        await store?.saveDraft(instanceId, values, 'saved', draft.version)
+        await store?.rememberDraft(slug, instanceId)
+        const operation: Operation = draft.started
+          ? {
+              id: ids(),
+              type: DRAFT_EDITED,
+              at: clock(),
+              actor,
+              payload: { instanceId, values },
+            }
+          : {
+              id: ids(),
+              type: INSTANCE_STARTED,
+              at: clock(),
+              actor,
+              payload: { flow: slug, instanceId, values },
+            }
+        draft.started = true
+        await local.post(operation)
+        if (status.textContent !== 'Synced') return
+        // The start minted the instance; the person follows the link to the
+        // draft (S06, DX-1).
+        if (form.querySelector('.instance-link') === null) {
           const link = document.createElement('p')
           link.className = 'instance-link'
           const anchor = document.createElement('a')
@@ -429,48 +778,17 @@ export async function mountApp(options: AppOptions): Promise<void> {
           anchor.textContent = instanceId
           link.append('Draft ', anchor)
           form.appendChild(link)
-        })
-        .catch((error: unknown) => {
-          showRefusal(status, form, error)
-        })
+        }
+      })()
     })
     const submit = document.createElement('button')
     submit.type = 'button'
     submit.textContent = 'Submit'
     submit.dataset.submit = ''
-    submit.addEventListener('click', () => {
-      const instanceId = instanceIds()
-      void appendOperation(startIntent(instanceId))
-        .then(() =>
-          appendOperation({
-            id: ids(),
-            type: INSTANCE_SUBMITTED,
-            at: clock(),
-            actor,
-            payload: { instanceId, version: 0, values: {} },
-          })
-        )
-        .then(() => {
-          clearErrors()
-          status.textContent = 'Submitted'
-          location.assign(instancePath(instanceId))
-        })
-        .catch((error: unknown) => {
-          // A refused submit leaves the draft on the server (RT-5): the
-          // person sees the reason at the field and the draft link, and
-          // corrects it on the draft page.
-          showRefusal(status, form, error)
-          const link = document.createElement('p')
-          link.className = 'instance-link'
-          const anchor = document.createElement('a')
-          anchor.href = instancePath(instanceId)
-          anchor.textContent = instanceId
-          link.append('Draft ', anchor)
-          form.appendChild(link)
-        })
-    })
+    submit.addEventListener('click', () => local.submit())
     form.append(save, submit, status)
     main.appendChild(form)
+    if (store !== undefined && (await store.pending()).length > 0) void flushQueue()
   }
 
   /**
@@ -488,53 +806,41 @@ export async function mountApp(options: AppOptions): Promise<void> {
     form: HTMLFormElement,
     status: HTMLElement
   ): void => {
+    const draft = { started: true, version: view.version }
+    const local = localFirst(form, status, slug, instanceId, draft)
+    // The device's unacknowledged edits win over the server's copy (RT-4,
+    // I15): they are queued and will reach it.
+    void store?.readDraft(instanceId).then((held) => {
+      if (held === undefined || held.state !== 'saved') return
+      setValues(form, held.values)
+      markSync(undefined, 'saved')
+      status.textContent = 'Saved on this device'
+      draft.version = Math.max(draft.version, held.version)
+      void flushQueue()
+    })
     const save = document.createElement('button')
     save.type = 'button'
     save.textContent = 'Save'
     save.dataset.saveDraft = ''
     save.addEventListener('click', () => {
-      const intent: Operation = {
-        id: ids(),
-        type: DRAFT_EDITED,
-        at: clock(),
-        actor,
-        payload: { instanceId, values: readValues() },
-      }
-      void appendOperation(intent)
-        .then(() => {
-          clearErrors()
-          status.textContent = 'Synced'
+      void (async () => {
+        clearErrors()
+        const values = readValues()
+        await store?.saveDraft(instanceId, values, 'saved', draft.version)
+        await local.post({
+          id: ids(),
+          type: DRAFT_EDITED,
+          at: clock(),
+          actor,
+          payload: { instanceId, values },
         })
-        .catch((error: unknown) => {
-          showRefusal(status, form, error)
-        })
+      })()
     })
     const submit = document.createElement('button')
     submit.type = 'button'
     submit.textContent = 'Submit'
     submit.dataset.submit = ''
-    submit.addEventListener('click', () => {
-      const intent: Operation = {
-        id: ids(),
-        type: INSTANCE_SUBMITTED,
-        at: clock(),
-        actor,
-        payload: { instanceId, version: view.version, values: readValues() },
-      }
-      void appendOperation(intent)
-        .then(() => renderTask(slug, instanceId, 'Submitted'))
-        .catch(async (error: unknown) => {
-          if (
-            error instanceof RequestRefused &&
-            error.status === 409 &&
-            error.errors.length === 0
-          ) {
-            await renderTask(slug, instanceId, error.error)
-            return
-          }
-          showRefusal(status, form, error)
-        })
-    })
+    submit.addEventListener('click', () => local.submit())
     form.append(save, submit, status)
     main.appendChild(form)
   }

@@ -5,6 +5,7 @@ import {
   DEFINITION_CHANGED,
   type Field,
   type FlowDefinition,
+  type JsonValue,
   parse,
 } from '../../engine/definition.js'
 import {
@@ -17,9 +18,9 @@ import {
 } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
-import { outboxOf } from '../../engine/outbox.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import {
+  editDraft,
   INSTANCE_STARTED,
   INSTANCE_SUBMITTED,
   startInstance,
@@ -160,68 +161,79 @@ function depsFor(index: number): OperationDeps {
 }
 
 /**
- * The state-change payload without the outbox key. The runner wraps the step's
- * outbox back into the payload through `createOutboxOperation` (I2), so the
- * step carries the change and the side effect separately.
+ * The interface path of S06 (STORIES.md, RT-3, #262): the page is local first.
+ * The first change starts the draft with the values typed so far, each later
+ * change is one draft edit, Save draft sends the values once more, and the
+ * draft page submits. The gui actions produce exactly these engine steps.
  */
-function withoutOutbox(
-  payload: Readonly<Record<string, unknown>>
-): Readonly<Record<string, unknown>> {
-  return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'outbox'))
-}
-
-/**
- * The interface path of S06 (STORIES.md, ADR 0014): Sam starts a draft with
- * the values he typed, then submits it; the submit routes past the triage
- * step to the advisor and records the assignment email (ID-2, WF-1, I2, SE-1,
- * FM-7). The steps are declared resolved: gui mode seeds the server with the
- * published flow (`flowState`) and the browser posts the start intent, which
- * the server resolves to the first step; the harness appends the second as
- * it stands.
- */
-function submissionSteps(): readonly Step[] {
-  const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
-  const result = submitInstance(
-    started.instance,
+function guiSteps(): readonly Step[] {
+  const steps: Step[] = []
+  const firstChange = { summary: 'three extra credits', urgent: false, details: '' }
+  const started = startInstance(flow, INSTANCE_ID, firstChange, SAM, depsFor(0), resolve, samGrants)
+  steps.push(
+    declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values: firstChange })
+  )
+  // The flow is seeded outside these steps (flowState), so the instance is
+  // threaded through the engine's results rather than read back from the log.
+  let instance = started.instance
+  const edits: readonly Readonly<Record<string, JsonValue>>[] = [
+    { overload_credits: 3 },
+    { details: 'I need three extra credits to graduate on time.' },
+    samData as Readonly<Record<string, JsonValue>>,
+  ]
+  for (const values of edits) {
+    const edited = editDraft(instance, SAM, values, depsFor(steps.length))
+    if (edited.operation === undefined) throw new Error(edited.reason)
+    instance = edited.instance
+    steps.push(declared(edited.operation, { instanceId: INSTANCE_ID, values }))
+  }
+  const submitted = submitInstance(
+    instance,
     SAM,
-    samData,
+    {},
     0,
     { flow: SLUG, definition: definitionV1, resolve, grants: samGrants },
-    depsFor(1)
+    depsFor(steps.length)
   )
-  if (!result.accepted || result.operation === undefined) {
-    throw new Error(`S06: the golden submit was refused: ${result.reason}`)
-  }
-  const submitted = { instance: result.instance, operation: result.operation }
-
-  return [
-    {
-      actor: started.operation.actor ?? SAM,
-      type: started.operation.type,
-      payload: started.operation.payload,
-    },
-    {
-      actor: submitted.operation.actor ?? SAM,
-      type: submitted.operation.type,
-      payload: withoutOutbox(submitted.operation.payload),
-      outbox: outboxOf(apply(submitted.operation, emptyState).log),
-    },
-  ]
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
+  return steps
 }
 
 export const guiGolden = scenario({
   slug: 'start-submission',
   flowSlug: SLUG,
-  steps: submissionSteps(),
+  // The browser posts intents, so the harness authorizes Sam through the
+  // same grants and groups as the engine path (AC-1, I8).
+  bootstrap,
+  membership,
+  steps: guiSteps(),
   gui: [
     {
+      // The start page: the first change starts the draft, the next ones edit
+      // it, and Save draft sends the values once more; each field shows Saved
+      // on this device, then Synced (I15).
+      steps: 4,
       actions: [
         { fill: { field: 'summary', value: 'three extra credits' } },
+        { expectText: { selector: '[data-sync-for="summary"]', text: 'Synced' } },
         { fill: { field: 'overload_credits', value: 3 } },
+        { expectText: { selector: '[data-sync-for="overload_credits"]', text: 'Synced' } },
         { fill: { field: 'urgent', value: false } },
         { fill: { field: 'details', value: 'I need three extra credits to graduate on time.' } },
+        { expectText: { selector: '[data-sync-for="details"]', text: 'Synced' } },
         { click: '[data-start]' },
         { expect: 'Synced' },
+      ],
+    },
+    {
+      // The draft page: Submit routes the request to Dr. Okafor, and the
+      // tracker shows his step waiting, not opened (S06, VT-2).
+      instance: INSTANCE_ID,
+      steps: 1,
+      actions: [
+        { click: '[data-submit]' },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="unopened"]' },
       ],
     },
   ],

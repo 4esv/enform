@@ -1,13 +1,14 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, parse } from '../../engine/definition.js'
+import { type FlowDefinition, type JsonValue, parse } from '../../engine/definition.js'
 import { createFlow, type Flow, type FlowVersion, publish, push } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
-import { startInstance } from '../../engine/submission.js'
+import { editDraft, startInstance } from '../../engine/submission.js'
 import { type Step, scenario } from '../../tools/harness/scenario.js'
+import { declared } from '../example-flow.js'
 
 // Issue #106, FM-1, FM-3, FM-7: the requirement test for FM-1. No story cites
 // FM-1, so MVP.md section 13 (the #99 entry) makes a requirement test its
@@ -126,24 +127,71 @@ function depsFor(index: number): OperationDeps {
   return { clock: () => index + 1, ids: () => `op-${index + 1}` }
 }
 
-/** The golden step of the start (FM-1, FM-7), built through the engine with the same sources. */
+/**
+ * What the page holds when the first control changes (FM-1, #262): the typed
+ * text, and every other control's reading. A number, a date, a file and a
+ * repeating section read nothing when empty; a text reads an empty string; a
+ * select reads its first option; a radio group reads null; a checkbox group
+ * reads an empty list.
+ */
+const firstChange: ConditionData = {
+  text: 'hello',
+  'long-text': '',
+  select: 'one',
+  'multi-select': [],
+  checkbox: false,
+  radio: null,
+  'yes-no': null,
+  email: '',
+  phone: '',
+  user: '',
+}
+
+/** The edits the page posts after the first change, one per control change, in fill order. */
+const edits: readonly Readonly<Record<string, JsonValue>>[] = [
+  { 'long-text': 'a longer answer' },
+  { number: 3 },
+  { money: 12.5 },
+  { date: '2026-10-10' },
+  // The select already read its first option, so choosing it posts nothing;
+  // the two checks of the group land within one pause, so they post once.
+  { 'multi-select': ['one', 'two'] },
+  { checkbox: true },
+  { radio: 'two' },
+  { 'yes-no': 'yes' },
+  { email: 'sam@example.org' },
+  { phone: '+1 555 0100' },
+  { file: 'upload.txt' },
+  { user: 'user:sam' },
+  { repeating: [{ key: 'value' }] },
+  values as Readonly<Record<string, JsonValue>>,
+]
+
+/** The golden steps of the page (FM-1, FM-7, RT-3): the start on the first change, then one draft edit per change and the Save. */
 function startSteps(): readonly Step[] {
-  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(0), resolve, samGrants)
-  return [
-    {
-      actor: started.operation.actor ?? SAM,
-      type: started.operation.type,
-      payload: started.operation.payload,
-    },
-  ]
+  const steps: Step[] = []
+  const started = startInstance(flow, INSTANCE_ID, firstChange, SAM, depsFor(0), resolve, samGrants)
+  steps.push(
+    declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values: firstChange })
+  )
+  let instance = started.instance
+  for (const edit of edits) {
+    const edited = editDraft(instance, SAM, edit, depsFor(steps.length))
+    if (edited.operation === undefined) throw new Error(edited.reason)
+    instance = edited.instance
+    steps.push(declared(edited.operation, { instanceId: INSTANCE_ID, values: edit }))
+  }
+  return steps
 }
 
 export const golden = scenario({
   slug: 'fm-1-controls',
   flowSlug: SLUG,
+  bootstrap: samGrants,
   steps: startSteps(),
   gui: [
     {
+      steps: 15,
       actions: [
         { expectDom: { field: 'text', tag: 'input', type: 'text' } },
         { expectDom: { field: 'long-text', tag: 'textarea' } },
@@ -162,21 +210,35 @@ export const golden = scenario({
         { expectDom: { field: 'static', tag: 'div' } },
         { expectDom: { field: 'repeating', tag: 'fieldset' } },
         { fill: { field: 'text', value: 'hello' } },
+        { expectText: { selector: '[data-sync-for="text"]', text: 'Synced' } },
         { fill: { field: 'long-text', value: 'a longer answer' } },
+        { expectText: { selector: '[data-sync-for="long-text"]', text: 'Synced' } },
         { fill: { field: 'number', value: 3 } },
+        { expectText: { selector: '[data-sync-for="number"]', text: 'Synced' } },
         { fill: { field: 'money', value: 12.5 } },
+        { expectText: { selector: '[data-sync-for="money"]', text: 'Synced' } },
         { fill: { field: 'date', value: '2026-10-10' } },
+        { expectText: { selector: '[data-sync-for="date"]', text: 'Synced' } },
         { fill: { field: 'select', value: 'one' } },
         { fill: { field: 'multi-select', value: ['one', 'two'] } },
+        { expectText: { selector: '[data-sync-for="multi-select"]', text: 'Synced' } },
         { fill: { field: 'checkbox', value: true } },
+        { expectText: { selector: '[data-sync-for="checkbox"]', text: 'Synced' } },
         { fill: { field: 'radio', value: 'two' } },
+        { expectText: { selector: '[data-sync-for="radio"]', text: 'Synced' } },
         { fill: { field: 'yes-no', value: 'yes' } },
+        { expectText: { selector: '[data-sync-for="yes-no"]', text: 'Synced' } },
         { fill: { field: 'email', value: 'sam@example.org' } },
+        { expectText: { selector: '[data-sync-for="email"]', text: 'Synced' } },
         { fill: { field: 'phone', value: '+1 555 0100' } },
+        { expectText: { selector: '[data-sync-for="phone"]', text: 'Synced' } },
         { fill: { field: 'file', value: 'upload.txt' } },
+        { expectText: { selector: '[data-sync-for="file"]', text: 'Synced' } },
         { fill: { field: 'user', value: 'user:sam' } },
+        { expectText: { selector: '[data-sync-for="user"]', text: 'Synced' } },
         { click: '[data-add-row="repeating"]' },
         { fill: { field: 'repeating', value: '{"key":"value"}' } },
+        { expectText: { selector: '[data-sync-for="repeating"]', text: 'Synced' } },
         { click: '[data-start]' },
         { expect: 'Synced' },
       ],
