@@ -97,18 +97,18 @@ This table records where each story was done. Update it in the same pull request
 
 | Story | Engine issue | Engine tests | Engine commits | Interface issue | Interface commits | Status |
 |---|---|---|---|---|---|---|
-| S01 | #38 | stories/S01-publish-flow/scenario.test.ts | ad5ddca eac5f63 58750b7 | | | Engine in progress |
+| S01 | #38, #258, #264 | stories/S01-publish-flow/scenario.test.ts, integration/cli.test.ts | ad5ddca eac5f63 58750b7 | #224, #264 | fa4992c d086700 b7a73b7 28f960b | Engine in progress: the Offline operator does not run S01 yet; the interface path runs in Chromium |
 | S02 | #39 | stories/S02-grant-scopes/scenario.test.ts, stories/S02-grant-scopes/operators.test.ts | 5383f8c e9b044d 565016a |  |  | Engine passes |
-| S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts | e436106 5808cdc |  |  | Engine passes |
+| S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts | e436106 5808cdc | #264 | a7e4c4b e85bd21 b352063 28f960b | Engine passes, interface in progress: the version difference with its authors is open |
 | S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts | c38bb5e bc6b63a |  |  | Engine passes |
-| S05 | #42 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts | 501e5e3 0f1dcbf |  |  | Engine passes |
+| S05 | #42, #264 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts, tools/dryrun.test.ts | 501e5e3 0f1dcbf | #264 | d086700 b7a73b7 28f960b | Done |
 | S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181, #262 | 640d062 f9e809d f9e5224 | Done |
 | S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts, stories/S07-lose-connection/gui.test.ts, interface/app/local.test.ts | 8d6bb33 | #262 | | Done |
-| S08 | #45 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts | c3d8025 27e0712 |  |  | Engine passes |
+| S08 | #45, #264 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts, tools/dryrun.test.ts | c3d8025 27e0712 | #264 | b7a73b7 28f960b | Done |
 | S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts | 8888d67 98e561c |  |  | Engine passes |
 | S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts | d165932 0f1c912 23a561a |  |  | Engine passes |
 | S11 | #48 | stories/S11-send-back/scenario.test.ts, stories/S11-send-back/operators.test.ts | 981b365 07da674 |  |  | Engine passes |
-| S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts, stories/S12-reminders-escalation/operators.test.ts | e85a55b 94a10c9 |  |  | Engine passes |
+| S12 | #49, #264 | stories/S12-reminders-escalation/scenario.test.ts, stories/S12-reminders-escalation/operators.test.ts, tools/dryrun.test.ts | e85a55b 94a10c9 | #264 | b7a73b7 28f960b | Done |
 | S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts, stories/S13-withdraw-cancel/operators.test.ts | 0194b88 243cf21 |  |  | Engine passes |
 | S14 | #51 | stories/S14-find-status/scenario.test.ts, stories/S14-find-status/operators.test.ts, tools/step-skipped.test.ts | 4cb4d49 f7ca96e faaadba 17cebe9 |  |  | Engine passes |
 | S15 | #52 | stories/S15-investigate/scenario.test.ts, stories/S15-investigate/operators.test.ts | 2768a41 0c36f20 |  |  | Engine passes |
