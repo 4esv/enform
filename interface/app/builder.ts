@@ -214,6 +214,12 @@ type BuilderState = {
   readonly dry: DryRunPanel
   /** Whether the model holds an edit the server has not seen (DF-3, A4). */
   dirty: boolean
+  /**
+   * The draft definition as the server last answered it, as JSON text. The
+   * draft version counts publications, not pushes, so a change made
+   * elsewhere shows as a different definition (DF-3).
+   */
+  loaded: string
 }
 
 /** What the dry-run panel holds between renders: its inputs, and the last answer or refusal. */
@@ -283,6 +289,7 @@ export async function mountBuilder(options: BuilderOptions): Promise<BuilderHand
       error: undefined,
     },
     dirty: false,
+    loaded: JSON.stringify(draft.definition ?? null),
   }
   // An edit of the definition marks the builder dirty until a save, a
   // publication or a refresh (DF-3, A4). The dry-run inputs, the starters and
@@ -308,10 +315,14 @@ export async function mountBuilder(options: BuilderOptions): Promise<BuilderHand
     refresh: async () => {
       const [fresh, listed] = await Promise.all([readDraft(options.slug), listFlows()])
       const entry = listed.find((flow) => flow.slug === options.slug)
+      const loaded = JSON.stringify(fresh.definition ?? null)
       const changed =
-        fresh.version !== state.draftVersion || entry?.publishedVersion !== state.publishedVersion
+        loaded !== state.loaded ||
+        fresh.version !== state.draftVersion ||
+        entry?.publishedVersion !== state.publishedVersion
       if (!changed) return false
       state.draftVersion = fresh.version
+      state.loaded = loaded
       state.model = readModel(fresh.definition)
       state.title = entry?.title
       state.publishedVersion = entry?.publishedVersion
@@ -1715,6 +1726,7 @@ async function saveDraft(state: BuilderState): Promise<void> {
   try {
     const written = await writeDraft({ version: state.draftVersion, definition }, state.slug)
     state.draftVersion = written.version
+    state.loaded = JSON.stringify(written.definition ?? definition)
     state.dirty = false
     status.textContent = `Saved draft version ${written.version}`
   } catch (error: unknown) {
@@ -1783,7 +1795,9 @@ async function showWriteError(
   if (error instanceof RequestRefused && error.status === 409) {
     const fresh = await readDraft(state.slug)
     state.draftVersion = fresh.version
+    state.loaded = JSON.stringify(fresh.definition ?? null)
     state.model = readModel(fresh.definition)
+    state.dirty = false
     render(state)
     const refreshed = statusOf(state)
     refreshed.textContent = `The draft changed; reloaded version ${fresh.version}. ${error.error}`
