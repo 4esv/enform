@@ -98,9 +98,9 @@ This table records where each story was done. Update it in the same pull request
 | Story | Engine issue | Engine tests | Engine commits | Interface issue | Interface commits | Status |
 |---|---|---|---|---|---|---|
 | S01 | #38 | stories/S01-publish-flow/scenario.test.ts | ad5ddca eac5f63 58750b7 | | | Engine in progress |
-| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts, stories/S02-grant-scopes/operators.test.ts | 5383f8c e9b044d 565016a |  |  | Engine passes |
-| S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts | e436106 5808cdc |  |  | Engine passes |
-| S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts | c38bb5e bc6b63a |  |  | Engine passes |
+| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts, stories/S02-grant-scopes/operators.test.ts, tools/allowed-outcomes.test.ts, interface/app/sharing.test.ts, integration/sharing-diff.test.ts | 5383f8c e9b044d 565016a 1e92d7c | #264 | 55fe4ce | Done |
+| S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts, tools/merge.test.ts, tools/diff.test.ts, server/draft-merge.test.ts, server/diff.test.ts, interface/app/diff.test.ts, integration/sharing-diff.test.ts | e436106 5808cdc 889e4a6 93615cd f668370 068d078 | #264 | 55fe4ce | Done |
+| S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts, tools/diff.test.ts, server/diff.test.ts, integration/sharing-diff.test.ts | c38bb5e bc6b63a f668370 068d078 | #264 | 55fe4ce 6caf363 | Done |
 | S05 | #42 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts | 501e5e3 0f1dcbf |  |  | Engine passes |
 | S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181, #262 | 640d062 f9e809d f9e5224 | Done |
 | S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts, stories/S07-lose-connection/gui.test.ts, interface/app/local.test.ts | 8d6bb33 | #262 | | Done |
