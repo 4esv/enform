@@ -2094,6 +2094,19 @@ export async function mountApp(options: AppOptions): Promise<void> {
         step.textContent = entry.step
         item.append(step)
       }
+      // A definition change links to its difference (S15, DF-6): the diff
+      // view below the builder shows what the version changed and who did it.
+      if (
+        entry.type === 'config.definition.published@1' ||
+        entry.type === 'config.definition.changed@1'
+      ) {
+        const diff = document.createElement('a')
+        diff.className = 'timeline-diff'
+        diff.dataset.timelineDiff = ''
+        diff.href = `/?flow=${encodeURIComponent(entry.flow ?? '')}&builder=1#diff`
+        diff.textContent = 'Difference'
+        item.append(diff)
+      }
       if (entry.comment !== undefined) {
         const comment = document.createElement('p')
         comment.className = 'timeline-comment'

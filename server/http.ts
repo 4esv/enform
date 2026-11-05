@@ -68,7 +68,7 @@ import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
 import { mayRead } from '../engine/status.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
-import { teamsOf } from '../engine/teams.js'
+import { TEAM_CHANGE_TYPE, teamsOf } from '../engine/teams.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../engine/timeline.js'
 import { rebindDraft } from '../engine/version.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
@@ -1180,7 +1180,9 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     const events = log.filter(
       (event) =>
         event.payload.instanceId === instanceId ||
-        (includeChanges && isConfigChange(event.type) && flowOf(event) === instance.flow)
+        (includeChanges &&
+          isConfigChange(event.type) &&
+          (flowOf(event) === instance.flow || event.type === TEAM_CHANGE_TYPE))
     )
     return c.json(timeline(events))
   })
