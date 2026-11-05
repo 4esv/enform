@@ -134,7 +134,10 @@ function storeShape(databaseUrl: string): Record<string, string[]> {
       "select seq, operation_id, type, at, coalesce(actor, '') from events order by seq"
     ),
     flows: queryDatabase(databaseUrl, 'select slug, draft_version from flows order by slug'),
-    instances: queryDatabase(databaseUrl, 'select id, flow_slug, status from instances order by id'),
+    instances: queryDatabase(
+      databaseUrl,
+      'select id, flow_slug, status from instances order by id'
+    ),
     grants: queryDatabase(
       databaseUrl,
       "select principal, resource, array_to_string(scopes, ',') from grants order by 1, 2, 3"
@@ -147,7 +150,7 @@ function storeShape(databaseUrl: string): Record<string, string[]> {
   }
 }
 
-test.fails('#266 DE-5 doctor reports the version, migrate is idempotent, and a backup restores into an empty store', async () => {
+test('#266 DE-5 doctor reports the version, migrate is idempotent, and a backup restores into an empty store', async () => {
   const { configPath, databaseUrl, dir, config } = requireSetup()
 
   // The demo seed gives the store flows, instances, grants, outbox rows and
