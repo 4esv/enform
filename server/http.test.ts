@@ -204,7 +204,7 @@ test('#258 the server describes the device sign-in of the CLI without a credenti
 // person who holds `flow.edit` and not `flow.build` before the server refuses
 // the change. The engine stays the authority: the answer is a read of the
 // grants projection, and every write is authorized again (AC-1, I8).
-test.fails('#264 the session answers the grants that apply to the principal (DF-5)', async () => {
+test('#264 the session answers the grants that apply to the principal (DF-5)', async () => {
   const grants = [{ principal: 'user-1', resource: 'flow:course-overload', scopes: ['flow.edit'] }]
   const app = createApp(defaultConfig, sessionPool(grants))
   const response = await app.request('/api/v1/session', { headers: { cookie } })

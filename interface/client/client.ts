@@ -481,6 +481,7 @@ export interface CliAuth {
  */
 export interface Session {
   readonly principal: Principal
+  readonly grants: readonly Grant[]
   readonly expiresAt: number
   readonly csrfToken: string
 }
