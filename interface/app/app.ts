@@ -30,6 +30,7 @@ import {
   instancePdfUrl,
   listFlows,
   listGroups,
+  listTeams,
   listUnroutable,
   listUsers,
   loginUrl,
@@ -45,6 +46,7 @@ import {
   readTimeline,
   type Session,
   setClient,
+  type Team,
   type TimelineEntry,
   type TrackerStep,
   type UnroutableItem,
@@ -93,6 +95,9 @@ const INSTANCE_UNDONE = 'instance.undone@1'
 /** The versioned event type of a takeover (S10, AS-3). */
 const STEP_TAKEN_OVER = 'step.taken-over@1'
 
+/** The versioned event type of a team change (AS-6, I14). */
+const TEAM_CHANGED = 'config.team.changed@1'
+
 /** The versioned event type of a release to the pool (WF-5, AS-2). */
 const TASK_RELEASED = 'task.released@1'
 
@@ -124,6 +129,8 @@ export interface AppOptions {
   readonly users?: boolean
   /** Whether the URL asks for the directory groups page (ID-6, AS-1). */
   readonly groups?: boolean
+  /** Whether the URL asks for the teams page (AS-6). */
+  readonly teams?: boolean
   /** Whether the URL asks for the Unroutable queue (I10, AS-5). */
   readonly queue?: boolean
   /** Whether the URL asks for the global change feed (VT-6). */
@@ -220,6 +227,13 @@ export async function mountApp(options: AppOptions): Promise<void> {
   groups.textContent = 'Groups'
   groups.dataset.groups = ''
   header.appendChild(groups)
+  // Issue #269, AS-6: the teams page. A holder of org.teams creates and
+  // maintains teams; everyone reads them (AS-4).
+  const teams = document.createElement('a')
+  teams.href = '/?teams=1'
+  teams.textContent = 'Teams'
+  teams.dataset.teams = ''
+  header.appendChild(teams)
   // Issue #252, I10, AS-5: the Unroutable queue. The flow owner reads the
   // tasks that resolved to nobody; the server authorizes every row (I8).
   const queue = document.createElement('a')
@@ -2382,6 +2396,135 @@ export async function mountApp(options: AppOptions): Promise<void> {
   }
 
   /**
+   * Render the teams page (AS-6, AS-4, ID-4, I14, #269). Everyone reads the
+   * teams the log records; a holder of `org.teams` creates a team and adds or
+   * removes a member, each as one attributed `config.team.changed@1`
+   * operation. The engine authorizes the change and the page shows its
+   * answer (A9, I8).
+   */
+  const renderTeams = async (): Promise<void> => {
+    const heading = document.createElement('h1')
+    heading.textContent = 'Teams'
+    main.appendChild(heading)
+    const status = document.createElement('p')
+    status.className = 'status'
+    status.dataset.teamStatus = ''
+    main.appendChild(status)
+
+    const change = async (payload: Record<string, JsonValue>): Promise<boolean> => {
+      const operation: Operation = {
+        id: ids(),
+        type: TEAM_CHANGED,
+        at: clock(),
+        actor,
+        payload,
+      }
+      try {
+        await appendOperation(operation)
+        status.textContent = ''
+        return true
+      } catch (error: unknown) {
+        status.textContent = messageOf(error)
+        return false
+      }
+    }
+
+    const createForm = document.createElement('form')
+    createForm.dataset.teamForm = ''
+    const nameLabel = document.createElement('label')
+    nameLabel.textContent = 'New team'
+    const nameInput = document.createElement('input')
+    nameInput.type = 'text'
+    nameInput.name = 'team'
+    nameInput.required = true
+    nameInput.dataset.teamName = ''
+    nameLabel.appendChild(nameInput)
+    const createControl = document.createElement('button')
+    createControl.type = 'submit'
+    createControl.textContent = 'Create team'
+    createControl.dataset.teamCreate = ''
+    createForm.append(nameLabel, createControl)
+    createForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const team = nameInput.value.trim()
+      if (team === '') return
+      void change({ team, change: 'created' }).then((done) => {
+        if (done) void renderRoute()
+      })
+    })
+    main.appendChild(createForm)
+
+    let teams: readonly Team[]
+    try {
+      teams = await listTeams()
+    } catch (error: unknown) {
+      status.dataset.teamsRefused = ''
+      status.textContent = messageOf(error)
+      return
+    }
+    const list = document.createElement('ul')
+    list.className = 'teams'
+    list.dataset.teamList = ''
+    main.appendChild(list)
+    if (teams.length === 0) {
+      const empty = document.createElement('li')
+      empty.className = 'empty'
+      empty.textContent = 'No team yet.'
+      list.appendChild(empty)
+    }
+    for (const team of teams) {
+      const item = document.createElement('li')
+      item.className = 'team'
+      item.dataset.teamRow = team.name
+      const name = document.createElement('strong')
+      name.dataset.teamTitle = ''
+      name.textContent = team.name
+      const members = document.createElement('ul')
+      members.dataset.teamMembers = ''
+      for (const member of team.members) {
+        const row = document.createElement('li')
+        row.dataset.teamMember = member
+        const id = document.createElement('code')
+        id.textContent = member
+        const remove = document.createElement('button')
+        remove.type = 'button'
+        remove.textContent = 'Remove'
+        remove.dataset.teamRemove = ''
+        remove.addEventListener('click', () => {
+          void change({ team: team.name, change: 'member-removed', member }).then((done) => {
+            if (done) void renderRoute()
+          })
+        })
+        row.append(id, remove)
+        members.appendChild(row)
+      }
+      const addForm = document.createElement('form')
+      addForm.dataset.teamAddForm = ''
+      const memberInput = document.createElement('input')
+      memberInput.type = 'text'
+      memberInput.name = 'member'
+      memberInput.placeholder = 'user:<id> or group:<id>'
+      memberInput.required = true
+      memberInput.dataset.teamMemberId = ''
+      const add = document.createElement('button')
+      add.type = 'submit'
+      add.textContent = 'Add member'
+      add.dataset.teamAdd = ''
+      addForm.append(memberInput, add)
+      addForm.addEventListener('submit', (event) => {
+        event.preventDefault()
+        const member = memberInput.value.trim()
+        if (member === '') return
+        void change({ team: team.name, change: 'member-added', member }).then((done) => {
+          if (done) void renderRoute()
+        })
+      })
+      item.append(name, members, addForm)
+      list.appendChild(item)
+    }
+  }
+
+  /**
    * Render the Unroutable queue (I10, AS-5, #252). The flow owner sees the
    * open tasks whose targets resolved to nobody; the server authorizes every
    * row, so a principal without `task.reassign` reads nothing (I8).
@@ -2433,6 +2576,10 @@ export async function mountApp(options: AppOptions): Promise<void> {
     }
     if (options.groups === true) {
       await renderGroups()
+      return
+    }
+    if (options.teams === true) {
+      await renderTeams()
       return
     }
     if (options.queue === true) {

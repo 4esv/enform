@@ -30,6 +30,7 @@
       const inbox = params.get('inbox') === '1'
       const users = params.get('users') === '1'
       const groups = params.get('groups') === '1'
+      const teams = params.get('teams') === '1'
       const queue = params.get('queue') === '1'
       const changes = params.get('changes') === '1'
       mountApp({
@@ -43,6 +44,7 @@
         ...(inbox ? { inbox: true, inboxTab: params.get('tab') ?? 'my' } : {}),
         ...(users ? { users: true } : {}),
         ...(groups ? { groups: true } : {}),
+        ...(teams ? { teams: true } : {}),
         ...(queue ? { queue: true } : {}),
         ...(changes ? { changes: true } : {}),
         ...(sources

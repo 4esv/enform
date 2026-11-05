@@ -292,9 +292,9 @@ async function signIn(
 // Issue #269, AS-6, AC-1, I14: the teams page. A holder of `org.teams`
 // creates a team, adds a member and removes one from the page, each as one
 // attributed operation the API lists back; a person without the scope sees
-// the page refuse the change. Expected to fail until the page exists.
+// the page refuse the change.
 
-test.fails('#269 AS-6 the teams page creates a team and maintains its members, and a peer is refused', async () => {
+test('#269 AS-6 the teams page creates a team and maintains its members, and a peer is refused', async () => {
   const { config, publicUrl } = requireSetup()
   const ana = demoUser('registrar', 0)
   const team = `desk-${RUN}`
