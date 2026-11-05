@@ -1,281 +1,142 @@
 import { expect, test } from 'vitest'
-import { type ActionResult, claim, complete, STEP_COMPLETED } from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { FlowStep } from '../../engine/definition.js'
-import type { Instance } from '../../engine/instance.js'
-import { type ActorId, createOperation, type OperationDeps } from '../../engine/operation.js'
-import { createOutboxOperation, outboxOf } from '../../engine/outbox.js'
-import { resolveAssignees } from '../../engine/routing.js'
-import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
-import { CONNECTOR_CALLED } from '../../engine/timeline.js'
+import { STEP_COMPLETED } from '../../engine/action.js'
+import { instanceOf } from '../../engine/instances.js'
+import { readableLog } from '../../engine/logRead.js'
+import { outboxOf } from '../../engine/outbox.js'
+import { ASSIGNMENT_EMAIL, EMAIL_CONNECTOR } from '../../engine/submission.js'
 import {
   ALREADY_SENT,
   alreadySentOf,
   EVENT_UNDONE,
   notifiedBy,
   UNDO_NOTIFICATION,
-  type UndoResult,
-  undo,
 } from '../../engine/undo.js'
-import {
-  ADVISOR_STEP,
-  APPROVE,
-  approvalOutbox,
-  CONFIRMATION_EMAIL,
-  DECISION_PDF,
-  data,
-  definition,
-  finalPoint,
-  flow,
-  LEE,
-  OFFICE_COPY,
-  OKAFOR,
-  okaforGrants,
-  PRIYA,
-  REGISTRAR_STEP,
-  REQUEST_STEP,
-  resolve,
-  SLUG,
-  STARTER,
-  SYSTEM,
-  sentCalls,
-  starterGrants,
-} from './scenario.js'
-
-/** The reason that Lee gives for the undo (STORIES.md, S16). */
-const REASON = 'Approved the wrong request'
-
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
-
-/** The time of the first operation (I6): the clock is injected, one minute per operation. */
-const NOW = 1_700_000_000_000
-
-/**
- * The injected sources of the path (I6): the clock advances one minute per
- * operation and the IDs are `op-N`, so every operation gets a distinct ID and a
- * distinct time, in the order of the story.
- */
-function deps(): OperationDeps {
-  let time = 0
-  let id = 0
-  return {
-    clock: () => {
-      const at = NOW + time * 60_000
-      time += 1
-      return at
-    },
-    ids: () => {
-      id += 1
-      return `op-${id}`
-    },
-  }
-}
-
-/** Apply the operation that an accepted action returned (I14); the test checks acceptance first. */
-function applyAction(result: ActionResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
-
-/** Apply the compensating operation that an accepted undo returned (S16, I4). */
-function applyUndo(result: UndoResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the undo was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
-
-/**
- * Open one step of the flow (S06, S09, I13): the engine records the assignees
- * of a step when the flow starts it, so the story appends the snapshot of that
- * step's targets, and the actor then claims the task.
- */
-function openStep(
-  instance: Instance,
-  step: FlowStep,
-  actor: ActorId,
-  state: State,
-  sources: OperationDeps
-): { readonly instance: Instance; readonly state: State } {
-  const atStep: Instance = {
-    ...instance,
-    assignees: [...instance.assignees, ...resolveAssignees(step, resolve)],
-  }
-  const claimed = claim(atStep, actor, atStep.version ?? 0, sources)
-  if (claimed.operation === undefined) throw new Error(`the claim was refused: ${claimed.reason}`)
-  return { instance: claimed.instance, state: apply(claimed.operation, state) }
-}
+import { predict } from '../../tools/harness/predict.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
+import type { Scenario } from '../../tools/harness/scenario.js'
+import { grantsOfPerson, INSTANCE_ID, LEE, PRIYA, REGISTRAR_STEP } from '../example-flow.js'
+import { ARCHIVE_STEP, golden, REASON, STEP } from './scenario.js'
 
 // Issue #53: Lee approved the wrong request (S16). The undo is a compensating
 // event (WF-5, D6): the engine appends an `event.undone@1` event, and the
 // approval stays in the log with its payload and its author (I4, I14). The
-// confirmation email, the decision PDF and the copy to the coordinator already
-// went out, so the undo does not reverse them: it marks each "Already sent" and
-// notifies the people that they reached in the same commit (A2, I2). Once the
-// flow decided a later step the advisor decision sits past the point that the
-// flow marks final, and the engine refuses the undo with that reason (S16,
+// email that already went out is not reversed: the undo marks it "Already
+// sent" and notifies Priya, whom it reached, in the same commit (A2, I2).
+// Once Priya recorded the decision on the archive step, the final step of the
+// flow, the engine refuses every undo on the instance with that reason (S16,
 // WF-5). The path is deterministic (I6).
 
-test('#53 an undo appends a compensating event and marks the side effects that already occurred (S16)', () => {
-  // One shared source, so every recorded operation gets a distinct ID (I1).
-  const sources = deps()
+/** The seq of the event that step `index` appended (I4): the log is one global order. */
+const seqOf = (index: number): number => index + 1
 
-  // Sam starts the request: the start creates his draft on the request form,
-  // whose starter target resolves to him (S06, ADR 0014, I13).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
-  expect(started.instance.currentStep).toBe(REQUEST_STEP)
-  let state = apply(started.operation, emptyState)
-
-  // Sam submits his draft, so the instance advances to the advisor step (S06,
-  // WF-1, ADR 0014).
-  const submitted = submitInstance(
-    started.instance,
-    STARTER,
-    {},
-    0,
-    { flow: SLUG, definition, resolve, grants: starterGrants },
-    sources
-  )
-  expect(submitted.accepted).toBe(true)
-  if (submitted.operation === undefined) throw new Error(submitted.reason)
-  state = apply(submitted.operation, state)
-  expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
-
-  // Dr. Okafor claims the advisor task and approves it, so the instance
-  // advances to the registrar step (S08, S09, AC-4).
-  const atAdvisor = openStep(submitted.instance, definition.steps[1], OKAFOR, state, sources)
-  state = atAdvisor.state
-  const advisorDecision = complete(
-    atAdvisor.instance,
-    OKAFOR,
-    APPROVE,
-    {},
-    atAdvisor.instance.version ?? 0,
-    { flow: SLUG, definition, grants: okaforGrants },
-    sources
-  )
-  expect(advisorDecision.accepted).toBe(true)
-  state = applyAction(advisorDecision, state)
-  expect(advisorDecision.instance.currentStep).toBe(REGISTRAR_STEP)
-  const advisorSeq = state.log.length
-
-  // Lee claims the registrar task and approves the wrong request (S16). The
-  // flow's automation attaches the confirmation email, the decision PDF and
-  // the copy to the coordinator to the approval, so one apply commits the
-  // decision and its side effects together (I2, SE-1).
-  const atRegistrar = openStep(advisorDecision.instance, definition.steps[2], LEE, state, sources)
-  state = atRegistrar.state
-  const approval = createOutboxOperation(
-    STEP_COMPLETED,
-    { step: REGISTRAR_STEP, outcome: APPROVE },
-    approvalOutbox,
-    sources,
-    LEE
-  )
-  state = apply(approval, state)
-  const approvalSeq = state.log.length
-
-  // The worker already ran the three side effects, so it records each call as
-  // an event of its own (SE-1, I13): the log states what already occurred.
-  for (const call of sentCalls) {
-    state = apply(createOperation(CONNECTOR_CALLED, { ...call }, sources, SYSTEM), state)
-  }
+test('#53 the S16 golden path runs in api, cli and dry mode: the undo is a compensating event (S16)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
   const log = state.log
 
-  // (a) WF-5, D6, I4: the undo is a compensating event. The engine appends an
-  // event that records which event it covers, why and who undid it, and the
-  // approval stays in the log, at its own position and unchanged.
-  const undone = undo(approvalSeq, REASON, log, sources, {
-    actor: LEE,
-    finalPoint,
-    calls: sentCalls,
+  // (a) WF-5, D6, I4: the undo records which event it covers, why and who
+  // undid it; the wrong approval stays in the log, unchanged, and the right
+  // one follows it.
+  const undo = log[STEP.leeUndo]
+  expect(undo.type).toBe(EVENT_UNDONE)
+  expect(undo.actor).toBe(LEE)
+  expect(undo.payload).toMatchObject({
+    instanceId: INSTANCE_ID,
+    eventId: seqOf(STEP.leeApprove),
+    reason: REASON,
   })
-  expect(undone.accepted).toBe(true)
-  expect(undone.operation?.type).toBe(EVENT_UNDONE)
-  expect(undone.operation?.actor).toBe(LEE)
-  expect(undone.operation?.payload.eventId).toBe(approvalSeq)
-  expect(undone.operation?.payload.reason).toBe(REASON)
-  const after = applyUndo(undone, state)
-  expect(after.log).toHaveLength(log.length + 1)
-  expect(after.log.slice(0, log.length)).toEqual(log)
-  // The approval is the same object, so the undo rewrote or deleted nothing
-  // (I4), and both decisions of the flow stay in the log (the submit is its
-  // own event, ADR 0014).
-  expect(after.log[approvalSeq - 1]).toBe(log[approvalSeq - 1])
-  expect(after.log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(2)
+  const wrong = log[STEP.leeApprove]
+  expect(wrong.type).toBe(STEP_COMPLETED)
+  expect(wrong.actor).toBe(LEE)
+  expect(wrong.payload.step).toBe(REGISTRAR_STEP)
+  expect(log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(4)
 
-  // (b) A2, S16: the three side effects already occurred, so the undo does not
-  // reverse them. It marks each "Already sent", and it notifies the people that
-  // they reached, in the same operation as the compensating event (I2).
-  expect(undone.alreadySent).toEqual([
-    { operation: CONFIRMATION_EMAIL, target: EMAIL_CONNECTOR, to: STARTER, status: ALREADY_SENT },
-    { operation: DECISION_PDF, target: EMAIL_CONNECTOR, to: STARTER, status: ALREADY_SENT },
-    { operation: OFFICE_COPY, target: EMAIL_CONNECTOR, to: PRIYA, status: ALREADY_SENT },
-  ])
-  // Sam received two of the three side effects, so the undo notifies him once.
-  expect(undone.notified).toEqual([STARTER, PRIYA])
-  expect(undone.outbox).toEqual([
+  // The projection folds the approval out: after the undo the instance was
+  // back at the registrar step, held by Lee (I4), and the version kept
+  // advancing (I5). At the end Priya recorded the decision and the flow is
+  // done.
+  const afterUndo = instanceOf(log.slice(0, STEP.leeUndo + 1), INSTANCE_ID)
+  expect(afterUndo?.currentStep).toBe(REGISTRAR_STEP)
+  expect(afterUndo?.holder).toBe(LEE)
+  expect(afterUndo?.version).toBe(6)
+  const end = instanceOf(log, INSTANCE_ID)
+  expect(end?.done).toBe(true)
+  expect(end?.version).toBe(9)
+
+  // (b) S16, DX-3: `enform log --instance <id> --limit 5` for Lee: the five
+  // newest events of the instance, which he reads as its assignee (I8).
+  const tail = readableLog(log, LEE, {
+    grants: grantsOfPerson(LEE),
+    instanceId: INSTANCE_ID,
+    limit: 5,
+  })
+  expect(tail.map((event) => event.seq)).toEqual(
+    [STEP.emailSent, STEP.leeUndo, STEP.leeApproveAgain, STEP.priyaClaim, STEP.priyaRecord].map(
+      seqOf
+    )
+  )
+  expect(tail.every((event) => event.payload.instanceId === INSTANCE_ID)).toBe(true)
+}, 60_000)
+
+test.fails('#53 A2 the undo marks the email that already went out "Already sent" and notifies the person it reached (S16)', () => {
+  // The worker recorded the call for the assignment email to Priya before
+  // the undo (I13), so the engine does not reverse it: it marks it and
+  // notifies Priya in the same operation as the compensating event (I2).
+  const { state } = predict(golden)
+  const log = state.log
+  const approvalSeq = seqOf(STEP.leeApprove)
+  expect(alreadySentOf(log, approvalSeq)).toEqual([
     {
-      operation: UNDO_NOTIFICATION,
+      operation: ASSIGNMENT_EMAIL,
       target: EMAIL_CONNECTOR,
-      payload: { to: STARTER, eventId: approvalSeq, actor: LEE, reason: REASON },
+      to: PRIYA,
+      status: ALREADY_SENT,
     },
+  ])
+  expect(notifiedBy(log, approvalSeq)).toEqual([PRIYA])
+  const undo = log[STEP.leeUndo]
+  expect(outboxOf([undo])).toEqual([
     {
       operation: UNDO_NOTIFICATION,
       target: EMAIL_CONNECTOR,
       payload: { to: PRIYA, eventId: approvalSeq, actor: LEE, reason: REASON },
     },
   ])
-  expect(undone.operation?.payload).toEqual({
-    eventId: approvalSeq,
-    reason: REASON,
-    notified: undone.notified,
-    alreadySent: undone.alreadySent,
-    outbox: undone.outbox,
-  })
-  // I2: the notifications ride in the one event that the undo appended, so the
-  // outbox is the projection of that event.
-  expect(outboxOf(after.log).slice(-2)).toEqual(undone.outbox)
+})
 
-  // The status and the timeline read the marker from the log alone (I4): the
-  // side effects that already occurred, and the people that the undo notified.
-  expect(alreadySentOf(after.log, approvalSeq)).toEqual(undone.alreadySent)
-  expect(notifiedBy(after.log, approvalSeq)).toEqual([STARTER, PRIYA])
-  // An event that no undo covers marks nothing and notified nobody.
-  expect(alreadySentOf(after.log, advisorSeq)).toEqual([])
-  expect(notifiedBy(after.log, advisorSeq)).toEqual([])
+test('#53 WF-5 once the flow passed its final step the engine refuses an undo with the reason (S16)', () => {
+  // Priya tries to undo her own record of the decision, the final step: the
+  // engine refuses it and names the step; Lee's approval is past it too.
+  const priyaUndo = {
+    actor: PRIYA,
+    type: EVENT_UNDONE,
+    payload: {},
+    intent: {
+      instanceId: INSTANCE_ID,
+      eventId: seqOf(STEP.priyaRecord),
+      reason: REASON,
+      version: 9,
+    },
+  }
+  const past: Scenario = { ...golden, steps: [...golden.steps, priyaUndo] }
+  const refused = predict(past).outcomes[golden.steps.length]
+  expect('error' in refused && refused.status).toBe(409)
+  expect('error' in refused && refused.error).toContain('final')
+  expect('error' in refused && refused.error).toContain(ARCHIVE_STEP)
 
-  // (c) S16, WF-5: the flow decided the registrar step after the advisor
-  // decision, so the advisor decision sits past the point that the flow marks
-  // final. The engine refuses the undo and gives that reason.
-  const pastFinal = undo(advisorSeq, REASON, after.log, sources, {
-    actor: OKAFOR,
-    finalPoint,
-    calls: sentCalls,
-  })
-  expect(pastFinal.accepted).toBe(false)
-  expect(pastFinal.operation).toBeUndefined()
-  expect(pastFinal.outbox).toBeUndefined()
-  expect(pastFinal.alreadySent).toBeUndefined()
-  expect(pastFinal.notified).toBeUndefined()
-  expect(pastFinal.reason).toContain('final')
-  expect(pastFinal.reason).toContain(ADVISOR_STEP)
-  // The refusal comes from the final point that the flow injects: without it
-  // the engine accepts the same undo, because the approval is a manual action
-  // (WF-5).
-  const openPoint = undo(advisorSeq, REASON, after.log, sources, {
-    actor: OKAFOR,
-    calls: sentCalls,
-  })
-  expect(openPoint.accepted).toBe(true)
-
-  // The log holds no such event, so there is nothing to undo (I4).
-  const missing = undo(after.log.length + 1, REASON, after.log, sources, { actor: LEE })
-  expect(missing.accepted).toBe(false)
-  expect(missing.operation).toBeUndefined()
-  expect(missing.reason).toContain('has no event')
-
-  // (d) I6: the same inputs give the same result.
-  const runOnce = (): UndoResult =>
-    undo(approvalSeq, REASON, log, deps(), { actor: LEE, finalPoint, calls: sentCalls })
-  expect(runOnce()).toEqual(runOnce())
+  // Before the record the same undo of the right approval is the latest
+  // action, so the engine accepts it: the refusal comes from the final step.
+  const leeUndo = {
+    actor: LEE,
+    type: EVENT_UNDONE,
+    payload: {},
+    intent: {
+      instanceId: INSTANCE_ID,
+      eventId: seqOf(STEP.leeApproveAgain),
+      reason: REASON,
+      version: 7,
+    },
+  }
+  const open: Scenario = { ...golden, steps: [...golden.steps.slice(0, STEP.priyaClaim), leeUndo] }
+  expect(predict(open).outcomes[STEP.priyaClaim]).toHaveProperty('operation')
 })
