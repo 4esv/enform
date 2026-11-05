@@ -50,7 +50,12 @@ paths:
         (`TakeoverIntent`, `step.taken-over@1`) names the instance, the
         required reason and the version the assignee read, and the server
         measures the step's idle period from the claim on the log on its own
-        clock (S10, AS-3). The server resolves the
+        clock (S10, AS-3); an undo of an action (`UndoActionIntent`,
+        `event.undone@1`) names the instance, the seq of the event it undoes,
+        the reason and the version it read, and the engine undoes the latest
+        action only, within the flow's undo period, by its actor or a flow
+        owner, and never past the flow's final step (S16, WF-5, D6). The
+        server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
         told apart by `type` and by their payload shape. The server refuses a
@@ -1195,6 +1200,54 @@ components:
               type: object
               description: The field keys the edit changed, each with its new value (FM-7).
               additionalProperties: true
+    UndoActionIntent:
+      type: object
+      description: >-
+        An undo of an action (S16, S10, WF-5, D6, A2): the parts a client can
+        honestly send to undo the latest claim, release, takeover, reassign,
+        outcome or send back on an instance. It carries the operation ID it
+        chose (I1), the event type `event.undone@1`, the actor, the instance,
+        the seq of the event it undoes (from the timeline), the reason and the
+        version it read (I5). The engine appends a compensating event and
+        never rewrites the undone one; a side effect that already occurred is
+        marked Already sent and not reversed, and its recipients are notified.
+        A principal who neither made the action nor owns the flow answers 403;
+        a stale view, an event that is not the latest action, an undo after
+        the flow's period or past its final step answers 409 with the reason.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `event.undone@1`.
+          examples:
+            - event.undone@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The instance, the event, the reason and the version read.
+          required: [instanceId, eventId, reason, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance the undone event acted on (DX-1).
+            eventId:
+              type: integer
+              minimum: 1
+              description: The seq of the event to undo, as the timeline shows it (I4).
+            reason:
+              type: string
+              description: Why the actor undoes it (WF-5).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
     CompletionIntent:
       type: object
       description: >-

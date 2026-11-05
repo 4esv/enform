@@ -82,6 +82,25 @@ export interface DraftEditIntent {
 }
 
 /**
+ * An undo of an action (S16, S10, WF-5, D6, A2): the parts a client can honestly send to undo
+ * the latest claim, release, takeover, reassign, outcome or send back on an instance. It
+ * carries the operation ID it chose (I1), the event type `event.undone@1`, the actor, the
+ * instance, the seq of the event it undoes (from the timeline), the reason and the version it
+ * read (I5). The engine appends a compensating event and never rewrites the undone one; a side
+ * effect that already occurred is marked Already sent and not reversed, and its recipients are
+ * notified. A principal who neither made the action nor owns the flow answers 403; a stale
+ * view, an event that is not the latest action, an undo after the flow's period or past its
+ * final step answers 409 with the reason.
+ */
+export interface UndoActionIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * A completion intent (ADR 0010, FM-3, FM-4): the parts a client can honestly send when the
  * holder completes the current step. It carries the operation ID it chose (I1), the event type
  * `step.completed@1`, the actor, the instance it acts on (DX-1), the version of the instance it

@@ -23,6 +23,7 @@ import { MINUTE_MS } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
 import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
+import { standingEvents } from './undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 import { STEP_SKIPPED } from './workflow.js'
 
@@ -246,7 +247,8 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
 /** The events that name this instance (I4); an instance without an id owns none. */
 function ownEvents(instance: Instance, log: Log): readonly Event[] {
   if (instance.instanceId === undefined) return []
-  return log.filter((event) => event.payload.instanceId === instance.instanceId)
+  // An undone action no longer moves a step (S16, D6); the timeline keeps it.
+  return standingEvents(log.filter((event) => event.payload.instanceId === instance.instanceId))
 }
 
 /**

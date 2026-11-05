@@ -56,6 +56,7 @@ import { DRAFT_EDITED, INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
+import { EVENT_UNDONE, standingEvents, undoneSeqs } from './undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -194,15 +195,24 @@ export type InstanceView = {
  * and events of another instance never affect the result.
  */
 export function instanceOf(log: Log, instanceId: string): ProjectedInstance | undefined {
-  const events = log.filter((event) => event.payload.instanceId === instanceId)
-  const start = events.find((event) => event.type === INSTANCE_STARTED)
+  const own = log.filter((event) => event.payload.instanceId === instanceId)
+  const start = own.find((event) => event.type === INSTANCE_STARTED)
   if (start === undefined) return undefined
   const definitionVersion = stringField(start.payload, 'definitionVersion')
   const pinned = publishedByHash(log, definitionVersion)
   if (pinned === undefined) return undefined
+  // An undone action is folded out (S16, D6, I4): the event it covers no
+  // longer changes the instance, but it keeps the version it advanced, and the
+  // compensating event advances it once more, so the counter stays monotonic
+  // and a view read before the undo is stale after it (I5).
+  const undone = undoneSeqs(own)
   let instance = started(start, instanceId)
-  for (const event of events) {
+  for (const event of own) {
     if (event === start) continue
+    if (event.type === EVENT_UNDONE || undone.has(event.seq)) {
+      instance = advanced(instance)
+      continue
+    }
     instance = fold(instance, event, pinned.definition, log)
   }
   return instance
@@ -611,7 +621,7 @@ function stepsBefore(definition: FlowDefinition, current: string | undefined): r
  * holds; the caller then narrows by `visibleNotes` (I8).
  */
 function instanceNotes(log: Log, instanceId: string): readonly Note[] {
-  return notesOf(log.filter((event) => event.payload.instanceId === instanceId))
+  return notesOf(standingEvents(log.filter((event) => event.payload.instanceId === instanceId)))
 }
 
 /** The step of the definition that the instance is on (WF-1); absent when no step is open. */

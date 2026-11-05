@@ -20,6 +20,7 @@ import type { FlowDefinition, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { STEP_SENT_BACK } from './sendBack.js'
+import { standingEvents } from './undo.js'
 import type { SkippedStep } from './workflow.js'
 
 /** The plain-language state of an instance (VT-2, S14). */
@@ -247,7 +248,7 @@ function activePosition(instance: Instance, definition: FlowDefinition): number 
 function skippedSteps(instance: Instance, log: Log): readonly SkippedStep[] {
   if (instance.instanceId === undefined) return []
   const skipped: SkippedStep[] = []
-  for (const event of log) {
+  for (const event of standingEvents(log)) {
     if (event.payload.instanceId !== instance.instanceId) continue
     skipped.push(...readSkipped(event.payload.skipped))
   }

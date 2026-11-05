@@ -21,10 +21,11 @@ import {
   type FlowStep,
   parse,
 } from '../engine/definition.js'
-import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow } from '../engine/flow.js'
+import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow, publishedByHash } from '../engine/flow.js'
 import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash, mergeAssignees } from '../engine/instance.js'
+import { instanceOf, type ProjectedInstance } from '../engine/instances.js'
 import type { Event, Operation } from '../engine/operation.js'
 import { type OutboxEntry, outboxOfEvent } from '../engine/outbox.js'
 import {
@@ -46,6 +47,8 @@ import {
 } from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
+import { trackerOf } from '../engine/tracker.js'
+import { EVENT_UNDONE } from '../engine/undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 import {
@@ -1578,6 +1581,15 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     }
     return
   }
+  if (event.type === EVENT_UNDONE) {
+    // A compensating event undoes the latest action on an instance (S16, D6,
+    // I4): the projection folds the instance again from the log up to this
+    // event, with the undone action folded out, and writes the instance row,
+    // the task rows from the tracker, and the timers of the restored step.
+    const instanceId = event.payload.instanceId
+    if (typeof instanceId === 'string') await reprojectInstance(client, instanceId, event)
+    return
+  }
   if (event.type === TIMER_FIRED) {
     const fired = readTimerFired(event)
     // The timer fired at most once (I3): the claim and this mark share the one
@@ -1855,6 +1867,125 @@ async function nextStepOf(
 }
 
 /** One step of the definition that the instance pins, or undefined when it has none (DF-2, S12). */
+/**
+ * Project one instance again from the log up to an event (S16, D6, I4): the
+ * engine's own fold decides the instance, so the live append and a rebuild
+ * reproduce the same rows from the same events. The instance row takes the
+ * fold's state, the task rows take the tracker's state per step (a step not
+ * reached has no row), and the timers of the restored current step count from
+ * the compensating event, as they do after the undo of a close (SE-5).
+ */
+async function reprojectInstance(
+  client: PoolClient,
+  instanceId: string,
+  event: Event
+): Promise<void> {
+  const rows = await client.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>(
+    'select seq, operation_id, type, at, actor, payload from events where seq <= $1 order by seq',
+    [event.seq]
+  )
+  const log: Event[] = rows.rows.map((row) => ({
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }))
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) return
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) return
+  const state = instanceStatus(instance)
+  await client.query(
+    `update instances
+     set current_step = $2, holder = $3, status = $4, done = $5, submitted = $6,
+         queue = $7, version = $8, values = $9::jsonb, seq = $10
+     where id = $1`,
+    [
+      instanceId,
+      instance.currentStep ?? null,
+      instance.holder ?? null,
+      state,
+      instance.done === true,
+      instance.submitted !== false,
+      instance.queue ?? null,
+      instance.version ?? 0,
+      JSON.stringify(instance.values ?? {}),
+      event.seq,
+    ]
+  )
+  const tracker = trackerOf(instance, published.definition, log)
+  for (const entry of tracker) {
+    if (entry.state === 'not-reached') {
+      await client.query('delete from tasks where instance_id = $1 and step = $2', [
+        instanceId,
+        entry.key,
+      ])
+      continue
+    }
+    const assignees = instance.assignees.filter((assignee) => assignee.step === entry.key)
+    await upsertTask(client, {
+      instanceId,
+      step: entry.key,
+      assignees,
+      holder: entry.state === 'opened' ? (entry.holder ?? null) : null,
+      state: taskStateOf(entry.state),
+      queue: entry.key === instance.currentStep ? (instance.queue ?? null) : null,
+      at: entry.lastActivityAt ?? entry.startAt ?? event.at,
+      seq: event.seq,
+    })
+  }
+  // The undone action may have entered or left a step: every pending timer of
+  // the instance is cancelled, and the restored current step's timers count
+  // from the undo (SE-5, I3).
+  await client.query(
+    `update timers set cancelled_at = $2, seq = $3
+     where instance_id = $1 and cancelled_at is null and fired_at is null`,
+    [instanceId, event.at, event.seq]
+  )
+  if (instance.currentStep !== undefined && instance.submitted !== false) {
+    const step = await stepOfInstance(client, instanceId, instance.currentStep)
+    if (step !== undefined) {
+      const to = instance.holder ?? timerRecipient(instance.assignees, instance.currentStep)
+      await scheduleStepTimers(client, {
+        instanceId,
+        step,
+        since: event.at,
+        seq: event.seq,
+        ...(to === undefined ? {} : { to }),
+      })
+    }
+  }
+}
+
+/** The instance row's status of a folded instance (VT-2): the same words the engine's status uses. */
+function instanceStatus(instance: ProjectedInstance): string {
+  if (instance.withdrawal !== undefined) return instance.withdrawal
+  if (instance.done === true) return 'done'
+  if (instance.submitted === false) return 'draft'
+  return instance.holder === undefined ? 'waiting' : 'in-progress'
+}
+
+/** The task row state of one tracker state (VT-2). */
+function taskStateOf(state: string): string {
+  switch (state) {
+    case 'unopened':
+      return 'available'
+    case 'opened':
+      return 'opened'
+    default:
+      return state
+  }
+}
+
 /** The request form of an instance's pinned definition: its first step (ADR 0014). */
 async function firstStepOf(client: PoolClient, instanceId: string): Promise<FlowStep | undefined> {
   const result = await client.query<{ definition: unknown }>(

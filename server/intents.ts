@@ -36,6 +36,7 @@ import {
 } from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import { teamsOf } from '../engine/teams.js'
+import { EVENT_UNDONE, undoAction } from '../engine/undo.js'
 import {
   cancel,
   INSTANCE_CANCELLED,
@@ -103,6 +104,7 @@ export const INTENT_TYPES: readonly string[] = [
   INSTANCE_CANCELLED,
   INSTANCE_UNDONE,
   STEP_TAKEN_OVER,
+  EVENT_UNDONE,
 ]
 
 /**
@@ -129,6 +131,7 @@ export function isClientIntent(body: Record<string, unknown>): boolean {
     return !hasEngineCloseField(payload)
   }
   if (type === INSTANCE_UNDONE) return !hasEngineUndoField(payload)
+  if (type === EVENT_UNDONE) return !('notified' in payload) && !('alreadySent' in payload)
   return !hasEngineTakeoverField(payload)
 }
 
@@ -225,6 +228,9 @@ export function resolveClientOperation(
     }
     if (body.type === STEP_TAKEN_OVER) {
       return takeoverOperation(context, body)
+    }
+    if (body.type === EVENT_UNDONE) {
+      return undoActionOperation(context, body)
     }
     return { status: 400, error: `the operation type ${String(body.type)} is not served` }
   } catch (error) {
@@ -574,6 +580,70 @@ function takeoverOperation(context: IntentContext, body: Record<string, unknown>
       status: takeoverStatus(result.reason),
       error: result.reason ?? 'the takeover was refused',
     }
+  }
+  return { operation: result.operation }
+}
+
+/**
+ * Apply the undo of an action through the engine (S16, S10, WF-5, D6, I4,
+ * I5, I8, #256). The client posts the instance, the seq of the event it
+ * undoes, the reason and the version it read; the engine decides whether the
+ * event is the latest action, whether the actor made it or owns the flow,
+ * whether the flow's undo period and final step allow it, and which side
+ * effects already occurred. The period is measured on the server clock, so a
+ * client time cannot extend it.
+ */
+function undoActionOperation(context: IntentContext, body: Record<string, unknown>): IntentResult {
+  const { log, principal, grants } = context
+  const payload = isRecord(body.payload) ? body.payload : undefined
+  const instanceId = stringValue(payload?.instanceId)
+  const eventId = payload?.eventId
+  const reason = typeof payload?.reason === 'string' ? payload.reason : undefined
+  const version = payload?.version
+  if (
+    instanceId === undefined ||
+    typeof eventId !== 'number' ||
+    !Number.isInteger(eventId) ||
+    reason === undefined ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    typeof body.id !== 'string' ||
+    typeof body.at !== 'number'
+  ) {
+    return {
+      status: 400,
+      error: 'an undo needs an id, a time, an instance, an eventId, a reason and a version',
+    }
+  }
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) {
+    return { status: 400, error: `the log holds no instance ${instanceId} (DX-1)` }
+  }
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) {
+    return { status: 400, error: `the log holds no published definition for ${instanceId}` }
+  }
+  const undoPeriod =
+    (published.definition.undoHours ?? context.defaultUndoHours ?? DEFAULT_UNDO_HOURS) * HOUR_MS
+  const result = undoAction(
+    instance,
+    principal.id,
+    eventId,
+    reason,
+    version,
+    {
+      flow: instance.flow,
+      definition: published.definition,
+      log,
+      grants,
+      now: context.now(),
+      undoPeriod,
+    },
+    { clock: () => body.at as number, ids: () => body.id as string }
+  )
+  if (!result.accepted || result.operation === undefined) {
+    return { status: result.status ?? 409, error: result.reason ?? 'the undo was refused' }
   }
   return { operation: result.operation }
 }

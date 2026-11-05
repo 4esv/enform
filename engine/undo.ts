@@ -16,10 +16,12 @@
 // source and no I/O of their own, and the injected operation sources come in as
 // arguments.
 
-import type { ConnectorCall } from './instance.js'
+import { authorize, type Grant } from './authorize.js'
+import type { Version } from './concurrency.js'
+import type { FlowDefinition } from './definition.js'
+import type { ConnectorCall, Instance } from './instance.js'
 import type { ActorId, Event, Log, Operation, OperationDeps } from './operation.js'
 import { createOutboxOperation, type OutboxEntry, outboxOfEvent } from './outbox.js'
-import { EMAIL_CONNECTOR } from './submission.js'
 
 /** The versioned event type of an undo (S16, WF-5, D6). */
 export const EVENT_UNDONE = 'event.undone@1'
@@ -139,9 +141,178 @@ export function undo(
   const alreadySent = alreadySentEffects(event, options.calls ?? [])
   const notified = recipients(alreadySent)
   const outbox = notified.map((to) => notification(to, eventId, options.actor, reason))
-  const change = { eventId, reason, notified, alreadySent }
+  // The compensating event names the instance the undone event acted on, so
+  // the instance projection folds the undo with the instance's own events
+  // (#256, I4, DX-1).
+  const instanceId = event.payload.instanceId
+  const change = {
+    ...(typeof instanceId === 'string' ? { instanceId } : {}),
+    eventId,
+    reason,
+    notified,
+    alreadySent,
+  }
   const operation = createOutboxOperation(EVENT_UNDONE, change, outbox, deps, options.actor)
   return { accepted: true, operation, outbox, alreadySent, notified }
+}
+
+/** The versioned event type of a release (WF-5, #256): the holder returns the task to the pool. */
+export const TASK_RELEASED = 'task.released@1'
+
+/** The versioned event type of a reassign (WF-5, #256): a flow owner gives the task to a principal. */
+export const TASK_REASSIGNED = 'task.reassigned@1'
+
+/**
+ * The manual actions on an instance that a compensating event can undo (WF-5,
+ * MVP.md 5.4): a claim, a release, a takeover, a reassign, an outcome and a
+ * send back. A withdraw and a cancel have their own undo (`instance.undone@1`,
+ * S13), and a start, a draft edit and a submit are the starter's own form.
+ */
+export const UNDOABLE_TYPES: readonly string[] = [
+  // The literals, not the modules' constants: the instance projection imports
+  // this module and the action modules import the projection, so the
+  // constants of action.ts, sendBack.ts and takeover.ts are not initialized
+  // when this list is built (an ESM cycle). The event types are a public
+  // surface (MVP.md 9.1), so the literals cannot drift.
+  'step.claimed@1',
+  TASK_RELEASED,
+  'step.taken-over@1',
+  TASK_REASSIGNED,
+  'step.completed@1',
+  'step.sent-back@1',
+]
+
+/** The event type of a completion, as a literal for the same reason as UNDOABLE_TYPES. */
+const COMPLETED = 'step.completed@1'
+
+/** The email connector, as a literal: submission.ts imports the projection, which imports this module. */
+const EMAIL = 'connector-smtp'
+
+/**
+ * The seqs of the events that a compensating event on the log undid (I4,
+ * D6). A projection folds the instance without them; the timeline keeps both.
+ */
+export function undoneSeqs(log: Log): ReadonlySet<number> {
+  const seqs = new Set<number>()
+  for (const event of log) {
+    if (event.type !== EVENT_UNDONE) continue
+    const target = event.payload.eventId
+    if (typeof target === 'number') seqs.add(target)
+  }
+  return seqs
+}
+
+/**
+ * The events of a log that still stand (I4, D6): every event that no
+ * compensating event undid. The compensating events themselves stay, so a
+ * fold that counts actions counts the undo as one.
+ */
+export function standingEvents(log: Log): readonly Event[] {
+  const undone = undoneSeqs(log)
+  return log.filter((event) => !undone.has(event.seq))
+}
+
+/** What an undo of an action needs beside the instance and the event (#256, S16, WF-5). */
+export type UndoActionContext = {
+  readonly flow: string
+  readonly definition: FlowDefinition
+  readonly log: Log
+  /** The grants that apply to the acting principal (I8); a flow owner holds `task.reassign`. */
+  readonly grants: readonly Grant[]
+  /** The server clock (I6): the undo period is measured on it. */
+  readonly now: number
+  /** The undo period of the flow in milliseconds (WF-5). */
+  readonly undoPeriod: number
+}
+
+/** The result of an undo of an action: the undo result and the HTTP status of a refusal. */
+export type UndoActionResult = UndoResult & { readonly status?: 403 | 409 }
+
+/**
+ * Undo the latest action on an instance (#256, S16, S10, WF-5, D6, A2, I4,
+ * I5, I8, I14). The engine refuses a stale view (I5), an event that is not
+ * the instance's own or not a manual action (MVP.md 5.4), an event already
+ * undone, an action under a later standing action (the undo reverses the
+ * newest change only, so no state is invented), an actor who neither made the
+ * action nor owns the flow (`task.reassign`, I8), an undo after the flow's
+ * period (WF-5), and any undo once the instance completed the flow's final
+ * step (S16). It then appends the compensating event through `undo`, with the
+ * instance's connector calls deciding which side effects already occurred
+ * (A2). It is pure and deterministic (I6).
+ */
+export function undoAction(
+  instance: Instance,
+  actor: ActorId,
+  eventId: number,
+  reason: string,
+  expectedVersion: Version,
+  context: UndoActionContext,
+  deps: OperationDeps
+): UndoActionResult {
+  const own = context.log.filter((event) => event.payload.instanceId === instance.instanceId)
+  const event = own.find((candidate) => candidate.seq === eventId)
+  if (event === undefined) {
+    return { accepted: false, status: 409, reason: `the instance has no event ${eventId} (I4)` }
+  }
+  if (expectedVersion !== (instance.version ?? 0)) {
+    return { accepted: false, status: 409, reason: 'the view is stale, refresh and retry' }
+  }
+  if (!UNDOABLE_TYPES.includes(event.type)) {
+    return {
+      accepted: false,
+      status: 409,
+      reason: `event ${eventId}: ${event.type} is not undoable`,
+    }
+  }
+  if (reason.trim() === '') {
+    return { accepted: false, status: 409, reason: 'an undo needs a reason (WF-5)' }
+  }
+  const undone = undoneSeqs(own)
+  if (undone.has(eventId)) {
+    return { accepted: false, status: 409, reason: `event ${eventId} is already undone` }
+  }
+  const standing = own.filter(
+    (candidate) => UNDOABLE_TYPES.includes(candidate.type) && !undone.has(candidate.seq)
+  )
+  const latest = standing[standing.length - 1]
+  if (latest === undefined || latest.seq !== eventId) {
+    return {
+      accepted: false,
+      status: 409,
+      reason: `event ${eventId} is not the latest action on the instance; undo event ${latest?.seq ?? 'none'} first`,
+    }
+  }
+  const owner = authorize(context.grants, 'task.reassign', `flow:${context.flow}`)
+  if (event.actor !== actor && !owner) {
+    return {
+      accepted: false,
+      status: 403,
+      reason: `${actor} may not undo event ${eventId}: only ${event.actor ?? 'its actor'} or a flow owner may (WF-5)`,
+    }
+  }
+  if (context.now - event.at > context.undoPeriod) {
+    return {
+      accepted: false,
+      status: 409,
+      reason: `event ${eventId}: the undo period of the flow has passed (WF-5)`,
+    }
+  }
+  const final = context.definition.finalStep
+  const passedFinal =
+    final !== undefined &&
+    standing.some((candidate) => candidate.type === COMPLETED && candidate.payload.step === final)
+  if (passedFinal) {
+    return {
+      accepted: false,
+      status: 409,
+      reason: `the instance completed the final step ${final}, so nothing on it can be undone (WF-5)`,
+    }
+  }
+  const result = undo(eventId, reason, context.log, deps, {
+    actor,
+    calls: instance.connectorCalls,
+  })
+  return result.accepted ? result : { ...result, status: 409 }
 }
 
 /**
@@ -227,7 +398,7 @@ function recipients(effects: readonly AlreadySentEffect[]): readonly ActorId[] {
 function notification(to: ActorId, eventId: number, actor: ActorId, reason: string): OutboxEntry {
   return {
     operation: UNDO_NOTIFICATION,
-    target: EMAIL_CONNECTOR,
+    target: EMAIL,
     payload: { to, eventId, actor, reason },
   }
 }

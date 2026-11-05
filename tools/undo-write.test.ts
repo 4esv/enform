@@ -142,13 +142,14 @@ function undoIntent(
   }
 }
 
-test.fails('#256 S16 an undo of the latest action is a compensating event and the projection folds it out', async () => {
+test('#256 S16 an undo of the latest action is a compensating event and the projection folds it out', async () => {
   const { resolveClientOperation } = await resolverModule()
   const { state, approvedSeq } = approvedState()
+  // The grants that apply to the acting principal, as the server reads them (I8).
   const context = (actor: string, now: number) => ({
     log: state.log,
     principal: { id: actor, groups: [] },
-    grants,
+    grants: grants.filter((grant) => grant.principal === actor),
     resolver: () => resolve,
     now: () => now,
   })
@@ -230,7 +231,7 @@ test.fails('#256 S16 an undo of the latest action is a compensating event and th
   expect(pooled?.currentStep).toBe('advisor')
 })
 
-test.fails('#256 S16 the flow final step refuses an undo past it with the reason', async () => {
+test('#256 S16 the flow final step refuses an undo past it with the reason', async () => {
   const { resolveClientOperation } = await resolverModule()
   const { state } = approvedState()
   const current = () => {
@@ -256,7 +257,13 @@ test.fails('#256 S16 the flow final step refuses an undo past it with the reason
   // The registrar step is the flow's final step: its completion is past the
   // point the flow marks final, so the undo is refused with the reason (S16).
   const refused = resolveClientOperation(
-    { log, principal: { id: ANA, groups: [] }, grants, resolver: () => resolve, now: () => T0 + 6 },
+    {
+      log,
+      principal: { id: ANA, groups: [] },
+      grants: grants.filter((grant) => grant.principal === ANA),
+      resolver: () => resolve,
+      now: () => T0 + 6,
+    },
     undoIntent(log.length, ANA, 5, T0 + 6)
   )
   expect('status' in refused && refused.status).toBe(409)

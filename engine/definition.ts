@@ -206,6 +206,12 @@ export type FlowDefinition = {
    * the value.
    */
   readonly undoHours?: number
+  /**
+   * The step after whose completion the flow is final (WF-5, S16): once the
+   * instance completed it, no action on the instance can be undone. It is
+   * optional and names one step key; an absent setting marks no point final.
+   */
+  readonly finalStep?: string
   readonly steps: readonly FlowStep[]
 }
 
@@ -341,13 +347,28 @@ function readV2Definition(body: unknown): FlowDefinition {
     schemaVersion: number
     anonymous?: boolean
     undoHours?: number
+    finalStep?: string
     steps: readonly FlowStep[]
   } = { schemaVersion: SCHEMA_VERSION, steps: body.steps.map(readV2Step) }
   const anonymous = readAnonymous(body.anonymous)
   if (anonymous !== undefined) definition.anonymous = anonymous
   const undoHours = readUndoHours(body.undoHours)
   if (undoHours !== undefined) definition.undoHours = undoHours
+  const finalStep = readFinalStep(body.finalStep, definition.steps)
+  if (finalStep !== undefined) definition.finalStep = finalStep
   return definition
+}
+
+/**
+ * Read the optional final step of a flow (WF-5, S16): the key of one of its
+ * steps, after whose completion no action on an instance can be undone.
+ */
+function readFinalStep(body: unknown, steps: readonly FlowStep[]): string | undefined {
+  if (body === undefined) return undefined
+  if (typeof body !== 'string' || !steps.some((step) => step.key === body)) {
+    throw new Error('flow definition: finalStep must name a step of the flow (WF-5)')
+  }
+  return body
 }
 
 /**
@@ -798,6 +819,7 @@ function canonicalDefinition(definition: FlowDefinition): JsonValue {
   const canonical: Record<string, JsonValue> = { schemaVersion: definition.schemaVersion }
   if (definition.anonymous !== undefined) canonical.anonymous = definition.anonymous
   if (definition.undoHours !== undefined) canonical.undoHours = definition.undoHours
+  if (definition.finalStep !== undefined) canonical.finalStep = definition.finalStep
   canonical.steps = definition.steps.map(canonicalStep)
   return canonical
 }
