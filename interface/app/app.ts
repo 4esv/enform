@@ -50,6 +50,7 @@ import {
   type UnroutableItem,
 } from '../client/client.js'
 import { mountBuilder } from './builder.js'
+import { mountDiff } from './diff.js'
 import {
   controlKind,
   type FormField,
@@ -60,6 +61,7 @@ import {
 } from './form.js'
 import { indexedDbStore, type LocalStore, openLocal, sessionSecrets } from './local.js'
 import { modeLabel, openRealtime, type Present, type Realtime, type Scope } from './realtime.js'
+import { mountSharing } from './sharing.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
 const INSTANCE_STARTED = 'instance.started@1'
@@ -2110,6 +2112,11 @@ export async function mountApp(options: AppOptions): Promise<void> {
       }
     })
     channel.presence()
+    // The sharing panel and the diff view sit below the builder (S02, S03,
+    // S04, #264): the grants as scopes with presets, and the attributed
+    // difference between two points of the flow's history.
+    await mountSharing({ root: main, slug, actor, clock, ids })
+    await mountDiff({ root: main, slug })
   }
 
   try {

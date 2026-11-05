@@ -35,7 +35,7 @@ async function sharing(): Promise<Sharing> {
   return (await import(SHARING_MODULE)) as unknown as Sharing
 }
 
-test.fails('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and only scopes are stored', async () => {
+test('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, and only scopes are stored', async () => {
   const { grantFor, PRESETS } = await sharing()
   expect(PRESETS.map((preset) => preset.key)).toEqual([
     'starter',
@@ -116,7 +116,7 @@ test.fails('#264 S02 AC-3 a preset expands to scopes on the flow or on a step, a
   })
 })
 
-test.fails('#264 S02 AC-4 the panel answers who can choose an outcome at a step from the stored scopes', async () => {
+test('#264 S02 AC-4 the panel answers who can choose an outcome at a step from the stored scopes', async () => {
   const { whoCan, describeGrant, principalOf } = await sharing()
   const grants: Grant[] = [
     {
