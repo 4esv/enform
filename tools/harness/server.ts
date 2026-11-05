@@ -12,7 +12,8 @@ import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import { mayRead } from '../../engine/status.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../../engine/timeline.js'
-import { grantsFor, isClientIntent, resolveClientOperation } from '../../server/intents.js'
+import { isClientIntent, resolveClientOperation } from '../../server/intents.js'
+import { directoryOf, grantsApplying, groupsOf, type Membership } from './directory.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
 // describes. It delegates to the engine (apply, the append-only log). It is
@@ -54,12 +55,10 @@ export type ApiOptions = {
    * id; a release server reads them from the session. A principal that the
    * map does not name holds no group here.
    */
-  readonly membership?: Readonly<Record<string, readonly string[]>>
+  readonly membership?: Membership
+  /** The directory resolver, pre-built (a seam); absent reads the teams from the log and the groups from `membership`. */
   readonly resolve?: TargetResolver
 }
-
-/** The resolver when none is injected: no target resolves to a member (I10). */
-const noMembers: TargetResolver = () => []
 
 /**
  * The directory that holds the interface: the app shell and the generated
@@ -79,19 +78,6 @@ function isOperation(value: unknown): value is Operation {
     typeof o.payload === 'object' &&
     o.payload !== null
   )
-}
-
-/**
- * The grants that apply to one principal (AC-1, I8, #256): the bootstrap
- * grants that name it or one of its groups, and the grants the log records
- * for it, read through the same `grantsFor` as the release server. The
- * harness has no session, so the groups come from the `membership` seam.
- */
-function grantsApplying(log: State['log'], actor: string, options: ApiOptions): readonly Grant[] {
-  const groups = options.membership?.[actor] ?? []
-  const held = new Set([actor, ...groups, ...groups.map((group) => `group:${group}`)])
-  const seeded = (options.bootstrap ?? []).filter((grant) => held.has(grant.principal))
-  return [...seeded, ...grantsFor(log, { id: actor, groups })]
 }
 
 /** Whether a value is a JSON object. */
@@ -361,12 +347,17 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         if (isRecord(parsed) && isClientIntent(parsed)) {
           const actor = typeof parsed.actor === 'string' ? parsed.actor : ''
           const at = typeof parsed.at === 'number' ? parsed.at : 0
+          const groups = groupsOf(options.membership, actor)
+          const directory = directoryOf(current.log, options.membership)
           const resolved = resolveClientOperation(
             {
               log: current.log,
-              principal: { id: actor, groups: [] },
-              grants: options.grants ?? grantsApplying(current.log, actor, options),
-              resolver: () => options.resolve ?? noMembers,
+              principal: { id: actor, groups },
+              grants:
+                options.grants ??
+                grantsApplying(current.log, actor, options.bootstrap, options.membership),
+              resolver:
+                options.resolve === undefined ? directory : () => options.resolve as TargetResolver,
               now: () => at,
             },
             parsed

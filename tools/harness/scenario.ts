@@ -7,7 +7,6 @@ import {
   type Operation,
 } from '../../engine/operation.js'
 import { createOutboxOperation, type OutboxEntry } from '../../engine/outbox.js'
-import type { TargetResolver } from '../../engine/routing.js'
 
 // Issue #24, STORIES.md Test method: one executable scenario per story. Its
 // steps are "a person acts, then a condition must be true". The runner
@@ -83,16 +82,11 @@ export type Scenario = {
   /**
    * The directory groups each principal of the cast holds (ID-4, ID-5, #256),
    * keyed by principal id, so a grant to a group reaches its members as the
-   * session's groups do on a release server.
+   * session's groups do on a release server, and a group target resolves to
+   * them (AS-4). A team is read from the log (AS-6): a story that routes to a
+   * team creates it in its steps.
    */
   readonly membership?: Readonly<Record<string, readonly string[]>>
-  /**
-   * The directory resolver of the story (AS-1, AS-4, #256): what a group, a
-   * team or a dynamic target resolves to in the harness. A step's intent that
-   * routes a task resolves through it; absent, no target resolves to anyone
-   * (I10).
-   */
-  readonly resolve?: TargetResolver
   /**
    * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
    * the same steps in a browser). A gui step maps to the engine step at the

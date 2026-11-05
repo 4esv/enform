@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { apply, emptyState, rebuild, type State } from '../../engine/apply.js'
+import { apply, rebuild, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
 import { type CompletionResult, completeStep } from '../../engine/concurrency.js'
 import {
@@ -37,6 +37,7 @@ import {
   type UpdateLog,
 } from '../../engine/updates.js'
 import { oracles } from './oracles.js'
+import { continueFrom, decide, predict, prefix, type StepOutcome } from './predict.js'
 import { type Deliveries, postStep, runSteps, withScenarioApi } from './runner.js'
 import {
   goldenClock,
@@ -79,10 +80,17 @@ export async function runOperator(scenario: Scenario, operator: Operator): Promi
 /** The cast: a principal to the grants that apply to it (STORIES.md, Cast; AC-1). */
 export type Cast = Readonly<Record<ActorId, readonly Grant[]>>
 
-/** What one step requires of its actor: the scope of the action and the resource (MVP.md 5.6, I8). */
-type Requirement = {
-  readonly scope: string
-  readonly resource: string
+/**
+ * What one step requires of its actor (MVP.md 5.6, I8): the scope of the
+ * action on its resource, and, for an action the engine ties to a person
+ * rather than a scope, the people who may do it (the starter of a draft, the
+ * assignees of a task, the holder of a claimed task). A step may require
+ * both, or either.
+ */
+export type Requirement = {
+  readonly scope?: string
+  readonly resource?: string
+  readonly actors?: readonly ActorId[]
 }
 
 /** The requirement of a step of the scenario, in step order. */
@@ -128,12 +136,11 @@ export function actorVariants(
   const variants: ActorVariant[] = []
   for (const [person, grants] of Object.entries(cast)) {
     scenario.steps.forEach((step, index) => {
-      const { scope, resource } = requires(step, index)
       variants.push({
         id: `actor:step${index + 1}:${person}`,
         stepIndex: index,
         actor: person,
-        expected: authorize(grants, scope, resource) ? 'reached' : 'refused',
+        expected: meets(grants, person, requires(step, index)) ? 'reached' : 'refused',
         scenario: swapActor(scenario, index, person),
       })
     })
@@ -141,13 +148,27 @@ export function actorVariants(
   return variants
 }
 
+/** Whether a person meets a requirement (I8): holds the scope, and is one of the people, where each is required. */
+function meets(grants: readonly Grant[], person: ActorId, requirement: Requirement): boolean {
+  if (
+    requirement.scope !== undefined &&
+    !authorize(grants, requirement.scope, requirement.resource ?? '*')
+  ) {
+    return false
+  }
+  return requirement.actors === undefined || requirement.actors.includes(person)
+}
+
 /**
  * Run the Actor operator over a golden path: every variant runs, and the
- * oracles check it (STORIES.md, Oracles). An authorized person reaches the
- * variant's golden end state. An unauthorized person is refused by the
- * engine's `authorize` (I8), so the runner refuses the step and the end state
- * is the golden path without that operation, the deviation that the operator
- * predicts. The variants are returned, so a test can count them.
+ * oracles check it (STORIES.md, Oracles). A step that posts an intent is
+ * decided by the server (I8): an authorized person is applied and the run
+ * continues as the engine predicts, an unauthorized person is refused on the
+ * wire and nothing is appended, and the run must reach the end state the
+ * engine predicts for it. A step the server appends as it stands has no
+ * refusal on the wire, so its deviation is modelled: the run is the golden
+ * path without that operation. The variants are returned, so a test can
+ * count them.
  */
 export async function runActorOperator(
   scenario: Scenario,
@@ -156,10 +177,28 @@ export async function runActorOperator(
 ): Promise<readonly ActorVariant[]> {
   const variants = actorVariants(scenario, cast, requires)
   for (const variant of variants) {
-    const expected =
-      variant.expected === 'reached' ? variant.scenario : withoutStep(scenario, variant.stepIndex)
-    const { state } = await runSteps(expected, { mode: 'api' })
-    oracles(state, expected)
+    const step = scenario.steps[variant.stepIndex]
+    if (step.intent === undefined) {
+      const expected =
+        variant.expected === 'reached' ? variant.scenario : withoutStep(scenario, variant.stepIndex)
+      const { state } = await runSteps(expected, { mode: 'api' })
+      oracles(state, expected)
+      continue
+    }
+    const outcome = predict(variant.scenario).outcomes[variant.stepIndex]
+    if (variant.expected === 'reached' && 'error' in outcome) {
+      throw new Error(
+        `${variant.id}: the person holds what the step requires, and the engine refused the step: ${outcome.error}`
+      )
+    }
+    if (variant.expected === 'refused' && 'operation' in outcome) {
+      throw new Error(`${variant.id}: the engine applied a step the person may not do (I8)`)
+    }
+    if (variant.expected === 'refused' && 'error' in outcome && outcome.status === 400) {
+      throw new Error(`${variant.id}: the engine refused the person with a malformed-intent status`)
+    }
+    const { state } = await runSteps(variant.scenario, { mode: 'api' })
+    oracles(state, variant.scenario)
   }
   return variants
 }
@@ -248,37 +287,51 @@ export function runRaceOperator(scenario: Scenario, cast: Cast): readonly RaceVa
  */
 function runRace(scenario: Scenario, variant: RaceVariant): void {
   const index = variant.stepIndex
-  const view = replay(scenario, index)
-  const golden = stepOperation(scenario.steps[index], index)
-  const competing = stepOperation({ ...scenario.steps[index], actor: variant.competitor }, index)
+  const view = prefix(scenario, index)
+  const step = scenario.steps[index]
+  // Both actions are decided from the same view (I5): the engine resolves
+  // each intent against the prefix, or takes the declared operation as it is.
+  const golden = decide(scenario, view, step, index, goldenClock)
+  if ('error' in golden) {
+    throw new Error(`${variant.id}: the engine refused the golden action: ${golden.error}`)
+  }
+  const competing = decide(
+    variant.scenario,
+    view,
+    { ...step, actor: variant.competitor },
+    index,
+    goldenClock
+  )
 
-  // The golden action wins; the competing action is refused as stale (I5).
-  const goldenWins = completeStep(view, index, golden)
+  // The golden action wins; the competing action is refused as stale (I5),
+  // or was refused outright because the competitor may not act (I8).
+  const goldenWins = completeStep(view, index, golden.operation)
   assertAccepted(goldenWins, variant.id, 'the golden action')
-  assertRefused(completeStep(goldenWins.state, index, competing), variant.id, 'the competitor')
+  if ('operation' in competing) {
+    assertRefused(
+      completeStep(goldenWins.state, index, competing.operation),
+      variant.id,
+      'the competitor'
+    )
+  }
   oracles(continueSteps(goldenWins.state, scenario, index), scenario)
 
-  // The competing action wins; the golden action is refused as stale (I5).
-  const competitorWins = completeStep(view, index, competing)
+  // The competing action wins; the golden action is refused as stale (I5). A
+  // competitor the engine refused outright never wins: exactly one succeeded.
+  if ('error' in competing) return
+  const competitorWins = completeStep(view, index, competing.operation)
   assertAccepted(competitorWins, variant.id, 'the competitor')
-  assertRefused(completeStep(competitorWins.state, index, golden), variant.id, 'the golden action')
+  assertRefused(
+    completeStep(competitorWins.state, index, golden.operation),
+    variant.id,
+    'the golden action'
+  )
   oracles(continueSteps(competitorWins.state, variant.scenario, index), variant.scenario)
 }
 
-/** The state after the first `count` steps of a scenario: the shared view of a race (I4, I5). */
-function replay(scenario: Scenario, count: number): State {
-  let state = emptyState
-  for (let i = 0; i < count; i += 1) state = apply(stepOperation(scenario.steps[i], i), state)
-  return state
-}
-
-/** Apply the steps after `index`, so a winner's run reaches its golden end state (I6). */
+/** Decide and apply the steps after `index` from a winner's state, so its run reaches the end state the engine predicts (I6). */
 function continueSteps(state: State, scenario: Scenario, index: number): State {
-  let next = state
-  for (let i = index + 1; i < scenario.steps.length; i += 1) {
-    next = apply(stepOperation(scenario.steps[i], i), next)
-  }
-  return next
+  return continueFrom(scenario, state, index + 1).state
 }
 
 /** The version check accepted the winner (I5). */
@@ -346,13 +399,14 @@ export function runFaultOperator(scenario: Scenario): readonly FaultVariant[] {
  * end state.
  */
 function runFault(scenario: Scenario, variant: FaultVariant): void {
-  const prefix: Operation[] = []
-  let state = emptyState
-  for (let i = 0; i < variant.boundary; i += 1) {
-    const operation = stepOperation(scenario.steps[i], i)
-    prefix.push(operation)
-    state = apply(operation, state)
-  }
+  const state = prefix(scenario, variant.boundary)
+  const applied: Operation[] = state.log.map((event) => ({
+    id: event.operationId,
+    type: event.type,
+    at: event.at,
+    actor: event.actor,
+    payload: event.payload,
+  }))
 
   // Restart the server (I4): rebuild the derived state from the log alone.
   const rebuilt = rebuild(state.log)
@@ -363,7 +417,7 @@ function runFault(scenario: Scenario, variant: FaultVariant): void {
   // Stop the realtime connection (I1): re-apply the prefix. Every operation ID
   // is already applied, so every re-apply returns the same state.
   let reapplied = rebuilt
-  for (const operation of prefix) reapplied = apply(operation, reapplied)
+  for (const operation of applied) reapplied = apply(operation, reapplied)
   if (!isDeepStrictEqual(reapplied, state)) {
     throw new Error(`${variant.id}: the re-apply changed the state (I1)`)
   }
@@ -376,11 +430,7 @@ function runFault(scenario: Scenario, variant: FaultVariant): void {
   }
 
   // Continue the golden path from the rebuilt state, and check the oracles.
-  let end = reapplied
-  for (let i = variant.boundary; i < scenario.steps.length; i += 1) {
-    end = apply(stepOperation(scenario.steps[i], i), end)
-  }
-  oracles(end, scenario)
+  oracles(continueFrom(scenario, reapplied, variant.boundary).state, scenario)
 }
 
 // Issue #35, STORIES.md Fuzzy paths: the Clock operator moves the injected
@@ -469,14 +519,20 @@ export async function runClockOperator(scenario: Scenario): Promise<readonly Clo
   return variants
 }
 
-/** The log shape of a state view without the clock's `at` (I6): a moved clock must not change it. */
+/**
+ * The log shape of a state view without the clock's readings (I6): a moved
+ * clock must not change it. A payload may carry a time the engine derived
+ * from the clock (a deadline, a claim time), so the shape keeps the keys of
+ * each payload and not its values; the oracles hold the values to the
+ * engine's prediction under the moved clock.
+ */
 function logShape(view: StateView): readonly unknown[] {
   return view.log.map((event) => ({
     seq: event.seq,
     operationId: event.operationId,
     type: event.type,
     actor: event.actor,
-    payload: event.payload,
+    payload: Object.keys(event.payload).sort(),
   }))
 }
 
@@ -731,18 +787,45 @@ export async function runDataOperator(
 ): Promise<readonly DataVariant[]> {
   const variants = dataVariants(scenario, fields)
   const index = dataStepIndex(scenario)
+  const posted = scenario.steps[index].intent !== undefined
   for (const variant of variants) {
     const error = validateField(variant.field, variant.value)
-    if (variant.expected === 'accepted') {
-      if (error !== undefined) {
-        throw new Error(`${variant.id}: the generated value is not accepted (FM-1, FM-4)`)
+    if (variant.expected === 'accepted' && error !== undefined) {
+      throw new Error(`${variant.id}: the generated value is not accepted (FM-1, FM-4)`)
+    }
+    if (
+      variant.expected === 'refused' &&
+      (error === undefined || error.path !== variant.field.key)
+    ) {
+      throw new Error(`${variant.id}: the value is not refused with its field path (FM-4)`)
+    }
+    if (posted) {
+      // The server decides the submission (FM-4, A9): the engine's prediction
+      // must agree with the validator, and the run must agree with both.
+      const outcome: StepOutcome = predict(variant.scenario).outcomes[index]
+      if (variant.expected === 'accepted' && 'error' in outcome) {
+        throw new Error(`${variant.id}: the engine refused an accepted value: ${outcome.error}`)
+      }
+      if (variant.expected === 'refused' && 'operation' in outcome) {
+        throw new Error(`${variant.id}: the engine applied a refused value (FM-4)`)
+      }
+      if (
+        variant.expected === 'refused' &&
+        'error' in outcome &&
+        !outcome.error.includes(variant.field.key)
+      ) {
+        throw new Error(
+          `${variant.id}: the refusal does not name the field ${variant.field.key} (FM-1)`
+        )
       }
       const { state } = await runSteps(variant.scenario, { mode: 'api' })
       oracles(state, variant.scenario)
+      continue
+    }
+    if (variant.expected === 'accepted') {
+      const { state } = await runSteps(variant.scenario, { mode: 'api' })
+      oracles(state, variant.scenario)
     } else {
-      if (error === undefined || error.path !== variant.field.key) {
-        throw new Error(`${variant.id}: the value is not refused with its field path (FM-4)`)
-      }
       const deviation = withoutStep(variant.scenario, index)
       const { state } = await runSteps(deviation, { mode: 'api' })
       oracles(state, deviation)
@@ -751,8 +834,18 @@ export async function runDataOperator(
   return variants
 }
 
-/** The index of the golden step that carries the form data (FM-4): the submission step. */
+/**
+ * The index of the golden step that carries the form data (FM-4): the submit
+ * intent that validates the values (ADR 0014), else the first intent that
+ * carries values, else the step whose declared payload carries `data`.
+ */
 function dataStepIndex(scenario: Scenario): number {
+  const submit = scenario.steps.findIndex(
+    (step) => step.type === 'instance.submitted@1' && isRecord(step.intent?.values)
+  )
+  if (submit !== -1) return submit
+  const intent = scenario.steps.findIndex((step) => isRecord(step.intent?.values))
+  if (intent !== -1) return intent
   const index = scenario.steps.findIndex((step) => isRecord(step.payload.data))
   if (index === -1) {
     throw new Error('data operator: the scenario has no step that carries form data (FM-4)')
@@ -760,16 +853,24 @@ function dataStepIndex(scenario: Scenario): number {
   return index
 }
 
-/** The golden path with one value injected into the data step's form data (FM-1). */
+/**
+ * The golden path with one value injected into the data step's form data
+ * (FM-1): into the intent's values when the step posts one, so the server
+ * decides it, else into the declared payload's `data`.
+ */
 function withData(scenario: Scenario, index: number, key: string, value: FormValue): Scenario {
   return {
     ...scenario,
     steps: scenario.steps.map((step, i) => {
       if (i !== index) return step
-      const data = isRecord(step.payload.data) ? step.payload.data : {}
       // A static control takes no value (FM-1), so it adds no payload entry;
       // the run and its golden replay must stay equal through JSON.
       if (value === undefined) return step
+      if (step.intent !== undefined) {
+        const values = isRecord(step.intent.values) ? step.intent.values : {}
+        return { ...step, intent: { ...step.intent, values: { ...values, [key]: value } } }
+      }
+      const data = isRecord(step.payload.data) ? step.payload.data : {}
       return { ...step, payload: { ...step.payload, data: { ...data, [key]: value } } }
     }),
   }
@@ -894,9 +995,10 @@ export async function runOfflineOperator(scenario: Scenario): Promise<readonly O
 
 /** Run one offline variant: online up to `from`, offline from there, then reconnect. */
 async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<void> {
+  const { outcomes } = predict(scenario)
   await withScenarioApi(scenario, async (api) => {
     for (let i = 0; i < variant.from; i += 1)
-      await postStep(api, scenario.steps[i], i, goldenClock, 1)
+      await postStep(api, scenario.steps[i], i, goldenClock, 1, outcomes[i])
 
     // The connection drops. Each later step is saved on the device (I15),
     // encrypted (I11) and shown as pending (I16); nothing reaches the server.
@@ -935,7 +1037,7 @@ async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<
     // order. The server applies each one once (I1); the drafts sync and the
     // updates confirm (I15, I16).
     for (const { step, index } of buffered) {
-      await postStep(api, step, index, goldenClock, 2)
+      await postStep(api, step, index, goldenClock, 2, outcomes[index])
       const operation = stepOperation(step, index)
       drafts = syncDraft(drafts, operation.id)
       updates = acknowledge(updates, operation.id)
