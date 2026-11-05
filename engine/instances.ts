@@ -52,10 +52,12 @@ import {
   status,
   visibleNotes,
 } from './status.js'
-import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
+import { DRAFT_EDITED, INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
+import { EVENT_UNDONE, standingEvents, TASK_REASSIGNED, TASK_RELEASED, undoneSeqs } from './undo.js'
+import { DRAFT_REBOUND, type Misfit } from './version.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -176,6 +178,18 @@ export type InstanceView = {
    */
   readonly canTakeOver: boolean
   /**
+   * The rebind of an open draft to a newer version (RT-6, S04): the version
+   * it left, the version it is on, the values that no longer fit (kept, never
+   * deleted) and the required fields of the new form it leaves empty. It is
+   * present on a draft that the log moved and absent otherwise.
+   */
+  readonly rebound?: {
+    readonly from: string
+    readonly to: string
+    readonly misfits: readonly Misfit[]
+    readonly newRequired: readonly string[]
+  }
+  /**
    * When a takeover becomes available for an `after-idle` step (S10, AS-3):
    * the claim time from the log plus the step's idle period. It is absent for
    * `always` and `never`, and while no holder has a claim.
@@ -194,15 +208,24 @@ export type InstanceView = {
  * and events of another instance never affect the result.
  */
 export function instanceOf(log: Log, instanceId: string): ProjectedInstance | undefined {
-  const events = log.filter((event) => event.payload.instanceId === instanceId)
-  const start = events.find((event) => event.type === INSTANCE_STARTED)
+  const own = log.filter((event) => event.payload.instanceId === instanceId)
+  const start = own.find((event) => event.type === INSTANCE_STARTED)
   if (start === undefined) return undefined
   const definitionVersion = stringField(start.payload, 'definitionVersion')
   const pinned = publishedByHash(log, definitionVersion)
   if (pinned === undefined) return undefined
+  // An undone action is folded out (S16, D6, I4): the event it covers no
+  // longer changes the instance, but it keeps the version it advanced, and the
+  // compensating event advances it once more, so the counter stays monotonic
+  // and a view read before the undo is stale after it (I5).
+  const undone = undoneSeqs(own)
   let instance = started(start, instanceId)
-  for (const event of events) {
+  for (const event of own) {
     if (event === start) continue
+    if (event.type === EVENT_UNDONE || undone.has(event.seq)) {
+      instance = advanced(instance)
+      continue
+    }
     instance = fold(instance, event, pinned.definition, log)
   }
   return instance
@@ -305,7 +328,12 @@ function viewForStep(
     outcomes,
     version: current.version ?? 0,
     previousSteps: stepsBefore(context.definition, current.currentStep),
-    notes: visibleNotes(actor, instanceNotes(context.log, current.instanceId), context),
+    notes: visibleNotes(
+      actor,
+      instanceNotes(context.log, current.instanceId),
+      context,
+      current.starter
+    ),
     ...(current.withdrawal === undefined ? {} : { withdrawal: current.withdrawal }),
     ...(current.closeReason === undefined ? {} : { closeReason: current.closeReason }),
     ...(current.closedAt === undefined ? {} : { closedAt: current.closedAt }),
@@ -313,6 +341,34 @@ function viewForStep(
     canWithdraw: canWithdraw(actor, current),
     canCancel: canCancel(current, context),
     ...takeover,
+    ...reboundView(current, context.log),
+  }
+}
+
+/**
+ * The newest rebind of an open draft (RT-6, S04), read from the log: absent
+ * once the draft is submitted, because the author then acted on the version
+ * the form showed.
+ */
+function reboundView(
+  instance: ProjectedInstance,
+  log: Log
+): { readonly rebound?: InstanceView['rebound'] } {
+  if (instance.submitted !== false) return {}
+  const event = log.findLast(
+    (candidate) =>
+      candidate.type === DRAFT_REBOUND && candidate.payload.instanceId === instance.instanceId
+  )
+  if (event === undefined) return {}
+  return {
+    rebound: {
+      from: stringField(event.payload, 'from'),
+      to: stringField(event.payload, 'definitionVersion'),
+      misfits: Array.isArray(event.payload.misfits) ? (event.payload.misfits as Misfit[]) : [],
+      newRequired: Array.isArray(event.payload.newRequired)
+        ? (event.payload.newRequired as string[])
+        : [],
+    },
   }
 }
 
@@ -398,10 +454,40 @@ function fold(
 ): ProjectedInstance {
   switch (event.type) {
     case INSTANCE_SUBMITTED: {
+      // The submit completes the request form and routes the instance (ADR
+      // 0014, WF-1, I13): it enters the next step with the assignees the
+      // engine resolved, or is done, and the version advances as every
+      // accepted action does (I5). An older submit without a route only marks
+      // the instance submitted.
       const values = readValues(event.payload.values)
-      // A submit records a state change but keeps the version counter, because
-      // `submitInstance` does not advance it (FM-7, I5).
-      return { ...instance, submitted: true, ...(values === undefined ? {} : { values }) }
+      const routed = 'currentStep' in event.payload || event.payload.done === true
+      const marked: ProjectedInstance = {
+        ...instance,
+        submitted: true,
+        ...(values === undefined ? {} : { values }),
+      }
+      if (!routed) return marked
+      const entered = optionalAssignees(event.payload.assignees)
+      const moved: ProjectedInstance = advanced({
+        ...marked,
+        holder: undefined,
+        currentStep: optionalString(event.payload.currentStep),
+        done: event.payload.done === true,
+        queue: optionalString(event.payload.queue),
+      })
+      return entered === undefined ? moved : recordAssignees(moved, entered)
+    }
+    case DRAFT_REBOUND:
+      // The draft moved to a newer published version (RT-6, S04); its values
+      // stay as they are (A7), and the version counter does not advance.
+      return { ...instance, definitionVersion: stringField(event.payload, 'definitionVersion') }
+    case DRAFT_EDITED: {
+      // The starter changed the values the draft holds (ADR 0014, RT-3); the
+      // version does not advance, so a stream of edits never conflicts.
+      const values = readValues(event.payload.values)
+      return values === undefined
+        ? instance
+        : { ...instance, values: { ...instance.values, ...values } }
     }
     case STEP_CLAIMED:
       return advanced({
@@ -410,12 +496,17 @@ function fold(
         queue: undefined,
       })
     case STEP_COMPLETED: {
-      const next = nextStep(definition, stringField(event.payload, 'step'))
+      // The completion records the route it decided (WF-1, I4); an older
+      // event without it advances to the next step in definition order.
+      const recorded = 'currentStep' in event.payload || event.payload.done === true
+      const next = recorded
+        ? optionalString(event.payload.currentStep)
+        : nextStep(definition, stringField(event.payload, 'step'))?.key
       const entered = optionalAssignees(event.payload.assignees)
       const moved: ProjectedInstance = advanced({
         ...instance,
         holder: undefined,
-        currentStep: next?.key,
+        currentStep: next,
         done: next === undefined,
         queue: optionalString(event.payload.queue),
       })
@@ -423,8 +514,23 @@ function fold(
     }
     case STEP_TAKEN_OVER:
       return advanced({ ...instance, holder: optionalString(event.payload.to), queue: undefined })
+    case TASK_RELEASED:
+      return advanced({ ...instance, holder: undefined })
+    case TASK_REASSIGNED: {
+      // The named principal holds the task and joins the step's assignees
+      // (WF-5, AS-2), so the read and the completion authorize them.
+      const moved = advanced({
+        ...instance,
+        holder: optionalString(event.payload.to),
+        queue: undefined,
+      })
+      const entered = optionalAssignees(event.payload.assignees)
+      return entered === undefined
+        ? moved
+        : { ...moved, assignees: mergeAssignees(moved.assignees, entered) }
+    }
     case STEP_SENT_BACK:
-      return advanced(sentBack(instance, event))
+      return advanced(sentBack(instance, event, definition))
     case INSTANCE_WITHDRAWN:
       return advanced(closed(instance, event, 'withdrawn'))
     case INSTANCE_CANCELLED:
@@ -433,16 +539,44 @@ function fold(
       return advanced(reopened(instance, event))
     case TIMER_FIRED:
       return escalated(instance, event, log)
+    case CONNECTOR_CALL:
+      return recorded(instance, event)
     default:
       return instance
   }
 }
 
 /**
+ * The event type of a recorded connector call, as a literal: timeline.ts
+ * imports the action modules that import this projection (an ESM cycle),
+ * and the event types are a public surface (MVP.md 9.1), so the literal
+ * cannot drift.
+ */
+const CONNECTOR_CALL = 'connector.called@1'
+
+/**
+ * Fold the worker's record of a connector call into the instance's calls
+ * (I13, A2, S16, #256): an undo of an action reads them to mark the side
+ * effects that already occurred as "Already sent" rather than reverse them.
+ * The version does not advance: a record changes no step state (I5). A
+ * record that does not name an operation, a time and an outcome is not a
+ * call and folds nothing.
+ */
+function recorded(instance: ProjectedInstance, event: Event): ProjectedInstance {
+  const { operation, time, outcome } = event.payload
+  if (typeof operation !== 'string' || typeof time !== 'number' || typeof outcome !== 'string') {
+    return instance
+  }
+  return {
+    ...instance,
+    connectorCalls: [...instance.connectorCalls, { operation, time, outcome }],
+  }
+}
+
+/**
  * The instance after one accepted action (I5, #191): the version counter
  * advances by one, exactly as every write-path action advances it (`version +
- * 1`). A submit is the one state change that does not advance it, so the
- * fold leaves it out.
+ * 1`). A draft edit is the one state change that does not advance it.
  */
 function advanced(instance: ProjectedInstance): ProjectedInstance {
   return { ...instance, version: (instance.version ?? 0) + 1 }
@@ -473,8 +607,17 @@ function escalated(instance: ProjectedInstance, event: Event, log: Log): Project
   }
 }
 
-/** Fold a send back: the instance revisits the target step, and it records the next revision (WF-3). */
-function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance {
+/**
+ * Fold a send back: the instance revisits the target step, and it records the
+ * next revision (WF-3). A send back to the request form, the first step,
+ * makes the instance a draft again (ADR 0014): the starter corrects it and
+ * submits it again, and the submit validates, routes and notifies as before.
+ */
+function sentBack(
+  instance: ProjectedInstance,
+  event: Event,
+  definition: FlowDefinition
+): ProjectedInstance {
   const to = stringField(event.payload, 'to')
   const revisions = { ...(instance.revisions ?? {}) }
   const revision = event.payload.revision
@@ -486,6 +629,7 @@ function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance 
     holder: undefined,
     queue: optionalString(event.payload.queue),
     revisions,
+    ...(definition.steps[0]?.key === to ? { submitted: false } : {}),
   }
   return entered === undefined ? moved : recordAssignees(moved, entered)
 }
@@ -566,7 +710,7 @@ function stepsBefore(definition: FlowDefinition, current: string | undefined): r
  * holds; the caller then narrows by `visibleNotes` (I8).
  */
 function instanceNotes(log: Log, instanceId: string): readonly Note[] {
-  return notesOf(log.filter((event) => event.payload.instanceId === instanceId))
+  return notesOf(standingEvents(log.filter((event) => event.payload.instanceId === instanceId)))
 }
 
 /** The step of the definition that the instance is on (WF-1); absent when no step is open. */

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/event.undone@1.json",
+  "title": "enform event.undone@1 event payload",
+  "description": "The payload of an event.undone@1 event (#53, #256, S16, S10, WF-5, D6, A2, I2, I4, I14). A compensating event undoes the latest manual action on an instance (a claim, a release, a takeover, a reassign, an outcome or a send back): it names the instance and the seq of the event it covers, why, the people the undo notified, and the side effects of the undone event that already occurred and stay (Already sent). The undone event stays on the log unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "eventId", "reason", "notified", "alreadySent"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance the undone event acted on (DX-1).",
+      "type": "string"
+    },
+    "eventId": {
+      "description": "The seq of the event the undo covers (I4).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "reason": {
+      "description": "Why the actor undid the event (WF-5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "notified": {
+      "description": "The people the undo notified, each once (S16).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "alreadySent": {
+      "description": "The side effects of the undone event that already occurred and are not reversed (A2).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "target", "status"],
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "status": {
+            "const": "Already sent"
+          }
+        }
+      }
+    },
+    "outbox": {
+      "description": "The notifications to the affected people, committed with the undo (I2, SE-2).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "target", "payload"],
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,166 +1,203 @@
 import { expect, test } from 'vitest'
-import { claim, STEP_CLAIMED } from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Instance } from '../../engine/instance.js'
-import type { OperationDeps } from '../../engine/operation.js'
+import { instanceOf } from '../../engine/instances.js'
 import { outboxOf } from '../../engine/outbox.js'
-import { startInstance } from '../../engine/submission.js'
-import { STEP_TAKEN_OVER, type TakeoverResult, takeover } from '../../engine/takeover.js'
+import { STEP_TAKEN_OVER, TAKEOVER_NOTIFICATION, takeover } from '../../engine/takeover.js'
+import { EVENT_UNDONE, undoAction } from '../../engine/undo.js'
+import { predict } from '../../tools/harness/predict.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
   ANA,
-  data,
-  flow,
+  definitionV1,
+  grantsOfPerson,
+  INSTANCE_ID,
   LEE,
-  REGISTRAR_MEMBERS,
-  REGISTRAR_STEP,
-  REGISTRAR_TEAM,
-  resolve,
-  STARTER,
-  starterGrants,
+  PRIYA,
+  SAM,
+  SLUG,
+} from '../example-flow.js'
+import {
+  clock,
+  golden,
+  HOUR,
+  IDLE_PERIOD,
+  instanceAt,
+  REASON,
+  STEP,
+  stateAt,
+  TAKEN_STEP,
+  UNDO_REASON,
 } from './scenario.js'
-
-/** The time of Lee's claim (I6): the idle period counts from this event. */
-const CLAIM_AT = 1_700_000_000_000
-
-/** Ten minutes: Lee was active this long ago, below the four-hour idle period (AS-3). */
-const TEN_MINUTES = 10 * 60 * 1000
-
-/** Four hours: the idle period that the step allows before a takeover (AS-3). */
-const FOUR_HOURS = 4 * 60 * 60 * 1000
-
-/** Two days: Lee is on vacation, above the four-hour idle period (AS-3). */
-const TWO_DAYS = 2 * 24 * 60 * 60 * 1000
-
-/** The reason that Ana gives for the takeover (AS-3, I14). */
-const REASON = 'Lee is out until 10/19'
-
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
-
-/** The injected sources of the path (I6): the clock is a settable time and the IDs are `op-N`. */
-function sources(clock: () => number): OperationDeps {
-  let next = 0
-  return {
-    clock,
-    ids: () => {
-      next += 1
-      return `op-${next}`
-    },
-  }
-}
-
-/** Apply the operation that an accepted action returned (I14); the test checks acceptance first. */
-function applyAction(result: TakeoverResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
 
 // Issue #47: Lee claimed the registrar task and went on vacation. Ana, an
 // assignee of the step, takes it over after the idle period, and the engine
 // records who took it, from whom, when and why and notifies Lee (AS-3, WF-5,
 // I14, I2). Below the idle period the engine refuses with the remaining time
-// (AS-3). A takeover from a stale view is refused at once (I5). The path is
-// deterministic (I6).
+// (AS-3). Lee, or Priya with task.reassign, undoes the takeover (WF-5, A1,
+// A2). The path is deterministic (I6).
 
-test('#47 a peer takes over a claimed task after the idle period, with a reason (S10)', () => {
-  // One shared source, so every recorded operation gets a distinct ID (I1).
-  let now = CLAIM_AT
-  const deps = sources(() => now)
+/** Ten minutes: Lee was active this long ago, below the four-hour idle period (AS-3). */
+const TEN_MINUTES = 10 * 60 * 1000
 
-  // The start routes the request to the registrar step, whose team target
-  // resolves to Lee, Ana and Jordan (S06, I10, I13).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
-  const state = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
-  expect(started.instance.assignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
+/** The injected sources of a check (I6). */
+const deps = (index: number) => ({ clock: () => clock(index), ids: () => `check-${index}` })
 
-  // Lee claims the task at the claim time (S09, AS-2): the instance records
-  // the holder, and the log records the claim with the time that the idle
-  // period counts from.
-  const opened = state.log.length
-  const view: Instance = { ...started.instance, version: opened }
-  const lee = claim(view, LEE, opened, deps)
-  expect(lee.accepted).toBe(true)
-  expect(lee.instance.holder).toBe(LEE)
-  const held = lee.instance.version ?? 0
-  const afterClaim = applyAction(lee, state)
-  const claimEvent = afterClaim.log.find((event) => event.type === STEP_CLAIMED)
-  expect(claimEvent?.at).toBe(CLAIM_AT)
-  expect(claimEvent?.payload.holder).toBe(LEE)
+test('#47 the S10 golden path runs in api, cli and dry mode: the takeover and its undo (S10)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
 
-  // (a) AS-3, WF-5: Lee has been idle for two days, above the four-hour idle
-  // period, so Ana's takeover succeeds. The engine reassigns the holder and
-  // records who took it, from whom, when and why (I14).
-  now = CLAIM_AT + TWO_DAYS
-  const taken = takeover(lee.instance, ANA, REASON, now, FOUR_HOURS, held, afterClaim.log, deps)
-  expect(taken.accepted).toBe(true)
-  expect(taken.instance.holder).toBe(ANA)
-  expect(taken.operation?.type).toBe(STEP_TAKEN_OVER)
-  expect(taken.operation?.actor).toBe(ANA)
-  expect(taken.operation?.payload).toEqual({
+  // The timeline records the takeover (I14): one attributed event, from Lee
+  // to Ana, when and why, with the notification to Lee in the same event
+  // (I2, SE-2).
+  const taken = state.log.find((event) => event.type === STEP_TAKEN_OVER)
+  expect(taken?.actor).toBe(ANA)
+  expect(taken?.payload).toMatchObject({
     instanceId: INSTANCE_ID,
-    step: REGISTRAR_STEP,
+    step: TAKEN_STEP,
     from: LEE,
     to: ANA,
-    when: now,
+    when: clock(STEP.takeover),
     why: REASON,
-    outbox: [taken.outbox],
   })
-
-  // The previous holder is notified in the same commit (I2, SE-2): the
-  // notification rides in the operation, and the outbox is its projection.
-  expect(taken.outbox).toEqual({
-    operation: 'send-takeover',
+  expect(outboxOf(state.log)).toContainEqual({
+    operation: TAKEOVER_NOTIFICATION,
     target: 'connector-smtp',
-    payload: { to: LEE, step: REGISTRAR_STEP, actor: ANA, reason: REASON },
+    payload: { to: LEE, step: TAKEN_STEP, actor: ANA, reason: REASON },
   })
-  const afterTakeover = applyAction(taken, afterClaim)
-  expect(outboxOf(afterTakeover.log)).toEqual([taken.outbox])
 
-  // The timeline records the takeover (I14): one attributed event, with the
-  // reassign from Lee to Ana.
-  const recorded = afterTakeover.log.filter((event) => event.type === STEP_TAKEN_OVER)
-  expect(recorded).toHaveLength(1)
-  expect(recorded[0].actor).toBe(ANA)
-  expect(recorded[0].payload.from).toBe(LEE)
-  expect(recorded[0].payload.to).toBe(ANA)
+  // The undo is a compensating event (A2, I4): the takeover stays in the log,
+  // and the projection restores Lee as the holder without an administrator.
+  const undone = state.log.find((event) => event.type === EVENT_UNDONE)
+  expect(undone?.actor).toBe(LEE)
+  expect(undone?.payload).toMatchObject({ eventId: taken?.seq, reason: UNDO_REASON })
+  expect(state.log.filter((event) => event.type === STEP_TAKEN_OVER)).toHaveLength(1)
+  expect(instanceOf(state.log, INSTANCE_ID)?.holder).toBe(LEE)
+}, 60_000)
 
-  // (b) AS-3: Lee was active ten minutes ago, below the four-hour idle period,
-  // so the engine refuses Ana's takeover and shows the remaining time.
-  now = CLAIM_AT + TEN_MINUTES
-  const tooSoon = takeover(lee.instance, ANA, REASON, now, FOUR_HOURS, held, afterClaim.log, deps)
+test('#47 the engine refuses a takeover while the holder was active, with the remaining time (S10)', () => {
+  // The view after Lee's claim: the registrar task is his (AS-2).
+  const opened = golden.steps.slice(0, STEP.takeover)
+  const held = instanceAt(opened)
+  const log = stateAt(opened).log
+  expect(held.holder).toBe(LEE)
+  const version = held.version ?? 0
+
+  // (a) AS-3: Lee was active ten minutes ago, below the four-hour idle
+  // period, so the engine refuses Ana's takeover and names the remaining time.
+  const tooSoon = takeover(
+    held,
+    ANA,
+    REASON,
+    clock(STEP.leeClaim) + TEN_MINUTES,
+    IDLE_PERIOD,
+    version,
+    log,
+    deps(STEP.takeover)
+  )
   expect(tooSoon.accepted).toBe(false)
   expect(tooSoon.operation).toBeUndefined()
-  expect(tooSoon.outbox).toBeUndefined()
-  expect(tooSoon.instance).toBe(lee.instance)
-  expect(tooSoon.reason).toContain(String(FOUR_HOURS - TEN_MINUTES))
+  expect(tooSoon.reason).toContain(String(IDLE_PERIOD - TEN_MINUTES))
 
-  // (c) I5: a takeover based on the stale view, the version before the claim,
-  // is refused at once, so the reassign happens once and the log keeps one
-  // takeover.
-  const stale = takeover(lee.instance, ANA, REASON, now, FOUR_HOURS, opened, afterClaim.log, deps)
+  // The server measures the idle time on its clock (AS-3): the same intent
+  // posted ten minutes after the claim is refused as 409 with the remaining
+  // time, and the story's run stops there.
+  const early = {
+    ...golden,
+    clock: (index: number) =>
+      index >= STEP.takeover
+        ? clock(STEP.leeClaim) + TEN_MINUTES + (index - STEP.takeover)
+        : clock(index),
+  }
+  const outcome = predict(early).outcomes[STEP.takeover]
+  expect('error' in outcome && outcome.status).toBe(409)
+  expect('error' in outcome && outcome.error).toContain(String(IDLE_PERIOD - TEN_MINUTES))
+
+  // (b) I5: a takeover based on the stale view, the version before the claim,
+  // is refused at once, so the reassign happens once.
+  const stale = takeover(
+    held,
+    ANA,
+    REASON,
+    clock(STEP.takeover),
+    IDLE_PERIOD,
+    version - 1,
+    log,
+    deps(STEP.takeover)
+  )
   expect(stale.accepted).toBe(false)
-  expect(stale.operation).toBeUndefined()
-  expect(stale.instance).toBe(lee.instance)
   expect(stale.reason).toContain('stale')
 
   // AS-3: only an assignee of the step may take it over, and only a claimed
   // task has a holder to take over from.
   const outsider = takeover(
-    lee.instance,
-    'user:outsider',
-    REASON,
-    now,
-    FOUR_HOURS,
     held,
-    afterClaim.log,
-    deps
+    SAM,
+    REASON,
+    clock(STEP.takeover),
+    IDLE_PERIOD,
+    version,
+    log,
+    deps(STEP.takeover)
   )
   expect(outsider.accepted).toBe(false)
   expect(outsider.reason).toContain('not an assignee')
-  const unclaimed = takeover(view, ANA, REASON, now, FOUR_HOURS, opened, state.log, deps)
-  expect(unclaimed.accepted).toBe(false)
-  expect(unclaimed.reason).toContain('not claimed')
+  // The holder already has the task: a takeover from himself is refused (AS-3).
+  const self = takeover(
+    held,
+    LEE,
+    REASON,
+    clock(STEP.takeover),
+    IDLE_PERIOD,
+    version,
+    log,
+    deps(STEP.takeover)
+  )
+  expect(self.accepted).toBe(false)
+  expect(self.reason).toContain('already holds')
+  const unclaimed = instanceAt(golden.steps.slice(0, STEP.leeClaim))
+  const nobody = takeover(
+    unclaimed,
+    ANA,
+    REASON,
+    clock(STEP.takeover),
+    IDLE_PERIOD,
+    unclaimed.version ?? 0,
+    log,
+    deps(STEP.takeover)
+  )
+  expect(nobody.accepted).toBe(false)
+  expect(nobody.reason).toContain('not claimed')
+})
+
+test('#47 Lee, or Priya with task.reassign, can undo the takeover, and nobody else (S10)', () => {
+  const taken = golden.steps.slice(0, STEP.undo)
+  const instance = instanceAt(taken)
+  const log = stateAt(taken).log
+  const takeoverSeq = log[log.length - 1].seq
+  const context = (actor: string) => ({
+    flow: SLUG,
+    definition: definitionV1,
+    log,
+    grants: grantsOfPerson(actor),
+    now: clock(STEP.undo),
+    undoPeriod: 24 * HOUR,
+  })
+  const undoBy = (actor: string) =>
+    undoAction(
+      instance,
+      actor,
+      takeoverSeq,
+      UNDO_REASON,
+      instance.version ?? 0,
+      context(actor),
+      deps(STEP.undo)
+    )
+
+  // Priya holds task.reassign on the flow, so she may undo it (WF-5).
+  expect(undoBy(PRIYA).accepted).toBe(true)
+  // Lee, the previous holder, may undo it: that is the story's point (S10).
+  expect(undoBy(LEE).accepted).toBe(true)
+  // Sam neither made the takeover nor owns the flow: 403 (I8).
+  const sam = undoBy(SAM)
+  expect(sam.accepted).toBe(false)
+  expect(sam.status).toBe(403)
 })

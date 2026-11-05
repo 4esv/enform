@@ -1,151 +1,148 @@
 import { expect, test } from 'vitest'
-import {
-  type ActionResult,
-  type CompletionContext,
-  claim,
-  complete,
-  STEP_CLAIMED,
-  STEP_COMPLETED,
-} from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Instance } from '../../engine/instance.js'
-import type { OperationDeps } from '../../engine/operation.js'
-import { startInstance } from '../../engine/submission.js'
+import { claim, complete, STEP_COMPLETED } from '../../engine/action.js'
+import { instanceOf } from '../../engine/instances.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
   ANA,
-  ARCHIVE_STEP,
-  data,
-  definition,
-  flow,
+  definitionV1,
+  depsFor,
+  directory,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
   LEE,
-  leeGrants,
+  OKAFOR,
   REGISTRAR_MEMBERS,
   REGISTRAR_STEP,
   REGISTRAR_TEAM,
-  resolve,
   SLUG,
-  STARTER,
-  starterGrants,
-  terminalDefinition,
-} from './scenario.js'
+} from '../example-flow.js'
+import { golden, STEP, values } from './scenario.js'
 
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
+// Issue #46: the registrar task shows to Lee, Ana and Jordan; two of them
+// claim it at the same time and exactly one succeeds (AS-2, I5). The holder
+// completes it with approve, which his `step.outcome:approve` grant
+// authorizes and no other outcome does (AC-4). A holder with a stale view has
+// the completion refused by the version check, so there is no second approval
+// (I5). The path is deterministic (I6).
 
-/** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
-function deps(): OperationDeps {
-  let next = 0
-  return {
-    clock: () => 1_700_000_000_000,
-    ids: () => {
-      next += 1
-      return `op-${next}`
-    },
-  }
-}
-
-/** Apply the operation that an accepted action returned (I14); the test checks acceptance first. */
-function applyAction(result: ActionResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
-}
-
-// Issue #46: two assignees claim the registrar task at the same time; exactly
-// one succeeds (AS-2, I5). The holder completes it with approve, which his
-// `step.outcome:approve` grant authorizes and no other outcome does (AC-4). A
-// holder with a stale view has the completion refused by the version check, so
-// there is no second approval (I5). The path is deterministic (I6).
+test('#46 the S09 golden path runs in api, cli and dry mode and reaches the golden end state (S09)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
+  // The registrar step resolved to the team's members at the submit (AS-4,
+  // I13), Lee claimed and approved it, and the instance is done (S09).
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  expect(instance?.assignees).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: REGISTRAR_MEMBERS,
+  })
+  expect(instance?.done).toBe(true)
+  expect(state.log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(2)
+}, 60_000)
 
 test('#46 exactly one claim succeeds and the holder completes with an authorized outcome (S09)', () => {
-  // One shared source, so every recorded operation gets a distinct ID (I1): a
-  // repeated ID would be the same change and `apply` would ignore it.
-  const sources = deps()
-
-  // The start routes the request to the registrar step, whose team target
-  // resolves to Lee, Ana and Jordan (S06, I10, I13).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
-  const state = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
-  expect(started.instance.assignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
-  // The view that Lee and Ana both hold: the instance at the log version that
-  // the start produced (I5). Nobody holds the task before a claim (AS-2).
-  const opened = state.log.length
-  const view: Instance = { ...started.instance, version: opened }
+  // The view that Lee and Ana both hold: the instance at the registrar step,
+  // at the version that Dr. Okafor's approval produced (I5). Nobody holds the
+  // task before a claim (AS-2).
+  const opened = golden.steps.slice(0, STEP.leeClaim)
+  const view = instanceAfter(opened)
+  expect(view.currentStep).toBe(REGISTRAR_STEP)
   expect(view.holder).toBeUndefined()
+  const version = view.version ?? 0
 
   // (a) AS-2, I5: Lee and Ana both select Claim on that view. Lee's claim is
-  // based on the current version, so the engine accepts it, records the holder
-  // (I14) and advances the log by one event.
-  const lee = claim(view, LEE, opened, sources)
+  // based on the current version, so the engine accepts it and records the
+  // holder (I14).
+  const lee = claim(view, LEE, version, depsFor(STEP.leeClaim))
   expect(lee.accepted).toBe(true)
   expect(lee.instance.holder).toBe(LEE)
-  expect(lee.operation?.type).toBe(STEP_CLAIMED)
   expect(lee.operation?.actor).toBe(LEE)
-  const held = lee.instance.version ?? 0
-  const afterLee = applyAction(lee, state)
-  expect(held).toBe(opened + 1)
-  expect(afterLee.log).toHaveLength(state.log.length + 1)
 
   // Ana's claim is based on the same view, but Lee's claim advanced the log.
   // The engine refuses it at once and names the holder (I5, AS-2): exactly one
   // claim succeeds, and the other sees that Lee claimed the task just now.
-  const ana = claim(lee.instance, ANA, opened, sources)
+  const ana = claim(lee.instance, ANA, version, depsFor(STEP.leeClaim))
   expect(ana.accepted).toBe(false)
   expect(ana.operation).toBeUndefined()
   expect(ana.reason).toContain('claimed by user:lee just now')
 
   // (b) AC-4: the holder completes the task with approve. The engine
-  // authorizes the outcome from Lee's grants, so the task advances to the
-  // archive step and the holder is cleared.
-  const context: CompletionContext = { flow: SLUG, definition, grants: leeGrants }
-  const approved = complete(lee.instance, LEE, 'approve', {}, held, context, sources)
-  expect(approved.accepted).toBe(true)
-  expect(approved.operation?.type).toBe(STEP_COMPLETED)
-  expect(approved.instance.holder).toBeUndefined()
-  expect(approved.instance.currentStep).toBe(ARCHIVE_STEP)
-  expect(approved.instance.done).toBe(false)
-
-  // A different outcome is refused: Lee holds `step.outcome:approve` on the
-  // step and no other scope, so the engine authorizes approve and no other
-  // outcome (AC-4).
-  const refused = complete(lee.instance, LEE, 'reject', {}, held, context, sources)
-  expect(refused.accepted).toBe(false)
-  expect(refused.operation).toBeUndefined()
-  expect(refused.reason).toContain('step.outcome:reject')
-
-  // A principal that is not the holder may not complete the step (AS-2).
-  const notHolder = complete(lee.instance, ANA, 'approve', {}, held, context, sources)
-  expect(notHolder.accepted).toBe(false)
-  expect(notHolder.reason).toContain('does not hold')
-
-  // The last step marks the instance done (S09): with no next step the
-  // completion ends the flow.
-  const done = complete(
+  // authorizes the outcome from Lee's grants; the registrar step is the last,
+  // so the instance is done.
+  const held = lee.instance.version ?? 0
+  const context = {
+    flow: SLUG,
+    definition: definitionV1,
+    grants: grantsOfPerson(LEE),
+    resolve: directory(values),
+  }
+  const approved = complete(
     lee.instance,
     LEE,
     'approve',
     {},
     held,
-    { flow: SLUG, definition: terminalDefinition, grants: leeGrants },
-    sources
+    context,
+    depsFor(STEP.leeApprove)
   )
-  expect(done.accepted).toBe(true)
-  expect(done.instance.currentStep).toBeUndefined()
-  expect(done.instance.done).toBe(true)
+  expect(approved.accepted).toBe(true)
+  expect(approved.instance.holder).toBeUndefined()
+  expect(approved.instance.done).toBe(true)
 
-  // (c) I5: Lee's view is stale once his approval advanced the log. A second
-  // completion from that view is refused by the version check, so the task is
-  // not approved twice.
-  const afterApprove = applyAction(approved, afterLee)
-  const approvals = (log: State['log']): number =>
-    log.filter((event) => event.type === STEP_COMPLETED).length
-  expect(approvals(afterApprove.log)).toBe(1)
-  const stale = complete(approved.instance, LEE, 'approve', {}, opened, context, sources)
+  // A different outcome is refused: Lee holds approve and reject on the step
+  // and not send_back, so the engine authorizes those and no other (AC-4).
+  const refused = complete(
+    lee.instance,
+    LEE,
+    'send_back',
+    {},
+    held,
+    context,
+    depsFor(STEP.leeApprove)
+  )
+  expect(refused.accepted).toBe(false)
+  expect(refused.reason).toContain('step.outcome:send_back')
+
+  // A principal that is not the holder may not complete the step (AS-2).
+  const notHolder = complete(
+    lee.instance,
+    ANA,
+    'approve',
+    {},
+    held,
+    context,
+    depsFor(STEP.leeApprove)
+  )
+  expect(notHolder.accepted).toBe(false)
+  expect(notHolder.reason).toContain('does not hold')
+
+  // (c) I5: a holder's view is stale once an approval advanced the log. Dr.
+  // Okafor approved the advisor step from his view; a second completion from
+  // that same view is refused by the version check before anything else, so
+  // the task is not approved twice.
+  const okaforView = instanceAfter(golden.steps.slice(0, STEP.okaforApprove))
+  const okaforContext = { ...context, grants: grantsOfPerson(OKAFOR) }
+  const okaforVersion = okaforView.version ?? 0
+  const first = complete(
+    okaforView,
+    OKAFOR,
+    'approve',
+    {},
+    okaforVersion,
+    okaforContext,
+    depsFor(STEP.okaforApprove)
+  )
+  expect(first.accepted).toBe(true)
+  const stale = complete(
+    first.instance,
+    OKAFOR,
+    'approve',
+    {},
+    okaforVersion,
+    okaforContext,
+    depsFor(STEP.okaforApprove)
+  )
   expect(stale.accepted).toBe(false)
-  expect(stale.operation).toBeUndefined()
-  expect(stale.instance).toBe(approved.instance)
   expect(stale.reason).toContain('stale')
-  expect(approvals(afterApprove.log)).toBe(1)
 })

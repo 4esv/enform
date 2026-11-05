@@ -77,11 +77,15 @@ const directory: Membership = (principal) => {
 /** The registrar team snapshot that the instance recorded when Lee claimed it (I13). */
 const assignees = [{ step: 'registrar', target: { team: REGISTRAR_TEAM }, members: [LEE] }] as const
 
-/** The draft that Lee claims: a registrar task that routes to the registrar team (S06, I13). */
+/**
+ * The submitted request that Lee claims: a registrar task that routes to the
+ * registrar team (S06, I13). A draft is not claimable (ADR 0014), so the
+ * fixture is the instance after its submit.
+ */
 const draft: Instance = {
   ...createInstance(definition, assignees),
   currentStep: 'registrar',
-  submitted: false,
+  submitted: true,
   starter: STARTER,
 }
 

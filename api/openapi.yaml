@@ -24,7 +24,14 @@ paths:
         The engine applies the operation idempotently by its client-created
         ID (I1) and appends the event it records (I4). A client may post an
         intent instead of a resolved operation (ADR 0010). A start intent
-        (`StartIntent`) names the flow and the values it collected, and a
+        (`StartIntent`) names the flow and the values it collected and creates
+        a private draft on the request form (ADR 0014); a draft edit
+        (`DraftEditIntent`, `draft.edited@1`) names the draft and the values
+        the starter changed; a submit intent (`SubmitIntent`,
+        `instance.submitted@1`) names the draft, the version the starter read
+        and the values the request form captured, and the server validates
+        the request form, routes the instance and records the task-assigned
+        emails through the engine (FM-4, SE-2); a
         completion intent (`CompletionIntent`) names the instance, the
         version it read, the outcome it chose and the values it captured. A
         claim (`step.claimed@1`) names the instance and the version it read as
@@ -43,7 +50,16 @@ paths:
         (`TakeoverIntent`, `step.taken-over@1`) names the instance, the
         required reason and the version the assignee read, and the server
         measures the step's idle period from the claim on the log on its own
-        clock (S10, AS-3). The server resolves the
+        clock (S10, AS-3); an undo of an action (`UndoActionIntent`,
+        `event.undone@1`) names the instance, the seq of the event it undoes,
+        the reason and the version it read, and the engine undoes the latest
+        action only, within the flow's undo period, by its actor or a flow
+        owner, and never past the flow's final step (S16, WF-5, D6); a
+        release (`ReleaseIntent`, `task.released@1`) returns the task the
+        holder holds, or any task for a flow owner with `task.reassign`, to
+        the pool, and a reassign (`ReassignIntent`, `task.reassigned@1`) gives
+        any task to a principal with a reason, for a flow owner only (WF-5,
+        MVP.md 5.6). The server resolves the
         route, the transition, the assignees, the version stamp and the
         authorization through the engine before it appends. The intents are
         told apart by `type` and by their payload shape. The server refuses a
@@ -53,7 +69,11 @@ paths:
         path serves: its payload names `principal`, `scopes` and `resource`,
         and the server authorizes `org.grants` on `org` or `flow.grant` on the
         resource before it appends the grant with the client's ID and time, so
-        a retry with the same ID appends nothing. A raw start, a raw completion,
+        a retry with the same ID appends nothing; with `change: revoked` the
+        same operation removes the named scopes of the principal on the
+        resource and nothing else (AC-2). A `config.team.changed@1` intent
+        (`TeamIntent`) creates a team, adds a member or removes one, for a
+        principal with `org.teams` on `org` (AS-6). A raw start, a raw completion,
         a raw send back, a raw close or undo, any other configuration event or
         any other operation is refused. The appended event keeps the client's
         ID and time.
@@ -75,6 +95,7 @@ paths:
         '400':
           description: >-
             The operation is invalid, a raw `instance.started@1`,
+            `instance.submitted@1`,
             `step.completed@1`, `step.sent-back@1`, `instance.withdrawn@1`,
             `instance.cancelled@1`, `instance.undone@1` or
             `step.taken-over@1` was posted instead of its intent, an intent
@@ -97,9 +118,12 @@ paths:
             step (AS-3). Nothing is appended.
         '409':
           description: >-
-            The engine refused the completion, the claim, the send back, the
+            The engine refused the submit, the draft edit, the completion,
+            the claim, the send back, the
             withdraw, the cancel, the undo or the takeover and appended
-            nothing (I1, I5), because the version the client read is stale,
+            nothing (I1, I5), because the instance is not a draft or is a
+            draft that nobody but its starter may act on (ADR 0014), the
+            version the client read is stale,
             the actor does not hold the step (AS-2), does not hold the
             outcome's scope (AC-4), is not an assignee of the step (AS-3),
             the holder is not yet idle for the step's idle period (AS-3, the
@@ -120,7 +144,28 @@ paths:
     get:
       operationId: readLog
       summary: Read the append-only log
-      description: The single sequence of all events, in one global order (I4).
+      description: >-
+        The single sequence of all events, in one global order (I4), as the
+        signed-in principal may read it (I8): the events of the instances it
+        may read (its own, the ones it is assigned to, the flows it holds
+        `instance.read` on; a draft stays private to its starter), the
+        configuration changes of the flows it holds `instance.timeline` on,
+        and everything with `org.grants` on `org`. `instance` keeps one
+        instance's events and `limit` the newest ones (S16).
+      parameters:
+        - name: instance
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Only the events of this instance (DX-1).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Only the newest events, this many.
       responses:
         '200':
           description: The ordered events of the log
@@ -134,8 +179,11 @@ paths:
       summary: Read the state rebuilt from the log
       description: >-
         The derived state is rebuilt from the log (I4), so it is reproducible
-        from the same sequence of events.
+        from the same sequence of events. It is the organization's: the read
+        needs `org.grants` on `org` (I8).
       responses:
+        '403':
+          description: The principal holds no `org.grants` on `org`.
         '200':
           description: The state rebuilt from the log
           content:
@@ -568,6 +616,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/teams:
+    get:
+      operationId: listTeams
+      summary: List the teams and their members
+      description: >-
+        The teams that `org.teams` holders created and maintain, with the
+        members they hold now (AS-6, AS-4). They are a projection of the
+        `config.team.changed@1` events on the log (I4, I14). Any signed-in
+        principal may read them, because a step target names a team by its
+        name. A team is changed by posting a `TeamIntent` to `/operations`.
+      responses:
+        '200':
+          description: The teams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Team'
+        '401':
+          description: There is no session.
   /api/v1/admin/users:
     get:
       operationId: listUsers
@@ -1100,6 +1169,265 @@ components:
                 The values that the form holds: one field key to one JSON
                 value (FM-7).
               additionalProperties: true
+    SubmitIntent:
+      type: object
+      description: >-
+        A submit intent (ADR 0010, ADR 0014, FM-4, FM-7, SE-2): the parts the
+        starter can honestly send to submit a draft. It carries the operation
+        ID it chose (I1), the event type `instance.submitted@1`, the actor,
+        the draft it acts on (DX-1), the version the starter read (I5) and the
+        values the request form captured. The server validates the request
+        form's fields and rules, routes the instance to the next step whose
+        skip condition is false, records the assignees and the task-assigned
+        emails through the engine, and refuses a submit that is not the
+        starter's, that is stale, or whose values fail (409 with every error by
+        path). It is told apart from a resolved `instance.submitted@1` by the
+        payload: an intent names no `step`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.submitted@1`.
+          examples:
+            - instance.submitted@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The draft, the version the starter read and the captured values.
+          required: [instanceId, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the draft that is submitted (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version the starter read (I5). A stale version is
+                refused and appends nothing.
+            values:
+              type: object
+              description: >-
+                The values the request form captured, merged over what the
+                draft holds (FM-7). Absent means the draft's values as they are.
+              additionalProperties: true
+    DraftEditIntent:
+      type: object
+      description: >-
+        A draft edit (ADR 0014, RT-3, I1): the starter changed the values a
+        draft holds. One operation per edit, with the ID the client chose, so
+        a retry appends nothing. The values merge over what the draft holds;
+        the submit validates them (FM-4). A principal that is not the starter
+        answers 403, and an instance that is no longer a draft answers 409.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `draft.edited@1`.
+          examples:
+            - draft.edited@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The draft and the values the edit changed.
+          required: [instanceId, values]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the draft the edit acts on (DX-1).
+            values:
+              type: object
+              description: The field keys the edit changed, each with its new value (FM-7).
+              additionalProperties: true
+    UndoActionIntent:
+      type: object
+      description: >-
+        An undo of an action (S16, S10, WF-5, D6, A2): the parts a client can
+        honestly send to undo the latest claim, release, takeover, reassign,
+        outcome or send back on an instance. It carries the operation ID it
+        chose (I1), the event type `event.undone@1`, the actor, the instance,
+        the seq of the event it undoes (from the timeline), the reason and the
+        version it read (I5). The engine appends a compensating event and
+        never rewrites the undone one; a side effect that already occurred is
+        marked Already sent and not reversed, and its recipients are notified.
+        A principal who neither made the action nor owns the flow answers 403;
+        a stale view, an event that is not the latest action, an undo after
+        the flow's period or past its final step answers 409 with the reason.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `event.undone@1`.
+          examples:
+            - event.undone@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The instance, the event, the reason and the version read.
+          required: [instanceId, eventId, reason, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance the undone event acted on (DX-1).
+            eventId:
+              type: integer
+              minimum: 1
+              description: The seq of the event to undo, as the timeline shows it (I4).
+            reason:
+              type: string
+              description: Why the actor undoes it (WF-5).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
+    Team:
+      type: object
+      description: One team and the members it holds now (AS-6, AS-4, ID-4).
+      required: [name, members]
+      properties:
+        name:
+          type: string
+          description: The team name, the principal ID a `team` target names (ID-4).
+        members:
+          type: array
+          description: The user and group IDs the team holds now, in the order they joined.
+          items:
+            type: string
+    TeamIntent:
+      type: object
+      description: >-
+        A team change (AS-6, I14): the parts a client sends to create a team,
+        add a member or remove one. It carries the operation ID (I1), the type
+        `config.team.changed@1`, the actor, the team name, the change and, for
+        a membership change, the member. The engine authorizes `org.teams` on
+        `org` (403 otherwise), refuses a team that already exists or does not
+        exist (409) and a malformed change (400).
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `config.team.changed@1`.
+          examples:
+            - config.team.changed@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [team, change]
+          properties:
+            team:
+              type: string
+              description: The team name (ID-4).
+            change:
+              type: string
+              enum: [created, member-added, member-removed]
+            member:
+              type: string
+              description: The user or group ID the change adds or removes (ID-4).
+    ReleaseIntent:
+      type: object
+      description: >-
+        A release (WF-5, AS-2, I5): the holder returns the task of the current
+        step to the pool, or a flow owner with `task.reassign` on the flow
+        returns anyone's with a reason. It carries the operation ID (I1), the
+        type `task.released@1`, the actor, the instance and the version read.
+        A principal who neither holds the task nor owns the flow answers 403;
+        a task nobody holds or a stale view answers 409.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `task.released@1`.
+          examples:
+            - task.released@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [instanceId, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance whose task is released (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
+            reason:
+              type: string
+              description: Why a flow owner releases the task; optional for the holder.
+    ReassignIntent:
+      type: object
+      description: >-
+        A reassign (WF-5, MVP.md 5.6, I2, I5): a flow owner with
+        `task.reassign` on the flow gives the task of the current step to a
+        principal, with a reason. The principal becomes the holder and an
+        assignee of the step and is told in the same operation (SE-2). It
+        carries the operation ID (I1), the type `task.reassigned@1`, the actor,
+        the instance, the version read, the principal and the reason. A
+        principal without `task.reassign` answers 403; a stale view answers
+        409; a missing reason or principal answers 400.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `task.reassigned@1`.
+          examples:
+            - task.reassigned@1
+        at:
+          type: number
+          description: Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          required: [instanceId, version, to, reason]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the instance whose task is reassigned (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: The instance version the client read (I5).
+            to:
+              $ref: '#/components/schemas/ActorId'
+            reason:
+              type: string
+              description: Why the owner reassigns the task (WF-5).
     CompletionIntent:
       type: object
       description: >-
@@ -1558,8 +1886,10 @@ components:
           $ref: '#/components/schemas/ActorId'
         state:
           type: string
-          description: The state in plain language (VT-2, S14).
-          enum: [waiting, in-progress, done, withdrawn, cancelled]
+          description: >-
+            The state in plain language (VT-2, S14). A draft is an instance
+            its starter has not submitted (ADR 0014).
+          enum: [draft, waiting, in-progress, done, withdrawn, cancelled]
         skipped:
           type: array
           description: >-
@@ -1753,6 +2083,37 @@ components:
             AS-3): the claim time from the log plus the step's idle period. It
             is absent for `always` and `never`, and while no holder has a
             claim.
+        rebound:
+          type: object
+          description: >-
+            The rebind of an open draft to a newer published version (RT-6,
+            S04): present on a draft the log moved, absent otherwise. The
+            starter's read of a draft moves it to the newest version first.
+            The draft keeps every value; `misfits` names the values that no
+            longer fit the request form and `newRequired` the required fields
+            of the new form the draft leaves empty.
+          required: [from, to, misfits, newRequired]
+          properties:
+            from:
+              type: string
+              description: The content hash of the version the draft left (DF-2).
+            to:
+              type: string
+              description: The content hash of the version the draft is on (DF-2).
+            misfits:
+              type: array
+              items:
+                type: object
+                required: [key, reason]
+                properties:
+                  key:
+                    type: string
+                  reason:
+                    type: string
+            newRequired:
+              type: array
+              items:
+                type: string
     Note:
       type: object
       description: >-
@@ -2172,7 +2533,7 @@ components:
         (DF-5, D2, DF-6). An edit-class change touches a label, help text, an
         option list or email copy and needs `flow.edit`; a structural change
         touches the shape of the flow and needs `flow.build`.
-      required: [class, message]
+      required: [class, message, path]
       properties:
         class:
           type: string
@@ -2184,6 +2545,16 @@ components:
           description: >-
             A short description of the difference, for the builder and for a
             refusal (DF-6).
+        path:
+          type: string
+          description: >-
+            Where the difference sits (DF-6): a JSON-pointer-like path that
+            names steps, sections and fields by key, for example
+            `/steps/request/sections/about/fields/summary/label`.
+        before:
+          description: The value before the change, when one place changed.
+        after:
+          description: The value after the change, when one place changed.
     DraftWrite:
       type: object
       description: >-
@@ -2300,10 +2671,11 @@ components:
         state:
           type: string
           description: >-
-            The state of the step for this instance (VT-2): not opened yet,
-            opened and in progress, completed, skipped by a condition, or sent
-            back for revision (VT-2, WF-3, AS-2).
-          enum: [unopened, opened, completed, skipped, sent-back]
+            The state of the step for this instance (VT-2): a draft the
+            starter has not submitted (ADR 0014), not opened yet, opened and
+            in progress, completed, skipped by a condition, or sent back for
+            revision (VT-2, WF-3, AS-2).
+          enum: [draft, unopened, opened, completed, skipped, sent-back]
         holder:
           $ref: '#/components/schemas/ActorId'
         dueAt:

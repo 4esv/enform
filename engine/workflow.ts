@@ -52,6 +52,31 @@ export function isStepSkipped(step: FlowStep, data: ConditionData): boolean {
 }
 
 /**
+ * The route after one step (WF-1, S05, ADR 0014): the first later step whose
+ * skip condition is false, and the steps between that the route skipped, in
+ * definition order, with the condition that skipped each. No later step means
+ * the instance is done. A submit routes after the request form and a
+ * completion routes after the completed step with this one function, so the
+ * write path, the projection and the tracker cannot disagree (I4).
+ */
+export function routeAfter(
+  definition: FlowDefinition,
+  stepKey: string,
+  data: ConditionData
+): { readonly step: FlowStep | undefined; readonly skipped: readonly SkippedStep[] } {
+  const skipped: SkippedStep[] = []
+  const index = definition.steps.findIndex((step) => step.key === stepKey)
+  for (const step of definition.steps.slice(index + 1)) {
+    if (step.skipWhen !== undefined && isStepSkipped(step, data)) {
+      skipped.push({ step: step.key, condition: step.skipWhen })
+      continue
+    }
+    return { step, skipped }
+  }
+  return { step: undefined, skipped }
+}
+
+/**
  * Run a flow over one data set (S05, I7). The run reads the definition's steps
  * in order and decides each one with `isStepSkipped` (I6). A skipped step is
  * absent from `route.active`, and its condition is in `route.skipped`. One

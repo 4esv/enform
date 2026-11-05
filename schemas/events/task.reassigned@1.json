@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/task.reassigned@1.json",
+  "title": "enform task.reassigned@1 event payload",
+  "description": "The payload of a task.reassigned@1 event (#256, WF-5, MVP.md 5.6, I2, I13, I14). A flow owner with task.reassign gave the task of a step to a principal, with a reason: the event names the instance, the step, the previous holder when there was one, the new holder, the assignee record that makes the new holder an assignee of the step, and carries the task-assigned email in the same operation (I2, SE-2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "step", "to", "reason", "assignees"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the instance (DX-1).",
+      "type": "string"
+    },
+    "step": {
+      "description": "The step whose task was reassigned (WF-1).",
+      "type": "string"
+    },
+    "from": {
+      "description": "The principal that held the task before; absent when nobody did.",
+      "type": "string"
+    },
+    "to": {
+      "description": "The principal that holds the task now (AS-2).",
+      "type": "string"
+    },
+    "reason": {
+      "description": "Why the owner reassigned the task (WF-5).",
+      "type": "string",
+      "minLength": 1
+    },
+    "assignees": {
+      "description": "The new holder as an assignee of the step (I13).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "target", "members"],
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "outbox": {
+      "description": "The task-assigned email to the new holder, committed with the reassign (I2, SE-2).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "target", "payload"],
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

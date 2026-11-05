@@ -159,6 +159,9 @@ export function sendBack(
   }
   const revision = revisionOf(instance, toStep) + 1
   const revisions = { ...(instance.revisions ?? {}), [toStep]: revision }
+  // A send back to the request form makes the instance a draft again (ADR
+  // 0014): the starter corrects and resubmits it through the submit path.
+  const draftAgain = context.definition.steps[0]?.key === toStep
   // The engine records the target step's resolved assignees exactly as a start
   // records the first step's (AS-4, I13). A caller that gives no resolver
   // records none, so the engine never invents a resolution.
@@ -173,6 +176,7 @@ export function sendBack(
     holder: undefined,
     revisions,
     version: version + 1,
+    ...(draftAgain ? { submitted: false } : {}),
   }
   const sentBack = entered === undefined ? moved : recordAssignees(moved, entered)
   const change = {

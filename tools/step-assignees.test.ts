@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { claim, complete } from '../engine/action.js'
+import { claim } from '../engine/action.js'
 import { apply, emptyState, type State } from '../engine/apply.js'
 import type { Grant } from '../engine/authorize.js'
 import type { ConditionData } from '../engine/condition.js'
@@ -227,22 +227,19 @@ function advance(
     resolve,
     grants
   )
-  let next = apply(started.operation, state)
-  const opened = next.log.length
-  const claimed = claim({ ...started.instance, version: opened }, SAM, opened, sources)
-  if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
-  next = apply(claimed.operation, next)
-  const completed = complete(
-    claimed.instance,
+  const next = apply(started.operation, state)
+  // The submit completes the request form and routes to the second step with
+  // the given resolver (ADR 0014, WF-1).
+  const submitted = submitInstance(
+    started.instance,
     SAM,
-    'submit',
     {},
-    claimed.instance.version ?? 0,
-    { flow: SLUG, definition, grants, resolve },
+    0,
+    { flow: SLUG, definition, resolve, grants },
     sources
   )
-  if (!completed.accepted || completed.operation === undefined) throw new Error(completed.reason)
-  return apply(completed.operation, next)
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  return apply(submitted.operation, next)
 }
 
 test('#194 AS-4 a later step group target resolves live at read time for a member who joined after the start', () => {
@@ -334,21 +331,16 @@ test('#194 I13 a dynamic field target keeps its one-time members when the field 
   )
   let state = seeded(fieldDefinition, sources)
   state = apply(started.operation, state)
-  const opened = state.log.length
-  const claimed = claim({ ...started.instance, version: opened }, SAM, opened, sources)
-  if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
-  state = apply(claimed.operation, state)
-  const completed = complete(
-    claimed.instance,
+  const submitted = submitInstance(
+    started.instance,
     SAM,
-    'submit',
     {},
-    claimed.instance.version ?? 0,
-    { flow: SLUG, definition: fieldDefinition, grants, resolve: resolver(dir, data) },
+    0,
+    { flow: SLUG, definition: fieldDefinition, resolve: resolver(dir, data), grants },
     sources
   )
-  if (!completed.accepted || completed.operation === undefined) throw new Error(completed.reason)
-  state = apply(completed.operation, state)
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  state = apply(submitted.operation, state)
 
   // The field target resolved once, to the principal at the key then (I13).
   expect(projected(state).assignees.find((assignee) => assignee.step === ADVISOR)).toEqual({
@@ -357,12 +349,10 @@ test('#194 I13 a dynamic field target keeps its one-time members when the field 
     members: [OKAFOR],
   })
 
-  // The value changes. A dynamic target is not re-resolved at read time, so
-  // the recorded member stays, and the new value does not move the task.
-  const submitted = submitInstance(projected(state), SAM, sources, { advisor: LIN })
-  state = apply(submitted.operation, state)
+  // The directory's answer for the field changes. A dynamic target is not
+  // re-resolved at read time, so the recorded member stays and the new answer
+  // does not move the task (I13).
   const after = projected(state)
-  expect(after.values?.advisor).toBe(LIN)
 
   const held = readInstance(
     OKAFOR,
@@ -395,17 +385,18 @@ test('#194 I13 the projection covers a step entered by a completion, and a send 
     sources
   )
 
-  // The completion recorded the registrar step's assignees (I13), so the
-  // projection covers a step the instance entered after the start.
+  // The submit recorded the registrar step's assignees (I13), so the
+  // projection covers a step the instance entered after the start; the
+  // request form holds the starter alone (ADR 0014).
   const atRegistrar = projected(state)
   expect(atRegistrar.assignees).toEqual([
-    { step: REQUEST, target: { group: STUDENTS }, members: [SAM, ANA] },
+    { step: REQUEST, target: { starter: 'starter' }, members: [SAM] },
     { step: REGISTRAR, target: { team: REGISTRARS }, members: [JORDAN] },
   ])
 
   // Ana leaves the students group, and Jordan sends the task back to the
-  // request step (WF-3). The send back records the request step's new
-  // resolution, so the stale entry no longer holds.
+  // request step (WF-3). The send back records the request step's resolution
+  // through its group target, which holds Sam alone now.
   dir.leave(STUDENTS, ANA)
   const jordanGrants: readonly Grant[] = [
     {

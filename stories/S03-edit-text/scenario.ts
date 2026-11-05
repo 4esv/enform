@@ -1,72 +1,199 @@
 import type { Grant } from '../../engine/authorize.js'
-import { parse } from '../../engine/definition.js'
-import { scenario } from '../../tools/harness/scenario.js'
+import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../../engine/definition.js'
+import { createFlow, DEFINITION_PUBLISHED, type Flow, publish, push } from '../../engine/flow.js'
+import {
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  bootstrap,
+  CHAIR_STEP,
+  CHAIRS_GROUP,
+  DANA,
+  declared,
+  definitionV1,
+  depsFor,
+  directory,
+  FLOW,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  membership,
+  PRIYA,
+  REGISTRAR_STEP,
+  REGISTRAR_TEAM,
+  REQUEST_STEP,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+} from '../example-flow.js'
 
 // S03: Priya edits the text of a form (STORIES.md). A definition change is
 // edit-class or structural, and the class picks the scope (DF-5, D2): an
-// edit-class change needs `flow.edit`, a structural change needs `flow.build`.
-// This milestone's definition model has steps, targets, outcomes and skip
-// conditions, and no form fields or labels yet, so the golden path edits an
-// option (edit-class) and the test checks a step change (structural) against
-// the guard. The literal label and field cases arrive with FM-1 (issue #74).
+// edit-class change needs `flow.edit`, a structural change needs
+// `flow.build`. Priya holds `flow.edit` and not `flow.build` (STORIES.md,
+// Cast), so her push of a label and a new option succeeds and the log
+// attributes it to her, and she publishes it as version 2 (DF-3, I14). A push
+// that adds a field is structural, so the engine refuses it and names the
+// change and the scope; the scenario test proves that refusal through the
+// engine. A new instance starts on her version (DF-2). The pushes and the
+// publications are resolved configuration operations the server appends as
+// they stand (I14); the start and the submit are client intents (ADR 0010).
 // The path is deterministic (I6): it reads no clock and no random source.
 
-/** The flow of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
-
-/** The resource of the flow (MVP.md 5.6): a grant on it covers all of its steps. */
-export const FLOW = `flow:${SLUG}`
-
-/** The base draft, before Priya edits it (DF-1). */
-export const draft = parse(`{
-  "schemaVersion": 1,
+/** Priya's edit-class change (S03, DF-5): the summary gains a label, the advisor gains the option "escalate". */
+export const edited: FlowDefinition = parse(`{
+  "schemaVersion": 2,
   "steps": [
-    { "key": "request", "targets": [{ "starter": "starter" }] },
-    { "key": "advisor", "targets": [{ "field": "advisor" }], "outcomes": ["approve", "send_back"] }
+    {
+      "key": "${REQUEST_STEP}",
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text", "label": "Summary of your request", "required": true },
+        { "key": "overload_credits", "control": "number", "required": true },
+        { "key": "advisor", "control": "user", "required": true }
+      ],
+      "editable": ["summary", "overload_credits", "advisor"]
+    },
+    {
+      "key": "${ADVISOR_STEP}",
+      "targets": [{ "field": "advisor" }],
+      "outcomes": ["approve", "send_back", "escalate"]
+    },
+    {
+      "key": "${CHAIR_STEP}",
+      "targets": [{ "group": "${CHAIRS_GROUP}" }],
+      "outcomes": ["approve", "send_back"],
+      "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
+    },
+    {
+      "key": "${REGISTRAR_STEP}",
+      "targets": [{ "team": "${REGISTRAR_TEAM}" }],
+      "outcomes": ["approve", "reject"],
+      "takeover": "after-idle",
+      "idleMinutes": 240
+    }
   ]
 }
 `)
 
-/** Priya's edit-class change: the advisor gains the dropdown option "escalate" (S03, DF-5). */
-export const edited = parse(`{
-  "schemaVersion": 1,
+/** Priya's structural change (S03, DF-5): a new field on the request form, which the engine refuses her. */
+export const withField: FlowDefinition = parse(`{
+  "schemaVersion": 2,
   "steps": [
-    { "key": "request", "targets": [{ "starter": "starter" }] },
-    { "key": "advisor", "targets": [{ "field": "advisor" }], "outcomes": ["approve", "send_back", "escalate"] }
+    {
+      "key": "${REQUEST_STEP}",
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text", "required": true },
+        { "key": "overload_credits", "control": "number", "required": true },
+        { "key": "advisor", "control": "user", "required": true },
+        { "key": "reason_category", "control": "text", "required": true }
+      ],
+      "editable": ["summary", "overload_credits", "advisor", "reason_category"]
+    },
+    {
+      "key": "${ADVISOR_STEP}",
+      "targets": [{ "field": "advisor" }],
+      "outcomes": ["approve", "send_back"]
+    },
+    {
+      "key": "${CHAIR_STEP}",
+      "targets": [{ "group": "${CHAIRS_GROUP}" }],
+      "outcomes": ["approve", "send_back"],
+      "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
+    },
+    {
+      "key": "${REGISTRAR_STEP}",
+      "targets": [{ "team": "${REGISTRAR_TEAM}" }],
+      "outcomes": ["approve", "reject"],
+      "takeover": "after-idle",
+      "idleMinutes": 240
+    }
   ]
 }
 `)
 
-/** Priya's structural change: it adds the chair step, which the guard rejects (S03, DF-5). */
-export const withStep = parse(`{
-  "schemaVersion": 1,
-  "steps": [
-    { "key": "request", "targets": [{ "starter": "starter" }] },
-    { "key": "advisor", "targets": [{ "field": "advisor" }], "outcomes": ["approve", "send_back"] },
-    { "key": "chair", "targets": [{ "group": "CS-Chairs" }], "outcomes": ["approve", "send_back"] }
-  ]
+/** Priya's grants (STORIES.md, Cast): `flow.edit` on the flow and no `flow.build`. */
+export const priyaGrants: readonly Grant[] = grantsOfPerson(PRIYA)
+
+/** The flow once Dana published version 1 (DF-2): the draft that Priya edits. */
+export function flowV1(): Flow {
+  const pushed = push(createFlow(SLUG), definitionV1, depsFor(0), DANA)
+  return publish(pushed.flow, depsFor(1), DANA).flow
 }
-`)
 
-/** Dana's grant: she may change all parts of the flow (MVP.md 5.6, `flow.build`). */
-export const danaGrant: Grant = { principal: 'dana', scopes: ['flow.build'], resource: FLOW }
+/** Sam's request: a two-credit overload (S05). */
+export const values = samValues(2)
 
-/** Priya's grant: she may edit an option or a label, and no more (S03, `flow.edit`). */
-export const priyaGrant: Grant = { principal: 'user:priya', scopes: ['flow.edit'], resource: FLOW }
+/** The golden path: the setup, Priya's edit and its publication, then Sam's request on version 2. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps()]
 
-/** The golden path: Dana pushes the first draft, then Priya pushes her edit (S03). */
+  // Priya pushes her edit-class change and publishes it: the engine
+  // authorizes both against her `flow.edit` (DF-5, D2, I14).
+  const pushed = push(flowV1(), edited, depsFor(6), PRIYA, priyaGrants)
+  steps.push(declared(pushed.operation))
+  const published = publish(pushed.flow, depsFor(7), PRIYA, priyaGrants)
+  steps.push(declared(published.operation))
+
+  // Sam starts and submits on version 2 (DF-2): the start pins the instance to
+  // the newest version, and the submit routes it to Dr. Okafor (ADR 0014).
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
+  const started = startInstance(published.flow, INSTANCE_ID, values, SAM, depsFor(8), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: edited, resolve, grants: sam, owner: SAM },
+    depsFor(9)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
+  return steps
+}
+
 export const golden = scenario({
   slug: 'edit-text',
-  steps: [
-    {
-      actor: 'dana',
-      type: 'config.definition.changed@1',
-      payload: { flow: SLUG, definition: draft },
-    },
-    {
-      actor: 'user:priya',
-      type: 'config.definition.changed@1',
-      payload: { flow: SLUG, definition: edited },
-    },
-  ],
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
 })
+
+/** The indexes of the story's steps after the setup. */
+export const STEP = { priyaPush: 6, priyaPublish: 7, start: 8, submit: 9 } as const
+
+/**
+ * What each step requires of its actor (I8), for the Actor operator: Dana's
+ * build steps need `flow.build`; Priya's edit-class push and publication
+ * need `flow.edit`, which `flow.build` also covers (D2), so Dana and Priya
+ * reach them and nobody else; Sam starts and submits.
+ */
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return index >= STEP.priyaPush
+        ? { actors: [DANA, PRIYA] }
+        : { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    default:
+      throw new Error(`S03: step ${index + 1} has no requirement (${step.type})`)
+  }
+}

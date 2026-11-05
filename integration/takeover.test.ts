@@ -377,21 +377,17 @@ async function instanceAtRegistrar(tokens: {
   expect(start.status, await start.text()).toBe(201)
 
   const request = await readInstance(tokens.sam, instanceId)
-  const claimRequest = await postIntent(tokens.sam, {
-    type: 'step.claimed@1',
-    payload: { instanceId, expectedVersion: request.version },
-  })
-  expect(claimRequest.status, await claimRequest.text()).toBe(201)
-  const completeRequest = await postIntent(tokens.sam, {
-    type: 'step.completed@1',
+  // The submit validates the request form and routes the draft past the
+  // skipped chair step to the advisor (ADR 0014, WF-1).
+  const submitRequest = await postIntent(tokens.sam, {
+    type: 'instance.submitted@1',
     payload: {
       instanceId,
-      version: request.version + 1,
-      outcome: 'submit',
+      version: request.version,
       values: { summary: 'A second overload request', credits: 2 },
     },
   })
-  expect(completeRequest.status, await completeRequest.text()).toBe(201)
+  expect(submitRequest.status, await submitRequest.text()).toBe(201)
 
   const advisor = await readInstance(tokens.okafor, instanceId)
   expect(advisor.status.currentStep, 'the request moves to the advisor').toBe('advisor')

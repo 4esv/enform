@@ -230,7 +230,8 @@ async function adminJson<T>(
 /**
  * Create a flow whose first step shows one of its two fields (FM-3). The start
  * records a value for the hidden field too, so the PDF proves that the hidden
- * key and its value are absent, not that the value was never captured.
+ * key and its value are absent, not that the value was never captured. The
+ * instance stays a draft of its starter, the administrator (ADR 0014).
  */
 async function createHiddenFieldFlow(
   publicUrl: string,
@@ -253,7 +254,6 @@ async function createHiddenFieldFlow(
         ],
         visible: ['shown'],
         editable: ['shown'],
-        outcomes: ['submit'],
       },
     ],
   }
@@ -343,6 +343,7 @@ test('#OU-1 a reader gets the form of the current step and the step history as a
   )
   expect(text, 'the numeric visible value is rendered').toContain('Value: 2')
   expect(text, 'the start is history').toContain('instance.started@1')
+  expect(text, 'the submit is history').toContain('instance.submitted@1')
   expect(text, 'the claim is history').toContain('step.claimed@1')
   expect(text, 'the completion is history').toContain('step.completed@1')
   expect(text, 'the history names the actor').toContain(starter.id)

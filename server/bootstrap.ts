@@ -21,7 +21,7 @@ import { type AdministratorInput, ensureAdministrator } from './keycloak.js'
 
 /** The scopes of the first administrator (MVP.md 5.6, DE-1). */
 const ADMINISTRATOR_GRANTS: readonly Grant[] = [
-  { principal: '', resource: 'org', scopes: ['org.grants'] },
+  { principal: '', resource: 'org', scopes: ['org.grants', 'org.teams', 'org.impersonate'] },
   { principal: '', resource: '*', scopes: ['flow.build'] },
   { principal: '', resource: '*', scopes: ['instance.start'] },
   { principal: '', resource: '*', scopes: ['instance.read'] },

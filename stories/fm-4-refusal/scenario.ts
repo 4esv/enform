@@ -6,15 +6,15 @@ import { createFlow, type Flow, type FlowVersion, publish, push } from '../../en
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
-import { startInstance } from '../../engine/submission.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
 
 // Issue #106, FM-3, FM-4, FM-7, A9, I12, ADR 0009: the requirement test for
 // #106 criterion 2 and FM-4. Dr. Okafor holds the request step, opens the task
 // page and completes it. The server runs the step's rules and validation
 // again and refuses an empty required field with every error named by path,
 // so the browser can show the reason at the control that failed (FM-4). The
-// seed starts the instance as Sam and claims the step as Dr. Okafor, because
-// the engine completes only for the holder (AS-2, AC-4).
+// seed starts and submits the instance as Sam and claims the review step as
+// Dr. Okafor, because the engine completes only for the holder (AS-2, AC-4).
 
 /** The flow slug that the browser opens. */
 export const SLUG = 'refusal'
@@ -26,24 +26,26 @@ export const INSTANCE_ID = 'inst-refusal'
 export const SAM = 'user:sam'
 export const OKAFOR = 'user:okafor'
 
-/** The one step of the flow, and the one outcome that Dr. Okafor may choose (AC-4). */
-export const STEP = 'request'
+/** The review step that Dr. Okafor holds, and the one outcome that he may choose (AC-4). */
+export const STEP = 'review'
 export const OUTCOME = 'approve'
 
 /** The resource of the request step (MVP.md 5.6). */
 export const STEP_RESOURCE = `flow:${SLUG}/step:${STEP}`
 
 /**
- * The definition: one request step with a required summary. `details` is not
- * editable, so the completion the browser posts must leave it out of the
- * capture (FM-3, FM-4): a reader for it would make the server refuse the
- * submission with a 409.
+ * The definition: Sam's request form, then the review step with a required
+ * summary that Dr. Okafor holds (ADR 0014). `details` is not editable, so the
+ * completion the browser posts must leave it out of the capture (FM-3,
+ * FM-4): a reader for it would make the server refuse the submission with a
+ * 409.
  */
 export const definition: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
+    { "key": "request", "targets": [{ "starter": "starter" }] },
     {
-      "key": "request",
+      "key": "review",
       "targets": [{ "user": "${OKAFOR}" }],
       "outcomes": ["${OUTCOME}"],
       "fields": [
@@ -74,7 +76,8 @@ export const grants: readonly Grant[] = [
 ]
 
 /** The directory of the test (ID-4): a user target resolves to its principal, and no other kind resolves. */
-export const resolve: TargetResolver = (target) => ('user' in target ? [target.user] : [])
+export const resolve: TargetResolver = (target) =>
+  'user' in target ? [target.user] : 'starter' in target ? [SAM] : []
 
 /** The injected sources of the seed (I6): a fixed time and `prefix-N` IDs. */
 function deps(prefix: string): OperationDeps {
@@ -105,10 +108,23 @@ export function publishedState(): State {
 export function claimedState(): State {
   const sources = deps('request')
   const started = startInstance(flow, INSTANCE_ID, {}, SAM, sources, resolve, grants)
-  const claimed = claim(started.instance, OKAFOR, started.instance.version ?? 0, sources)
+  // The submit routes the draft to the review step (ADR 0014), where Dr.
+  // Okafor claims it.
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) {
+    throw new Error(`the seed submit was refused: ${submitted.reason}`)
+  }
+  const claimed = claim(submitted.instance, OKAFOR, submitted.instance.version ?? 0, sources)
   if (!claimed.accepted || claimed.operation === undefined) {
     throw new Error(`the seed claim was refused: ${claimed.reason}`)
   }
-  const state = apply(started.operation, publishedState())
+  const state = apply(submitted.operation, apply(started.operation, publishedState()))
   return apply(claimed.operation, state)
 }

@@ -21,10 +21,11 @@ import {
   type FlowStep,
   parse,
 } from '../engine/definition.js'
-import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow } from '../engine/flow.js'
-import { GRANT_CHANGE_TYPE } from '../engine/grants.js'
+import { DEFINITION_PUBLISHED, FLOW_TITLE, type Flow, publishedByHash } from '../engine/flow.js'
+import { GRANT_CHANGE_TYPE, grantsOf } from '../engine/grants.js'
 import type { Assignee } from '../engine/instance.js'
 import { contentHash, mergeAssignees } from '../engine/instance.js'
+import { instanceOf, type ProjectedInstance } from '../engine/instances.js'
 import type { Event, Operation } from '../engine/operation.js'
 import { type OutboxEntry, outboxOfEvent } from '../engine/outbox.js'
 import {
@@ -38,9 +39,17 @@ import {
 } from '../engine/reminders.js'
 import { UNROUTABLE_QUEUE } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
-import { EMAIL_CONNECTOR, INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
+import {
+  DRAFT_EDITED,
+  EMAIL_CONNECTOR,
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+} from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
+import { trackerOf } from '../engine/tracker.js'
+import { EVENT_UNDONE, TASK_REASSIGNED, TASK_RELEASED } from '../engine/undo.js'
+import { DRAFT_REBOUND } from '../engine/version.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 import {
@@ -726,6 +735,9 @@ export async function readInboxRows(
   )`
   const open = `i.current_step is not null and i.done = false
     and i.status in ('waiting', 'in-progress')`
+  // A draft shows only to its starter, in Started by me (ADR 0014, VT-4).
+  const openOrDraft = `i.current_step is not null and i.done = false
+    and i.status in ('draft', 'waiting', 'in-progress')`
   let query: string
   let values: string[]
   // The due time of the current task, from the escalation timer that the step
@@ -761,7 +773,7 @@ export async function readInboxRows(
              from instances i
              left join tasks t on t.instance_id = i.id and t.step = i.current_step
              where i.starter = $1
-               and ${open}
+               and ${openOrDraft}
              order by last_activity_at desc, i.id asc`
     values = [actor]
   } else {
@@ -1187,12 +1199,72 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === GRANT_CHANGE_TYPE) {
     const grant = readGrant(event)
+    if (event.payload.change === 'revoked') {
+      // The engine's projection decides what the principal holds on the
+      // resource after the revoke (AC-2, I4): the rows of that pair are
+      // replaced by it, so a live append and a rebuild agree.
+      const rows = await client.query<{ payload: Record<string, unknown>; seq: string }>(
+        `select payload, seq from events where type = $1 and seq <= $2 order by seq`,
+        [GRANT_CHANGE_TYPE, event.seq]
+      )
+      const held = grantsOf(
+        rows.rows.map((row) => ({
+          seq: Number(row.seq),
+          operationId: '',
+          type: GRANT_CHANGE_TYPE,
+          at: 0,
+          payload: row.payload,
+        }))
+      ).filter((entry) => entry.principal === grant.principal && entry.resource === grant.resource)
+      await client.query('delete from grants where principal = $1 and resource = $2', [
+        grant.principal,
+        grant.resource,
+      ])
+      for (const entry of held) {
+        await client.query(
+          `insert into grants (principal, resource, scopes, seq) values ($1, $2, $3::text[], $4)
+           on conflict (principal, resource, scopes) do update set seq = excluded.seq`,
+          [entry.principal, entry.resource, entry.scopes, event.seq]
+        )
+      }
+      return
+    }
     await client.query(
       `insert into grants (principal, resource, scopes, seq)
        values ($1, $2, $3::text[], $4)
        on conflict (principal, resource, scopes) do update set seq = excluded.seq`,
       [grant.principal, grant.resource, grant.scopes, event.seq]
     )
+    return
+  }
+  if (event.type === TEAM_CHANGE_TYPE) {
+    // A team and its members are a projection of the log (AS-6, I4): the
+    // rows follow the same fold as the engine's teamsOf.
+    const { team, change, member } = event.payload
+    if (typeof team !== 'string') {
+      throw new Error(`events: malformed ${TEAM_CHANGE_TYPE} payload at seq ${event.seq}`)
+    }
+    if (change === 'created') {
+      await client.query(
+        `insert into teams (slug, name, seq) values ($1, $1, $2)
+         on conflict (slug) do update set seq = excluded.seq`,
+        [team, event.seq]
+      )
+      return
+    }
+    if (typeof member !== 'string') return
+    if (change === 'member-added') {
+      await client.query(
+        `insert into team_members (team_slug, principal, seq) values ($1, $2, $3)
+         on conflict (team_slug, principal) do update set seq = excluded.seq`,
+        [team, member, event.seq]
+      )
+    } else if (change === 'member-removed') {
+      await client.query('delete from team_members where team_slug = $1 and principal = $2', [
+        team,
+        member,
+      ])
+    }
     return
   }
   if (event.type === PRINCIPAL_UPDATED_TYPE) {
@@ -1217,10 +1289,13 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === INSTANCE_STARTED) {
     const start = readStart(event)
+    // A start is a private draft (ADR 0014): the row records the request form
+    // as the current step and the starter, with no task row and no timer,
+    // until the submit routes it.
     await client.query(
       `insert into instances
          (id, flow_slug, definition_version, current_step, status, starter, values, version, holder, submitted, done, queue, seq)
-       values ($1, $2, $3, $4, 'waiting', $5, $6::jsonb, 0, null, false, false, $7, $8)
+       values ($1, $2, $3, $4, 'draft', $5, $6::jsonb, 0, null, false, false, $7, $8)
        on conflict (id) do update
          set flow_slug = excluded.flow_slug,
              definition_version = excluded.definition_version,
@@ -1245,31 +1320,26 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         event.seq,
       ]
     )
-    if (start.currentStep !== undefined) {
-      await upsertTask(client, {
-        instanceId: start.instanceId,
-        step: start.currentStep,
-        assignees: start.assignees,
-        holder: null,
-        state: 'available',
-        queue: start.queue ?? null,
-        at: event.at,
-        seq: event.seq,
-      })
-      // The start's active step schedules its timers from its own settings and
-      // the time the task entered it (SE-3, SE-4, S12).
-      const step = await stepOfInstance(client, start.instanceId, start.currentStep)
-      if (step !== undefined) {
-        const to = timerRecipient(start.assignees, start.currentStep)
-        await scheduleStepTimers(client, {
-          instanceId: start.instanceId,
-          step,
-          since: event.at,
-          seq: event.seq,
-          ...(to === undefined ? {} : { to }),
-        })
-      }
+    return
+  }
+  if (event.type === DRAFT_REBOUND) {
+    const { instanceId, definitionVersion } = event.payload
+    if (typeof instanceId !== 'string' || typeof definitionVersion !== 'string') {
+      throw new Error(`events: malformed ${DRAFT_REBOUND} payload at seq ${event.seq}`)
     }
+    await client.query('update instances set definition_version = $2, seq = $3 where id = $1', [
+      instanceId,
+      definitionVersion,
+      event.seq,
+    ])
+    return
+  }
+  if (event.type === DRAFT_EDITED) {
+    const edit = readDraftEdit(event)
+    await client.query(
+      `update instances set values = values || $2::jsonb, seq = $3 where id = $1`,
+      [edit.instanceId, JSON.stringify(edit.values), event.seq]
+    )
     return
   }
   if (event.type === STEP_CLAIMED) {
@@ -1288,7 +1358,13 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === STEP_COMPLETED) {
     const completion = readCompletion(event)
-    const next = await nextStepOf(client, completion.instanceId, completion.step)
+    // The completion records the step it entered (WF-1, I4); an older event
+    // without the route advances in definition order.
+    const next = completion.routed
+      ? completion.currentStep === undefined
+        ? undefined
+        : await stepOfInstance(client, completion.instanceId, completion.currentStep)
+      : await nextStepOf(client, completion.instanceId, completion.step)
     await client.query(
       `update instances
        set current_step = $2, holder = null, done = $3, status = $4,
@@ -1341,6 +1417,41 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
     }
     return
   }
+  if (event.type === TASK_RELEASED) {
+    const released = readStepAndHolder(event)
+    // The task returns to the pool (WF-5, AS-2): the row loses its holder
+    // and waits to be opened again, and the version advances (I5).
+    await client.query(
+      `update instances set holder = null, status = 'waiting', version = version + 1, seq = $2
+       where id = $1`,
+      [released.instanceId, event.seq]
+    )
+    await client.query(
+      `update tasks set holder = null, state = 'available', last_activity_at = $3, seq = $4
+       where instance_id = $1 and step = $2`,
+      [released.instanceId, released.step, event.at, event.seq]
+    )
+    return
+  }
+  if (event.type === TASK_REASSIGNED) {
+    const moved = readStepAndHolder(event)
+    const to = typeof event.payload.to === 'string' ? event.payload.to : null
+    // The named principal holds the task and joins its assignees (WF-5).
+    await client.query(
+      `update instances set holder = $2, status = 'in-progress', queue = null, version = version + 1, seq = $3
+       where id = $1`,
+      [moved.instanceId, to, event.seq]
+    )
+    const assignees = await taskAssignees(client, moved.instanceId, moved.step)
+    const merged = mergeAssignees(assignees, readAssignees(event.payload.assignees))
+    await client.query(
+      `update tasks
+       set holder = $3, state = 'opened', assignees = $5::jsonb, queue = null, last_activity_at = $4, seq = $6
+       where instance_id = $1 and step = $2`,
+      [moved.instanceId, moved.step, to, event.at, JSON.stringify(merged), event.seq]
+    )
+    return
+  }
   if (event.type === STEP_TAKEN_OVER) {
     const taken = readTakeover(event)
     // The holder moves to the actor who took the task over (AS-3, WF-5): the
@@ -1361,28 +1472,87 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === INSTANCE_SUBMITTED) {
     const submitted = readSubmission(event)
+    // The submit completes the request form and routes the instance (ADR
+    // 0014): the row enters the next step, or is done, with the version
+    // advanced as the engine advanced it (I5), and the next step's task row
+    // and timers are created exactly as a completion creates them. An older
+    // submit without a route only marks the instance submitted.
+    if (!submitted.routed) {
+      await client.query(
+        `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
+        [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
+      )
+      return
+    }
     await client.query(
-      `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
-      [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
+      `update instances
+       set submitted = true, values = $2::jsonb, current_step = $3, holder = null,
+           done = $4, status = $5, queue = $6, version = version + 1, seq = $7
+       where id = $1`,
+      [
+        submitted.instanceId,
+        JSON.stringify(submitted.values),
+        submitted.currentStep ?? null,
+        submitted.currentStep === undefined,
+        submitted.currentStep === undefined ? 'done' : 'waiting',
+        submitted.queue ?? null,
+        event.seq,
+      ]
     )
+    if (submitted.currentStep !== undefined) {
+      await upsertTask(client, {
+        instanceId: submitted.instanceId,
+        step: submitted.currentStep,
+        assignees: submitted.assignees,
+        holder: null,
+        state: 'available',
+        queue: submitted.queue ?? null,
+        at: event.at,
+        seq: event.seq,
+      })
+      const step = await stepOfInstance(client, submitted.instanceId, submitted.currentStep)
+      if (step !== undefined) {
+        const to = timerRecipient(submitted.assignees, submitted.currentStep)
+        await scheduleStepTimers(client, {
+          instanceId: submitted.instanceId,
+          step,
+          since: event.at,
+          seq: event.seq,
+          ...(to === undefined ? {} : { to }),
+        })
+      }
+    }
     return
   }
   if (event.type === STEP_SENT_BACK) {
     const sentBack = readSendBack(event)
     // The instance returns to the named step as the next revision (WF-3). The
-    // holder is cleared, so the target step's people claim it again.
+    // holder is cleared, so the target step's people claim it again. A send
+    // back to the request form, the first step, makes the instance a draft
+    // again (ADR 0014): the starter corrects it and submits it again, so no
+    // task row and no timer exist until that submit.
+    const draftAgain = (await firstStepOf(client, sentBack.instanceId))?.key === sentBack.to
     await client.query(
       `update instances
        set current_step = $2,
            holder = null,
            done = false,
-           status = 'waiting',
+           status = $6,
+           submitted = $7,
            queue = $4,
            version = version + 1,
            revisions = revisions || jsonb_build_object($2::text, $3::integer),
            seq = $5
        where id = $1`,
-      [sentBack.instanceId, sentBack.to, sentBack.revision, sentBack.queue ?? null, event.seq]
+      [
+        sentBack.instanceId,
+        sentBack.to,
+        sentBack.revision,
+        sentBack.queue ?? null,
+        event.seq,
+        draftAgain ? 'draft' : 'waiting',
+        !draftAgain,
+      ]
     )
     // The step that sent the task back keeps its history: its task is no
     // longer open, so it leaves the inbox without deleting a row (I4).
@@ -1400,6 +1570,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       at: event.at,
       seq: event.seq,
     })
+    if (draftAgain) return
     // The target task is open again with the assignees the engine resolved for
     // that step (AS-4, I13). That is the row the inbox and the task read use.
     await upsertTask(client, {
@@ -1516,6 +1687,15 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         ...(to === undefined ? {} : { to }),
       })
     }
+    return
+  }
+  if (event.type === EVENT_UNDONE) {
+    // A compensating event undoes the latest action on an instance (S16, D6,
+    // I4): the projection folds the instance again from the log up to this
+    // event, with the undone action folded out, and writes the instance row,
+    // the task rows from the tracker, and the timers of the restored step.
+    const instanceId = event.payload.instanceId
+    if (typeof instanceId === 'string') await reprojectInstance(client, instanceId, event)
     return
   }
   if (event.type === TIMER_FIRED) {
@@ -1795,6 +1975,139 @@ async function nextStepOf(
 }
 
 /** One step of the definition that the instance pins, or undefined when it has none (DF-2, S12). */
+/**
+ * Project one instance again from the log up to an event (S16, D6, I4): the
+ * engine's own fold decides the instance, so the live append and a rebuild
+ * reproduce the same rows from the same events. The instance row takes the
+ * fold's state, the task rows take the tracker's state per step (a step not
+ * reached has no row), and the timers of the restored current step count from
+ * the compensating event, as they do after the undo of a close (SE-5).
+ */
+async function reprojectInstance(
+  client: PoolClient,
+  instanceId: string,
+  event: Event
+): Promise<void> {
+  const rows = await client.query<{
+    seq: string
+    operation_id: string
+    type: string
+    at: string
+    actor: string | null
+    payload: Record<string, unknown>
+  }>(
+    'select seq, operation_id, type, at, actor, payload from events where seq <= $1 order by seq',
+    [event.seq]
+  )
+  const log: Event[] = rows.rows.map((row) => ({
+    seq: Number(row.seq),
+    operationId: row.operation_id,
+    type: row.type,
+    at: Number(row.at),
+    actor: row.actor ?? undefined,
+    payload: row.payload,
+  }))
+  const instance = instanceOf(log, instanceId)
+  if (instance === undefined) return
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) return
+  const state = instanceStatus(instance)
+  await client.query(
+    `update instances
+     set current_step = $2, holder = $3, status = $4, done = $5, submitted = $6,
+         queue = $7, version = $8, values = $9::jsonb, seq = $10
+     where id = $1`,
+    [
+      instanceId,
+      instance.currentStep ?? null,
+      instance.holder ?? null,
+      state,
+      instance.done === true,
+      instance.submitted !== false,
+      instance.queue ?? null,
+      instance.version ?? 0,
+      JSON.stringify(instance.values ?? {}),
+      event.seq,
+    ]
+  )
+  const tracker = trackerOf(instance, published.definition, log)
+  for (const entry of tracker) {
+    if (entry.state === 'not-reached') {
+      await client.query('delete from tasks where instance_id = $1 and step = $2', [
+        instanceId,
+        entry.key,
+      ])
+      continue
+    }
+    const assignees = instance.assignees.filter((assignee) => assignee.step === entry.key)
+    await upsertTask(client, {
+      instanceId,
+      step: entry.key,
+      assignees,
+      holder: entry.state === 'opened' ? (entry.holder ?? null) : null,
+      state: taskStateOf(entry.state),
+      queue: entry.key === instance.currentStep ? (instance.queue ?? null) : null,
+      at: entry.lastActivityAt ?? entry.startAt ?? event.at,
+      seq: event.seq,
+    })
+  }
+  // The undone action may have entered or left a step: every pending timer of
+  // the instance is cancelled, and the restored current step's timers count
+  // from the undo (SE-5, I3).
+  await client.query(
+    `update timers set cancelled_at = $2, seq = $3
+     where instance_id = $1 and cancelled_at is null and fired_at is null`,
+    [instanceId, event.at, event.seq]
+  )
+  if (instance.currentStep !== undefined && instance.submitted !== false) {
+    const step = await stepOfInstance(client, instanceId, instance.currentStep)
+    if (step !== undefined) {
+      const to = instance.holder ?? timerRecipient(instance.assignees, instance.currentStep)
+      await scheduleStepTimers(client, {
+        instanceId,
+        step,
+        since: event.at,
+        seq: event.seq,
+        ...(to === undefined ? {} : { to }),
+      })
+    }
+  }
+}
+
+/** The instance row's status of a folded instance (VT-2): the same words the engine's status uses. */
+function instanceStatus(instance: ProjectedInstance): string {
+  if (instance.withdrawal !== undefined) return instance.withdrawal
+  if (instance.done === true) return 'done'
+  if (instance.submitted === false) return 'draft'
+  return instance.holder === undefined ? 'waiting' : 'in-progress'
+}
+
+/** The task row state of one tracker state (VT-2). */
+function taskStateOf(state: string): string {
+  switch (state) {
+    case 'unopened':
+      return 'available'
+    case 'opened':
+      return 'opened'
+    default:
+      return state
+  }
+}
+
+/** The request form of an instance's pinned definition: its first step (ADR 0014). */
+async function firstStepOf(client: PoolClient, instanceId: string): Promise<FlowStep | undefined> {
+  const result = await client.query<{ definition: unknown }>(
+    `select v.definition
+     from instances i
+     join flow_versions v on v.content_hash = i.definition_version
+     where i.id = $1`,
+    [instanceId]
+  )
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  return readStoredDefinition(row.definition, `instance ${instanceId}`).steps[0]
+}
+
 async function stepOfInstance(
   client: PoolClient,
   instanceId: string,
@@ -1907,8 +2220,10 @@ function readCompletion(event: Event): {
   instanceId: string
   step: string
   queue: string | null
+  routed: boolean
+  currentStep: string | undefined
 } {
-  const { instanceId, step } = event.payload
+  const { instanceId, step, currentStep, done } = event.payload
   if (typeof instanceId !== 'string' || typeof step !== 'string') {
     throw new Error(`events: malformed ${STEP_COMPLETED} payload at seq ${event.seq}`)
   }
@@ -1916,6 +2231,8 @@ function readCompletion(event: Event): {
     instanceId,
     step,
     queue: typeof event.payload.queue === 'string' ? event.payload.queue : null,
+    routed: typeof currentStep === 'string' || done === true,
+    currentStep: typeof currentStep === 'string' ? currentStep : undefined,
   }
 }
 
@@ -1938,11 +2255,34 @@ function readTimerFired(event: Event): {
   return { timerId, instanceId, step, kind }
 }
 
-/** Read a submit payload that the projection folds (I4, FM-7). */
-function readSubmission(event: Event): { instanceId: string; values: Record<string, unknown> } {
-  const { instanceId } = event.payload
+/** Read a submit payload that the projection folds (I4, FM-7, ADR 0014). */
+function readSubmission(event: Event): {
+  instanceId: string
+  values: Record<string, unknown>
+  routed: boolean
+  currentStep: string | undefined
+  assignees: readonly Assignee[]
+  queue: string | null
+} {
+  const { instanceId, currentStep, done, queue } = event.payload
   if (typeof instanceId !== 'string') {
     throw new Error(`events: malformed ${INSTANCE_SUBMITTED} payload at seq ${event.seq}`)
+  }
+  return {
+    instanceId,
+    values: readJsonRecord(event.payload.values),
+    routed: typeof currentStep === 'string' || done === true,
+    currentStep: typeof currentStep === 'string' ? currentStep : undefined,
+    assignees: readAssignees(event.payload.assignees),
+    queue: typeof queue === 'string' ? queue : null,
+  }
+}
+
+/** Read a draft edit payload that the projection folds (I4, ADR 0014). */
+function readDraftEdit(event: Event): { instanceId: string; values: Record<string, unknown> } {
+  const { instanceId } = event.payload
+  if (typeof instanceId !== 'string') {
+    throw new Error(`events: malformed ${DRAFT_EDITED} payload at seq ${event.seq}`)
   }
   return { instanceId, values: readJsonRecord(event.payload.values) }
 }

@@ -1,7 +1,10 @@
 // Issue #43, #177, S06, ID-2, AC-1, I2, I6, I10, I13, I14, SE-1, FM-7:
 // start and submit a submission.
 // Issue #76, DX-1, #187: a start and a submit name the instance they act on.
-// Issue #192, WF-1, S05, I4: a start records the steps its route skipped.
+// Issue #192, WF-1, S05, I4: a submit records the steps its route skipped.
+// Issue #256, ADR 0014, FM-4, VT-4, D1, SE-2: a start is a private draft on
+// the request form, the starter edits it, and the submit validates the form,
+// routes it and notifies the assignees.
 //
 // S06: Sam opens a form link, fills it in and submits it. The engine never
 // creates an anonymous draft (ID-2): a start needs a signed-in principal, and
@@ -19,11 +22,15 @@
 // it later. Both functions are pure and deterministic (I6): they read no clock,
 // no random source and no I/O, and the injected sources come in as arguments.
 
+import { validateStep } from './action.js'
 import { authorize, type Grant } from './authorize.js'
+import type { Version } from './concurrency.js'
 import type { ConditionData } from './condition.js'
-import type { FlowDefinition, FlowStep, JsonValue } from './definition.js'
-import { type Flow, publishedFlow } from './flow.js'
-import { createInstance, type Instance } from './instance.js'
+import { type FlowDefinition, type FlowStep, fieldsOf, type JsonValue } from './definition.js'
+import type { FieldError } from './fields.js'
+import { type Flow, publishedByHash, publishedFlow } from './flow.js'
+import { type Assignee, createInstance, type Instance, recordAssignees } from './instance.js'
+import { instanceOf } from './instances.js'
 import {
   type ActorId,
   createOperation,
@@ -34,7 +41,7 @@ import {
 } from './operation.js'
 import { createOutboxOperation, type OutboxEntry } from './outbox.js'
 import { route, type TargetResolver } from './routing.js'
-import { isStepSkipped, type SkippedStep } from './workflow.js'
+import { routeAfter } from './workflow.js'
 
 /**
  * The versioned event type of a start (S06, MVP.md 9.1, #192). The start
@@ -43,8 +50,11 @@ import { isStepSkipped, type SkippedStep } from './workflow.js'
  */
 export const INSTANCE_STARTED = 'instance.started@1'
 
-/** The versioned event type of a submit (S06, MVP.md 9.1). */
+/** The versioned event type of a submit (S06, MVP.md 9.1, ADR 0014). */
 export const INSTANCE_SUBMITTED = 'instance.submitted@1'
+
+/** The versioned event type of a draft edit (RT-3, ADR 0014): the starter changes the values a draft holds. */
+export const DRAFT_EDITED = 'draft.edited@1'
 
 /** The connector operation that sends the assignment email (SE-1, SE-2: task assigned). */
 export const ASSIGNMENT_EMAIL = 'send-assignment'
@@ -58,10 +68,34 @@ export type StartedInstance = {
   readonly operation: Operation
 }
 
-/** The result of a submit: the submitted instance and the operation that recorded it (S06, I2). */
-export type SubmittedInstance = {
+/**
+ * The result of a draft edit or a submit (ADR 0014, I5, FM-4). `accepted`
+ * says whether the engine applied the change. When it did not, the instance
+ * is unchanged, `operation` is absent and `reason` says why: the actor is not
+ * the starter, the instance is no draft, the view is stale, a captured key is
+ * not on the request form, or a value fails its control; a validation refusal
+ * names every error by field path in `errors` (FM-4).
+ */
+export type SubmitResult = {
+  readonly accepted: boolean
   readonly instance: Instance
-  readonly operation: Operation
+  readonly operation?: Operation
+  readonly reason?: string
+  readonly errors?: readonly FieldError[]
+}
+
+/**
+ * What a submit needs beside the draft (ADR 0014): the flow slug, the
+ * definition the draft is pinned to, the directory resolver that routes the
+ * next step (AS-1, AS-4), the grants that apply to the starter, and the flow
+ * owner that an unroutable step alerts (I10).
+ */
+export type SubmitContext = {
+  readonly flow: string
+  readonly definition: FlowDefinition
+  readonly resolve: TargetResolver
+  readonly grants?: readonly Grant[]
+  readonly owner?: ActorId
 }
 
 /**
@@ -98,19 +132,22 @@ export function startInstance(
   const resource = `flow:${flow.slug}`
   assertStartable(actor, grants, resource)
   const definition = startableDefinition(flow)
-  const entry = routeAtStart(definition, data)
-  // I10, AS-5: the engine decides whether the task routes to people or to the
-  // Unroutable queue, and it raises the owner alert in the same operation.
-  const routed = route(entry.step, resolve, owner ?? actor)
-  const assignees = routed.assignees
+  const request = requestStep(definition)
+  // ADR 0014: the draft sits on the request form, the first step, and routes
+  // nothing yet; the starter is its only assignee, so the starter alone edits
+  // it. `resolve` and `owner` route the submit, not the start.
+  void resolve
+  void owner
+  const assignees: readonly Assignee[] = [
+    { step: request.key, target: { starter: 'starter' }, members: [actor] },
+  ]
   const instance: Instance = {
     ...createInstance(definition, assignees),
     instanceId,
-    currentStep: entry.step.key,
+    currentStep: request.key,
     submitted: false,
     starter: actor,
     values: data,
-    ...(routed.queue === undefined ? {} : { queue: routed.queue }),
   }
   const change = {
     instanceId,
@@ -119,20 +156,39 @@ export function startInstance(
     // instances apart.
     flow: flow.slug,
     definitionVersion: instance.definitionVersion,
-    currentStep: entry.step.key,
+    currentStep: request.key,
     assignees,
     starter: actor,
     values: data,
-    skipped: entry.skipped,
-    ...(routed.queue === undefined ? {} : { queue: routed.queue }),
+    skipped: [],
   }
-  // I2, SE-2: the unroutable alert is the start's outbox entry, so the state
-  // change and the owner alert commit in one operation.
-  const operation =
-    routed.alert === undefined
-      ? createOperation(INSTANCE_STARTED, change, deps, actor)
-      : createOutboxOperation(INSTANCE_STARTED, change, [routed.alert], deps, actor)
-  return { instance, operation }
+  return { instance, operation: createOperation(INSTANCE_STARTED, change, deps, actor) }
+}
+
+/**
+ * Edit a draft (ADR 0014, RT-3, D1, I1): the starter changes the values the
+ * draft holds, as one idempotent operation per edit, so a browser can send
+ * each edit with the id it chose and a retry appends nothing. The values merge
+ * over what the draft holds; the submit validates them (FM-4), so an edit is
+ * never refused for its content. Only the starter edits a draft, and only
+ * while it is one: a submitted instance changes through its steps.
+ */
+export function editDraft(
+  instance: Instance,
+  actor: ActorId,
+  values: Readonly<Record<string, JsonValue>>,
+  deps: OperationDeps
+): SubmitResult {
+  const refusal = draftRefusal(instance, actor, 'edit')
+  if (refusal !== undefined) return { accepted: false, instance, reason: refusal }
+  const edited: Instance = { ...instance, values: mergeValues(instance.values, values) }
+  const operation = createOperation(
+    DRAFT_EDITED,
+    { instanceId: instance.instanceId, values },
+    deps,
+    actor
+  )
+  return { accepted: true, instance: edited, operation }
 }
 
 /**
@@ -238,38 +294,264 @@ function asStartIntent(value: unknown): StartIntent | undefined {
 }
 
 /**
- * Submit a submission (S06, I2, SE-1, FM-7, DX-1). The instance becomes
- * submitted, and one operation records the instance it acts on (#76, #187),
- * the mark, the values that the step captured merged over what the instance
- * already held (FM-7), and the assignment email that the first assignee
- * receives, so one apply commits the state change and its side effect together
- * (I2). The event type stays `instance.submitted@1`: no release tag exists, so
- * the shape extends in place (MVP.md 9.3, #188). The engine records the email;
- * a worker delivers it later (SE-1). The function is pure and deterministic
- * (I6).
+ * Submit a draft (S06, ADR 0014, FM-4, FM-7, WF-1, I2, I5, I13, SE-2, DX-1).
+ * The submit is the starter's completion of the request form, the first step
+ * of the definition. The engine refuses an actor that is not the starter, an
+ * instance that is no draft and a stale view (I5), then runs the request
+ * form's rules again over the values the submission creates and validates
+ * every captured value against its control, refusing with every error named
+ * by path (FM-4, A9); a captured key the form does not make editable is
+ * refused by name (FM-3). On acceptance the request form is completed, the
+ * instance routes to the next step whose skip condition is false, or to the
+ * Unroutable queue with the owner alert (WF-1, I10), records the assignees,
+ * the skipped steps with their conditions (S05) and the merged values (FM-7),
+ * and carries the task-assigned email of every assignee in the same
+ * operation (I2, SE-2). A flow whose only step is the request form is done at
+ * the submit. The function is pure and deterministic (I6).
  */
 export function submitInstance(
   instance: Instance,
   actor: ActorId,
-  deps: OperationDeps,
-  values: Readonly<Record<string, JsonValue>>
-): SubmittedInstance {
-  const merged = mergeValues(instance.values, values)
-  const submitted: Instance = { ...instance, submitted: true, values: merged }
-  const change = {
-    instanceId: instance.instanceId,
-    currentStep: instance.currentStep,
+  values: Readonly<Record<string, JsonValue>>,
+  expectedVersion: Version,
+  context: SubmitContext,
+  deps: OperationDeps
+): SubmitResult {
+  const refusal = draftRefusal(instance, actor, 'submit')
+  if (refusal !== undefined) return { accepted: false, instance, reason: refusal }
+  const version = instance.version ?? 0
+  if (expectedVersion !== version) {
+    return { accepted: false, instance, reason: 'the view is stale, refresh and retry' }
+  }
+  const request = requestStep(context.definition)
+  const checked = validateStep(request, actor, instance, values, requestEditable(request))
+  if (checked.errors !== undefined) {
+    return {
+      accepted: false,
+      instance,
+      errors: checked.errors,
+      reason: `step ${request.key}: ${checked.reason} (FM-4)`,
+    }
+  }
+  if (checked.reason !== undefined) {
+    return { accepted: false, instance, reason: `step ${request.key}: ${checked.reason}` }
+  }
+  // A skipped key is absent from the recorded capture (FM-2, FM-7).
+  const kept = Object.fromEntries(checked.captured.map((key) => [key, values[key]]))
+  const merged = mergeValues(instance.values, kept)
+  const entry = routeAfter(context.definition, request.key, merged)
+  const routed =
+    entry.step === undefined
+      ? undefined
+      : route(entry.step, context.resolve, context.owner ?? actor)
+  const assignees = routed?.assignees
+  const advanced: Instance = {
+    ...instance,
     submitted: true,
     values: merged,
+    holder: undefined,
+    currentStep: entry.step?.key,
+    done: entry.step === undefined,
+    version: version + 1,
+    ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
   }
-  const operation = createOutboxOperation(
-    INSTANCE_SUBMITTED,
-    change,
-    [assignmentEmail(instance)],
-    deps,
-    actor
+  const submitted = assignees === undefined ? advanced : recordAssignees(advanced, assignees)
+  const change = {
+    instanceId: instance.instanceId,
+    step: request.key,
+    submitted: true,
+    values: merged,
+    skipped: entry.skipped,
+    ...(entry.step === undefined ? { done: true } : { currentStep: entry.step.key }),
+    ...(assignees === undefined ? {} : { assignees }),
+    ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
+  }
+  const outbox = [
+    ...(assignees === undefined ? [] : assignmentEmails(assignees)),
+    ...(routed?.alert === undefined ? [] : [routed.alert]),
+  ]
+  const operation =
+    outbox.length === 0
+      ? createOperation(INSTANCE_SUBMITTED, change, deps, actor)
+      : createOutboxOperation(INSTANCE_SUBMITTED, change, outbox, deps, actor)
+  return { accepted: true, instance: submitted, operation }
+}
+
+/**
+ * The client intent for a submit (ADR 0010, ADR 0014): the instance, the
+ * version the client read (I5) and the values the request form captured
+ * (FM-7). The engine decides the validation, the route and the emails.
+ */
+export type SubmitIntent = {
+  readonly id: OperationId
+  readonly type: typeof INSTANCE_SUBMITTED
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: {
+    readonly instanceId: string
+    readonly version: number
+    readonly values: Readonly<Record<string, JsonValue>>
+  }
+}
+
+/**
+ * The engine refused a submit or a draft edit (FM-4, FM-3, I5, ADR 0014). The
+ * server answers 409 with the reason and every validation error by path; an
+ * actor that is not the starter is a 403.
+ */
+export class SubmitRefused extends Error {
+  readonly errors: readonly FieldError[]
+  readonly status: 403 | 409
+
+  constructor(reason: string, errors: readonly FieldError[] = [], status: 403 | 409 = 409) {
+    super(reason)
+    this.errors = errors
+    this.status = status
+  }
+}
+
+/**
+ * Resolve a submit intent into the operation the engine records (ADR 0010,
+ * ADR 0014). The engine projects the draft from the log (I4), reads the
+ * published definition it is pinned to (DF-2) and runs `submitInstance`, so
+ * the validation, the route, the assignees and the emails are engine
+ * decisions; the client's id and time survive as the injected sources (I1,
+ * I6). It answers `undefined` when `value` is not a submit intent, so a
+ * resolved operation keeps the raw append path, and throws `SubmitRefused`
+ * when the engine refuses.
+ */
+export function resolveSubmitIntent(
+  log: Log,
+  value: unknown,
+  resolve: TargetResolver,
+  grants?: readonly Grant[],
+  owner?: ActorId
+): Operation | undefined {
+  const intent = asSubmitIntent(value)
+  if (intent === undefined) return undefined
+  const instance = instanceOf(log, intent.payload.instanceId)
+  if (instance === undefined) {
+    throw new Error(`submit: the log holds no instance ${intent.payload.instanceId} (DX-1)`)
+  }
+  const published = publishedByHash(log, instance.definitionVersion)
+  if (published === undefined) {
+    throw new Error(`submit: the log holds no published definition for ${instance.instanceId}`)
+  }
+  const result = submitInstance(
+    instance,
+    intent.actor,
+    intent.payload.values,
+    intent.payload.version,
+    { flow: instance.flow, definition: published.definition, resolve, grants, owner },
+    { clock: () => intent.at, ids: () => intent.id }
   )
-  return { instance: submitted, operation }
+  if (!result.accepted || result.operation === undefined) {
+    const reason = result.reason ?? 'the submit was refused'
+    throw new SubmitRefused(reason, result.errors, reason.includes('starter') ? 403 : 409)
+  }
+  return result.operation
+}
+
+/**
+ * Resolve a draft edit intent (ADR 0014, RT-3): the instance and the values
+ * the starter changed. It answers `undefined` when `value` is not one and
+ * throws `SubmitRefused` when the engine refuses.
+ */
+export function resolveDraftEditIntent(log: Log, value: unknown): Operation | undefined {
+  if (!isRecord(value) || value.type !== DRAFT_EDITED) return undefined
+  const payload = isRecord(value.payload) ? value.payload : {}
+  if (typeof payload.instanceId !== 'string') {
+    throw new Error('draft edit: the instanceId must be a string (DX-1)')
+  }
+  if (typeof value.id !== 'string') throw new Error('draft edit: the id must be a string (I1)')
+  if (typeof value.at !== 'number') throw new Error('draft edit: the at must be a number (I6)')
+  if (typeof value.actor !== 'string') {
+    throw new Error('draft edit: the actor must name a principal (ID-2)')
+  }
+  if (!isRecord(payload.values)) throw new Error('draft edit: the values must be an object (FM-7)')
+  const instance = instanceOf(log, payload.instanceId)
+  if (instance === undefined) {
+    throw new Error(`draft edit: the log holds no instance ${payload.instanceId} (DX-1)`)
+  }
+  const result = editDraft(instance, value.actor, payload.values as Record<string, JsonValue>, {
+    clock: () => value.at as number,
+    ids: () => value.id as string,
+  })
+  if (!result.accepted || result.operation === undefined) {
+    const reason = result.reason ?? 'the edit was refused'
+    throw new SubmitRefused(reason, [], reason.includes('starter') ? 403 : 409)
+  }
+  return result.operation
+}
+
+/** Read a submit intent from an unknown value, or undefined when it is not one (ADR 0010). */
+function asSubmitIntent(value: unknown): SubmitIntent | undefined {
+  if (!isRecord(value) || value.type !== INSTANCE_SUBMITTED) return undefined
+  const payload = isRecord(value.payload) ? value.payload : {}
+  // A resolved submit names the step it completed; an intent names the
+  // version the client read (I5).
+  if ('step' in payload || 'submitted' in payload) return undefined
+  if (typeof payload.instanceId !== 'string') {
+    throw new Error('submit: the instanceId must be a string (DX-1)')
+  }
+  if (typeof payload.version !== 'number' || !Number.isInteger(payload.version)) {
+    throw new Error('submit: the version must be an integer (I5)')
+  }
+  if (typeof value.id !== 'string') throw new Error('submit: the id must be a string (I1)')
+  if (typeof value.at !== 'number') throw new Error('submit: the at must be a number (I6)')
+  if (typeof value.actor !== 'string') {
+    throw new Error('submit: the actor must name a principal (ID-2)')
+  }
+  const values = payload.values ?? {}
+  if (!isRecord(values)) throw new Error('submit: the values must be an object (FM-7)')
+  return {
+    id: value.id,
+    type: INSTANCE_SUBMITTED,
+    at: value.at,
+    actor: value.actor,
+    payload: {
+      instanceId: payload.instanceId,
+      version: payload.version,
+      values: values as Record<string, JsonValue>,
+    },
+  }
+}
+
+/** Why a draft edit or a submit is refused before the content is looked at (ADR 0014, D1). */
+function draftRefusal(
+  instance: Instance,
+  actor: ActorId,
+  action: 'edit' | 'submit'
+): string | undefined {
+  if (instance.submitted !== false) {
+    return `the instance is not a draft, so it cannot be ${action === 'edit' ? 'edited' : 'submitted'} again`
+  }
+  if (instance.starter !== actor) return `${actor} is not the starter of the draft`
+  return undefined
+}
+
+/**
+ * The request form (ADR 0014): the first step of the definition. A definition
+ * always has one step (DF-1), so a start always has a form to sit on.
+ */
+function requestStep(definition: FlowDefinition): FlowStep {
+  const [first] = definition.steps
+  if (first === undefined) throw new Error('instance: the definition has no step (DF-1)')
+  return first
+}
+
+/**
+ * The keys the starter may capture on the request form (FM-3, ADR 0014): the
+ * step's editable keys, or every field of the form when the step lists none,
+ * because the request form is the starter's own.
+ */
+function requestEditable(step: FlowStep): readonly string[] {
+  return step.editable ?? fieldsOf(step).map((field) => field.key)
+}
+
+/** Whether a value is a JSON object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -317,45 +599,16 @@ function startableDefinition(flow: Flow): FlowDefinition {
 }
 
 /**
- * The route that the draft takes at a start (WF-1, S05, #192): the first step
- * whose skip condition is false, and the steps before it that the route
- * skipped, in definition order, with the condition that skipped each. A step
- * with no condition is never skipped. Every step being skipped is a flow
- * error, and the start refuses rather than routing nowhere.
+ * The task-assigned emails of a step's assignees (SE-1, SE-2, I2): one
+ * `send-assignment` entry per resolved member, in resolution order, each
+ * naming the recipient and the step. A step whose targets resolved to nobody
+ * sends none; the Unroutable alert covers it (I10).
  */
-function routeAtStart(
-  definition: FlowDefinition,
-  data: ConditionData
-): { readonly step: FlowStep; readonly skipped: readonly SkippedStep[] } {
-  const skipped: SkippedStep[] = []
-  for (const step of definition.steps) {
-    if (step.skipWhen !== undefined && isStepSkipped(step, data)) {
-      skipped.push({ step: step.key, condition: step.skipWhen })
-      continue
-    }
-    return { step, skipped }
-  }
-  throw new Error('instance: every step is skipped, so the start has no step to route (WF-1)')
-}
-
-/**
- * The assignment email that the first assignee of the current step receives
- * (S06, SE-1): the connector operation, the connector and the recipient. The
- * instance accumulates the assignees of every step it entered, so the
- * recipient is the first member of the current step and not the first member
- * of an earlier step. A log that records no assignee for the current step
- * falls back to the first recorded member, so an instance from before every
- * entered step carried its assignees still records an email. I10 forbids a
- * silent drop, so a step whose assignees resolve to nobody refuses the submit
- * rather than record no email.
- */
-function assignmentEmail(instance: Instance): OutboxEntry {
-  const current = instance.assignees.find((assignee) => assignee.step === instance.currentStep)
-    ?.members[0]
-  const to = current ?? instance.assignees.flatMap((assignee) => assignee.members)[0]
-  if (to === undefined) {
-    throw new Error(`instance: the step ${instance.currentStep} has no assignee to notify (I10)`)
-  }
-  const payload = { to, step: instance.currentStep }
-  return { operation: ASSIGNMENT_EMAIL, target: EMAIL_CONNECTOR, payload }
+export function assignmentEmails(assignees: readonly Assignee[]): readonly OutboxEntry[] {
+  const members = [...new Set(assignees.flatMap((assignee) => assignee.members))]
+  return members.map((to) => ({
+    operation: ASSIGNMENT_EMAIL,
+    target: EMAIL_CONNECTOR,
+    payload: { to, step: assignees[0]?.step ?? '' },
+  }))
 }

@@ -213,9 +213,12 @@ beforeAll(async () => {
     // escalation adds a second person from the demo seed, so the added assignee
     // is observable beside the current owner (SE-4).
     const okafor = castMember('advisor')
+    // The request form is the first step (ADR 0014); the submit enters the
+    // waiting step, whose timers count from that submit.
     const definition: FlowDefinition = {
       schemaVersion: 2,
       steps: [
+        { key: 'request', targets: [{ starter: 'starter' }] },
         {
           key: STEP,
           targets: [{ user: adminId }],
@@ -377,27 +380,41 @@ async function postOperation(
   return { status: response.status, body: await response.text() }
 }
 
-/** Post one start intent and return the event the server appended. */
+/**
+ * Post one start intent and then the submit that routes the draft to the
+ * waiting step (ADR 0014); return the submit event the server appended, whose
+ * time the step's timers count from.
+ */
 async function postIntent(
   token: string,
   instanceId: string,
   payload: { readonly flow: string; readonly instanceId: string; readonly values: unknown }
 ): Promise<{ readonly at: number }> {
   const { publicUrl } = requireSetup()
-  const response = await fetch(`${publicUrl}/api/v1/operations`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
+  const post = async (body: Record<string, unknown>, what: string): Promise<{ at: number }> => {
+    const response = await fetch(`${publicUrl}/api/v1/operations`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const text = await response.text()
+    if (response.status !== 201) throw new Error(`the ${what} of ${instanceId} failed: ${text}`)
+    return JSON.parse(text) as { at: number }
+  }
+  await post(
+    { id: randomUUID(), type: 'instance.started@1', at: Date.now(), actor: 'ignored', payload },
+    'start'
+  )
+  return post(
+    {
       id: randomUUID(),
-      type: 'instance.started@1',
+      type: 'instance.submitted@1',
       at: Date.now(),
       actor: 'ignored',
-      payload,
-    }),
-  })
-  const body = await response.text()
-  if (response.status !== 201) throw new Error(`the start of ${instanceId} failed: ${body}`)
-  return JSON.parse(body) as { at: number }
+      payload: { instanceId, version: 0, values: {} },
+    },
+    'submit'
+  )
 }
 
 /** Read one instance as the administrator. */
@@ -555,7 +572,7 @@ function demoInstance(step: string): DemoInstance | undefined {
   return requireSetup().seed.instances?.find((instance) => instance.step === step)
 }
 
-test('#248 VT-2 SE-4 the start schedules the timers and the tracker shows the due time', async () => {
+test('#248 VT-2 SE-4 the submit schedules the timers and the tracker shows the due time', async () => {
   const { adminToken, reminderId, cancelledId, reminderAt } = requireSetup()
 
   const timers = timersOf(reminderId)
@@ -574,12 +591,17 @@ test('#248 VT-2 SE-4 the start schedules the timers and the tracker shows the du
   const cancelled = timersOf(cancelledId)
   expect(cancelled).toHaveLength(2)
   for (const timer of cancelled) expect(timer.cancelledAt).not.toBeNull()
-  expect(outboxRows(cancelledId), 'a completion cancels, it does not notify').toEqual([])
+  // The submit queued the task-assigned email (SE-2); the completion cancels
+  // the timers and queues neither a reminder nor an escalation.
+  expect(
+    outboxRows(cancelledId).map((row) => row.effect),
+    'a completion cancels, it does not notify'
+  ).toEqual(['send-assignment'])
 
   const view = await readInstance(adminToken, reminderId)
   const step = view.tracker.find((entry) => entry.key === STEP)
   expect(step?.state).toBe('unopened')
-  expect(step?.startAt, 'the start enters the step').toBe(reminderAt)
+  expect(step?.startAt, 'the submit enters the step').toBe(reminderAt)
   expect(step?.dueAt, 'the tracker carries the deadline (VT-2, SE-4)').toBe(reminderAt + MINUTE)
 
   // The inbox carries the same due time for the open task (VT-1, VT-2). A
@@ -623,7 +645,11 @@ test('#248 SE-3 SE-4 the worker sends the reminder and the escalation once', asy
     expect(timers.map((timer) => timer.firedAt !== null)).toEqual([true, true])
     expect(timers.map((timer) => timer.cancelledAt)).toEqual([null, null])
     const outbox = outboxRows(reminderId)
-    expect(outbox.map((row) => row.effect).sort()).toEqual([ESCALATION, REMINDER])
+    expect(outbox.map((row) => row.effect).sort()).toEqual([
+      'send-assignment',
+      ESCALATION,
+      REMINDER,
+    ])
     for (const row of outbox) {
       expect(row.status, 'the worker delivered the row').toBe('sent')
       expect(row.sentAt).not.toBe('')
@@ -763,12 +789,15 @@ test('#248 SE-5 I3 the cancelled instance sends no email and a rebuild keeps the
   const link = linkOf(cancelledId)
   for (const message of await mailpitMessages()) {
     if (!message.Subject.includes(`(${STEP})`)) continue
+    // The submit's task-assigned email names the step too (SE-2); only a
+    // reminder or an escalation would be a timer firing.
+    if (message.Subject.includes('task assigned')) continue
     const detail = await mailpitMessage(message.ID)
     expect(detail.Text, 'the cancelled instance sends no email').not.toContain(link)
   }
-  expect(outboxRows(cancelledId)).toEqual([])
+  expect(outboxRows(cancelledId).map((row) => row.effect)).toEqual(['send-assignment'])
 
-  // A rebuild folds the start, the firings and the completion back into the
+  // A rebuild folds the submit, the firings and the completion back into the
   // same timer rows and keeps the outbox delivery (I3, I4).
   const rebuilt = runCli(['admin', 'rebuild', '--config', configPath])
   expect(rebuilt.status, rebuilt.stderr).toBe(0)

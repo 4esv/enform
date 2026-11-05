@@ -11,12 +11,20 @@ import type { TargetResolver } from '../../engine/routing.js'
 import { runSteps as engineRunSteps } from '../../engine/run.js'
 import { oracles } from './oracles.js'
 import {
+  assertGoldenDeclared,
+  type Prediction,
+  postedOperation,
+  predict,
+  type StepOutcome,
+  sameOperation,
+} from './predict.js'
+import {
+  clockOf,
   fromView,
   type GuiAction,
   type GuiDomExpectation,
   type GuiFillValue,
   type GuiStep,
-  goldenClock,
   goldenViewPrefix,
   type Scenario,
   type StateView,
@@ -80,7 +88,7 @@ export async function runSteps(scenario: Scenario, options: RunOptions): Promise
   if (options.mode === 'dry') return dryRun(scenario)
   if (options.mode === 'cli') return cliRun(scenario)
   if (options.mode === 'gui') return guiRun(scenario, options)
-  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? goldenClock)
+  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? clockOf(scenario))
 }
 
 /**
@@ -113,13 +121,34 @@ function dryRun(scenario: Scenario): RunOutcome {
 async function cliRun(scenario: Scenario): Promise<RunOutcome> {
   let state = emptyState
   for (let i = 0; i < scenario.steps.length; i++) {
-    state = await cliApply(stepOperation(scenario.steps[i], i), state)
+    const step = scenario.steps[i]
+    const operation = stepOperation(step, i, clockOf(scenario))
+    const posted = step.intent === undefined ? operation : { ...operation, payload: step.intent }
+    state = await cliApply(posted, state, scenario)
+    if (step.intent !== undefined) {
+      const event = state.log.find((entry) => entry.operationId === operation.id)
+      const actual =
+        event === undefined
+          ? undefined
+          : {
+              id: event.operationId,
+              type: event.type,
+              at: event.at,
+              actor: event.actor,
+              payload: event.payload,
+            }
+      if (!sameOperation(actual, operation)) {
+        throw new Error(
+          `cli mode: step ${i + 1} resolved to an event that differs from the declared step`
+        )
+      }
+    }
   }
   return { state, intents: outboxOf(state.log) }
 }
 
 /** Apply one operation through the CLI process, and read the state it returns. */
-async function cliApply(operation: Operation, state: State): Promise<State> {
+async function cliApply(operation: Operation, state: State, scenario: Scenario): Promise<State> {
   const stdout = await runCli([
     '--import',
     TS_RESOLVE,
@@ -128,6 +157,10 @@ async function cliApply(operation: Operation, state: State): Promise<State> {
     JSON.stringify(operation),
     '--state',
     JSON.stringify(toView(state)),
+    '--bootstrap',
+    JSON.stringify(scenario.bootstrap ?? []),
+    '--membership',
+    JSON.stringify(scenario.membership ?? {}),
   ])
   let parsed: unknown
   try {
@@ -165,7 +198,7 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
   if (gui.length > scenario.steps.length) {
     throw new Error('gui mode: the gui path is longer than the scenario steps')
   }
-  const clock = options.clock ?? goldenClock
+  const clock = options.clock ?? clockOf(scenario)
   const flowSlug = scenario.flowSlug
   if (flowSlug === undefined) {
     throw new Error('gui mode: the scenario declares no flowSlug')
@@ -173,6 +206,8 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
   const api = startApi(options.seed ?? emptyState, {
     resolve: options.resolve,
     grants: options.grants,
+    bootstrap: scenario.bootstrap,
+    membership: scenario.membership,
   })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -413,31 +448,79 @@ function replayPrefix(serverState: State, seedLength: number): State {
   return state
 }
 
-/** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */
-async function apiRun(
+/**
+ * Post one step to the harness server, `times` times with the same id (I1),
+ * and check the server against the engine's prediction of the step (ADR
+ * 0010, #256): an applied step answers 201 with the predicted event, a
+ * refused step answers the predicted status and appends nothing. The caller
+ * owns the server; the Offline operator and api mode share this one path.
+ */
+export async function postStep(
+  api: Api,
+  step: Step,
+  index: number,
+  clock: StepClock,
+  times: number,
+  expected: StepOutcome
+): Promise<void> {
+  const posted = postedOperation(step, index, clock)
+  const before = api.state().log.length
+  for (let d = 0; d < times; d += 1) {
+    const response = await fetch(`http://127.0.0.1:${api.port()}/api/v1/operations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(posted),
+    })
+    const body = await response.text()
+    if ('operation' in expected) {
+      if (response.status !== 201) {
+        throw new Error(
+          `step ${index + 1} delivery ${d + 1} failed: HTTP ${response.status} ${body}`
+        )
+      }
+      continue
+    }
+    if (response.status !== expected.status) {
+      throw new Error(
+        `step ${index + 1} delivery ${d + 1}: the engine predicts HTTP ${expected.status} (${expected.error}), the server answered HTTP ${response.status} ${body}`
+      )
+    }
+    if (api.state().log.length !== before) {
+      throw new Error(`step ${index + 1}: a refused step appended an event`)
+    }
+  }
+  if ('error' in expected) return
+  const event = api.state().log.find((entry) => entry.operationId === posted.id)
+  const actual =
+    event === undefined
+      ? undefined
+      : {
+          id: event.operationId,
+          type: event.type,
+          at: event.at,
+          actor: event.actor,
+          payload: event.payload,
+        }
+  if (!sameOperation(actual, expected.operation)) {
+    throw new Error(
+      `step ${index + 1}: the server's event differs from the engine's prediction\n${JSON.stringify(actual)}\n${JSON.stringify(expected.operation)}`
+    )
+  }
+}
+
+/** Start the harness server for a scenario, run `body` against it, and close it. */
+export async function withScenarioApi<T>(
   scenario: Scenario,
-  deliveries: Deliveries,
-  clock: StepClock
-): Promise<RunOutcome> {
-  const api = startApi(emptyState)
+  body: (api: Api) => Promise<T>
+): Promise<T> {
+  const api = startApi(emptyState, {
+    bootstrap: scenario.bootstrap,
+    membership: scenario.membership,
+  })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
-    for (let i = 0; i < scenario.steps.length; i++) {
-      const operation = stepOperation(scenario.steps[i], i, clock)
-      for (let d = 0; d < deliveries(i); d += 1) {
-        const response = await fetch(`http://127.0.0.1:${api.port()}/api/v1/operations`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(operation),
-        })
-        if (response.status !== 201) {
-          throw new Error(`step ${i + 1} delivery ${d + 1} failed: HTTP ${response.status}`)
-        }
-      }
-    }
-    const state = api.state()
-    return { state, intents: outboxOf(state.log) }
+    return await body(api)
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve()))
@@ -445,7 +528,59 @@ async function apiRun(
   }
 }
 
+/** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */
+async function apiRun(
+  scenario: Scenario,
+  deliveries: Deliveries,
+  clock: StepClock
+): Promise<RunOutcome> {
+  const prediction: Prediction = predict(scenario, clock)
+  return withScenarioApi(scenario, async (api) => {
+    for (let i = 0; i < scenario.steps.length; i++) {
+      await postStep(api, scenario.steps[i], i, clock, deliveries(i), prediction.outcomes[i])
+    }
+    const state = api.state()
+    return { state, intents: outboxOf(state.log) }
+  })
+}
+
+/**
+ * The predicted outcome of every step of an api run (STORIES.md, Oracles): a
+ * test reads it to assert the deviation an operator predicts, next to the
+ * end state the oracles check.
+ */
+export function predictedOutcomes(
+  scenario: Scenario,
+  clock: StepClock = clockOf(scenario)
+): readonly StepOutcome[] {
+  return predict(scenario, clock).outcomes
+}
+
 export async function runGolden(scenario: Scenario): Promise<void> {
+  assertGoldenDeclared(scenario)
   const { state } = await runSteps(scenario, { mode: 'api' })
   oracles(state, scenario)
+}
+
+/**
+ * The golden path in the three engine modes (STORIES.md, Golden path): the
+ * api run and the cli run reach the same end state, event for event, and the
+ * dry run's side-effect intents equal theirs (I7). The api run is answered,
+ * so a story test can check it further.
+ */
+export async function runModes(scenario: Scenario): Promise<RunOutcome> {
+  if (scenario.steps.length === 0) throw new Error('the scenario has no step to run')
+  const api = await runSteps(scenario, { mode: 'api' })
+  const cli = await runSteps(scenario, { mode: 'cli' })
+  const dry = await runSteps(scenario, { mode: 'dry' })
+  if (!isDeepStrictEqual(toView(cli.state), toView(api.state))) {
+    throw new Error('cli mode and api mode differ in their end state')
+  }
+  if (!isDeepStrictEqual(cli.intents, api.intents)) {
+    throw new Error('cli mode and api mode differ in their side effects')
+  }
+  if (!isDeepStrictEqual(dry.intents, api.intents)) {
+    throw new Error('dry mode and api mode differ in their side effects (I7)')
+  }
+  return api
 }

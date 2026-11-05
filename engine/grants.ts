@@ -31,15 +31,54 @@ export function addGrant(grant: Grant, actor: ActorId, deps: OperationDeps): Ope
 }
 
 /**
+ * Revoke scopes of a principal on a resource as an attributed configuration
+ * operation (AC-2, I14, #256). The payload names the principal, the scopes and
+ * the resource, with `change: 'revoked'`; the grant projection removes those
+ * scopes from the grants the log recorded for that principal and resource,
+ * and nothing else. The original grant stays on the log (I4).
+ */
+export function revokeGrant(grant: Grant, actor: ActorId, deps: OperationDeps): Operation {
+  return configOperation(
+    {
+      kind: 'grant',
+      actor,
+      payload: {
+        principal: grant.principal,
+        scopes: grant.scopes,
+        resource: grant.resource,
+        change: 'revoked',
+      },
+    },
+    deps
+  )
+}
+
+/**
  * The grants that the log records, in log order (I4, AC-1). The log is the
  * single source of truth, so the grant set is a projection of it and never a
- * second store: a rebuild from the log reproduces the grants (I4). Grants are
- * append-only, so the projection keeps every grant change and drops none.
+ * second store: a rebuild from the log reproduces the grants (I4). The log is
+ * append-only: a grant stays, and a revoke (`change: 'revoked'`) removes the
+ * named scopes from the earlier grants of that principal on that resource,
+ * dropping a grant left with no scope (AC-2, #256).
  */
 export function grantsOf(log: Log): readonly Grant[] {
-  return log
-    .filter((event) => event.type === GRANT_CHANGE_TYPE)
-    .map((event) => readGrant(event.payload))
+  const grants: Grant[] = []
+  for (const event of log) {
+    if (event.type !== GRANT_CHANGE_TYPE) continue
+    const grant = readGrant(event.payload)
+    if (event.payload.change !== 'revoked') {
+      grants.push(grant)
+      continue
+    }
+    for (let index = grants.length - 1; index >= 0; index -= 1) {
+      const held = grants[index]
+      if (held.principal !== grant.principal || held.resource !== grant.resource) continue
+      const kept = held.scopes.filter((scope) => !grant.scopes.includes(scope))
+      if (kept.length === 0) grants.splice(index, 1)
+      else grants[index] = { ...held, scopes: kept }
+    }
+  }
+  return grants
 }
 
 /**
@@ -52,9 +91,7 @@ export function grantsOf(log: Log): readonly Grant[] {
 export function flowOwner(log: Log, flow: string): ActorId | undefined {
   const resource = `flow:${flow}`
   let wildcard: ActorId | undefined
-  for (const event of log) {
-    if (event.type !== GRANT_CHANGE_TYPE) continue
-    const grant = readGrant(event.payload)
+  for (const grant of grantsOf(log)) {
     if (!grant.scopes.includes('task.reassign')) continue
     if (grant.resource === resource) return grant.principal
     if (grant.resource === '*' && wildcard === undefined) wildcard = grant.principal

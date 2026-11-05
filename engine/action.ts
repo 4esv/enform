@@ -25,6 +25,8 @@ import { type ActorId, createOperation, type Operation, type OperationDeps } fro
 import { createOutboxOperation } from './outbox.js'
 import { route, type TargetResolver } from './routing.js'
 import { evaluateRules, type StepRuleState } from './rules.js'
+import { assignmentEmails } from './submission.js'
+import { routeAfter } from './workflow.js'
 
 /** The versioned event type of a claim (S09, AS-2). */
 export const STEP_CLAIMED = 'step.claimed@1'
@@ -102,6 +104,9 @@ export function claim(
   if (step === undefined) {
     return { accepted: false, instance, reason: 'the instance has no current step to claim' }
   }
+  if (instance.submitted === false) {
+    return { accepted: false, instance, reason: DRAFT_REFUSAL }
+  }
   const version = currentVersion(instance)
   if (expectedVersion !== version) {
     return { accepted: false, instance, reason: claimRefusal(step, instance.holder) }
@@ -153,6 +158,9 @@ export function complete(
   if (step === undefined) {
     return { accepted: false, instance, reason: 'the instance has no current step to complete' }
   }
+  if (instance.submitted === false) {
+    return { accepted: false, instance, reason: DRAFT_REFUSAL }
+  }
   const version = currentVersion(instance)
   if (expectedVersion !== version) {
     return {
@@ -176,44 +184,30 @@ export function complete(
     }
   }
   const definitionStep = context.definition.steps.find((candidate) => candidate.key === step)
-  // FM-4, A9: the engine does not trust the client. It runs the step's rules
-  // again over the state the submission creates, so a rule keyed on a value the
-  // user just typed reads it exactly as the next read will: the values the step
-  // will hold are the instance's values with the capture merged over them.
-  const merged = { ...instance.values, ...values }
-  const state =
-    definitionStep === undefined ? undefined : evaluateRules(definitionStep, merged, actor)
-  // FM-2: a skipped field drops out of the capture (Axel, 2026-10-13). Its
-  // value is neither recorded nor validated, and it never refuses the
-  // submission. Skip wins over the FM-3 refusal below, so a skipped key is
-  // dropped before the editability check.
-  const captured = Object.keys(values).filter((key) => state?.fields[key]?.skipped !== true)
-  // The step's editable keys govern the remaining captured values (FM-3, FM-4,
-  // A9). The read (readInstance) and this write share editableKeys, so a field
-  // the read does not list in `editable` is exactly a field this refuses: a key
-  // the step does not make editable, a key of another step, and a key that
-  // names no field are all refused.
   const editable = definitionStep === undefined ? [] : editableKeys(actor, instance, definitionStep)
-  const notEditable = captured.find((key) => !editable.includes(key))
-  if (notEditable !== undefined) {
+  const checked =
+    definitionStep === undefined
+      ? { captured: Object.keys(values) }
+      : validateStep(definitionStep, actor, instance, values, editable)
+  if (checked.errors !== undefined) {
     return {
       accepted: false,
       instance,
-      reason: `step ${step}: ${notEditable} is not editable on this step (FM-3)`,
+      errors: checked.errors,
+      reason: `step ${step}: ${checked.reason} (FM-4)`,
     }
   }
-  // FM-4: every remaining captured value is validated against its control, and
-  // a required field the step will hold empty is an error. The engine reports
-  // every error, each one named by field path.
-  const errors =
-    definitionStep === undefined || state === undefined
-      ? []
-      : checkStep(definitionStep, captured, values, merged, state)
-  if (errors.length > 0) {
-    return { accepted: false, instance, errors, reason: refusalReason(step, errors) }
+  if (checked.reason !== undefined) {
+    return { accepted: false, instance, reason: `step ${step}: ${checked.reason}` }
   }
-  const next = nextStep(context.definition, step)
-  // The engine routes the next step exactly as a start routes the first one
+  const captured = checked.captured
+  const merged = { ...instance.values, ...capture(values, captured) }
+  // The completion routes to the first later step whose skip condition is
+  // false over the values the submission creates (WF-1, S05), and records the
+  // steps it skipped with their conditions, exactly as a submit does.
+  const entry = routeAfter(context.definition, step, merged)
+  const next = entry.step
+  // The engine routes the next step exactly as a submit routes the first one
   // (AS-4, I10, I13): a resolved step records its assignees, and a step whose
   // targets resolve to nobody records the Unroutable queue and the owner alert
   // in the same operation. A caller that gives no resolver records none, so
@@ -238,14 +232,73 @@ export function complete(
     outcome,
     // A skipped key is absent from the recorded capture (FM-2, FM-7).
     values: capture(values, captured),
+    // The route the completion decided (WF-1, I4): the step it entered, or
+    // `done`, and the steps it skipped, so a read never recomputes it.
+    ...(next === undefined ? { done: true } : { currentStep: next.key }),
+    skipped: entry.skipped,
     ...(entered === undefined ? {} : { assignees: entered }),
     ...(routed?.queue === undefined ? {} : { queue: routed.queue }),
   }
+  // The next step's people are told that the task is theirs (SE-2, I2): one
+  // task-assigned email per resolved member rides in the same operation, and
+  // an unroutable step carries the owner alert instead (I10).
+  const outbox = [
+    ...(entered === undefined ? [] : assignmentEmails(entered)),
+    ...(routed?.alert === undefined ? [] : [routed.alert]),
+  ]
   const operation =
-    routed?.alert === undefined
+    outbox.length === 0
       ? createOperation(STEP_COMPLETED, change, deps, actor)
-      : createOutboxOperation(STEP_COMPLETED, change, [routed.alert], deps, actor)
+      : createOutboxOperation(STEP_COMPLETED, change, outbox, deps, actor)
   return { accepted: true, instance: completed, operation }
+}
+
+/** Why a claim or a completion of a draft is refused (ADR 0014): the starter submits it first. */
+const DRAFT_REFUSAL = 'the instance is a draft; the starter submits it first'
+
+/**
+ * The outcome of a step's validation (FM-2, FM-3, FM-4): the captured keys
+ * that survive (a skipped field drops out), or the reason the engine refuses
+ * the values, with every validation error by field path when the refusal is
+ * one (FM-4).
+ */
+export type ValidatedStep = {
+  readonly captured: readonly string[]
+  readonly reason?: string
+  readonly errors?: readonly FieldError[]
+}
+
+/**
+ * Validate the values that a step captures (FM-2, FM-3, FM-4, A9). The engine
+ * does not trust the client: it runs the step's rules again over the state
+ * the submission creates, so a rule keyed on a value the user just typed
+ * reads it exactly as the next read will. A skipped field drops out of the
+ * capture before any check (FM-2). A captured key outside `editable` is
+ * refused by name (FM-3). Every remaining captured value is validated against
+ * its control, and a required field the step will hold empty is an error,
+ * each one named by field path (FM-4). A completion and a submit (ADR 0014)
+ * share this rule, so the request form and a later step validate alike.
+ */
+export function validateStep(
+  step: FlowStep,
+  actor: ActorId,
+  instance: Instance,
+  values: Readonly<Record<string, JsonValue>>,
+  editable: readonly string[]
+): ValidatedStep {
+  const merged = { ...instance.values, ...values }
+  const state = evaluateRules(step, merged, actor)
+  const captured = Object.keys(values).filter((key) => state.fields[key]?.skipped !== true)
+  const notEditable = captured.find((key) => !editable.includes(key))
+  if (notEditable !== undefined) {
+    return { captured, reason: `${notEditable} is not editable on this step (FM-3)` }
+  }
+  const errors = checkStep(step, captured, values, merged, state)
+  if (errors.length > 0) {
+    const named = errors.map((error) => `${error.path} ${error.message}`).join('; ')
+    return { captured, errors, reason: named }
+  }
+  return { captured }
 }
 
 /** The version of the log that an instance view reflects (I5). An absent version is the empty log. */
@@ -323,12 +376,6 @@ function checkStep(
  */
 function isEmpty(value: unknown): boolean {
   return value === undefined || value === null || value === ''
-}
-
-/** The refusal reason of a submission that fails validation, naming every error by path (FM-4). */
-function refusalReason(step: string, errors: readonly FieldError[]): string {
-  const named = errors.map((error) => `${error.path} ${error.message}`).join('; ')
-  return `step ${step}: ${named} (FM-4)`
 }
 
 /** The capture after the skipped fields dropped out (FM-2, FM-4). */

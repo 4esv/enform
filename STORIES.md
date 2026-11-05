@@ -98,21 +98,21 @@ This table records where each story was done. Update it in the same pull request
 | Story | Engine issue | Engine tests | Engine commits | Interface issue | Interface commits | Status |
 |---|---|---|---|---|---|---|
 | S01 | #38 | stories/S01-publish-flow/scenario.test.ts | ad5ddca eac5f63 58750b7 | | | Engine in progress |
-| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts | 5383f8c | | | Engine in progress |
-| S03 | #40 | stories/S03-edit-text/scenario.test.ts | e436106 | | | Engine in progress |
-| S04 | #41 | stories/S04-add-field-live/scenario.test.ts | c38bb5e | | | Engine in progress |
-| S05 | #42 | stories/S05-skip-step/scenario.test.ts | 501e5e3 | | | Engine in progress |
-| S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/golden-path.test.ts | 7d0b973 f0acdb8 | #181 | 640d062 f9e809d f9e5224 | Interface in progress |
-| S07 | #44 | | | | | Not started |
-| S08 | #45 | stories/S08-route/scenario.test.ts | c3d8025 | | | Engine in progress |
-| S09 | #46 | stories/S09-claim-approve/scenario.test.ts | 8888d67 | | | Engine in progress |
-| S10 | #47 | stories/S10-takeover/scenario.test.ts | d165932 | | | Engine in progress |
-| S11 | #48 | stories/S11-send-back/scenario.test.ts | 981b365 | | | Engine in progress |
-| S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts | e85a55b | | | Engine in progress |
-| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts | 0194b88 | | | Engine in progress |
-| S14 | #51 | stories/S14-find-status/scenario.test.ts, tools/step-skipped.test.ts | 4cb4d49 f7ca96e faaadba | | | Engine in progress |
-| S15 | #52 | stories/S15-investigate/scenario.test.ts | 2768a41 | | | Engine in progress |
-| S16 | #53 | stories/S16-undo/scenario.test.ts | 5bf4a30 | | | Engine in progress |
+| S02 | #39 | stories/S02-grant-scopes/scenario.test.ts, stories/S02-grant-scopes/operators.test.ts | 5383f8c e9b044d 565016a |  |  | Engine passes |
+| S03 | #40 | stories/S03-edit-text/scenario.test.ts, stories/S03-edit-text/operators.test.ts | e436106 5808cdc |  |  | Engine passes |
+| S04 | #41 | stories/S04-add-field-live/scenario.test.ts, stories/S04-add-field-live/operators.test.ts | c38bb5e bc6b63a |  |  | Engine passes |
+| S05 | #42 | stories/S05-skip-step/scenario.test.ts, stories/S05-skip-step/operators.test.ts | 501e5e3 0f1dcbf |  |  | Engine passes |
+| S06 | #43 | stories/S06-start-submission/scenario.test.ts, stories/S06-start-submission/operators.test.ts, stories/S06-start-submission/gui.test.ts | 7d0b973 f0acdb8 752a696 | #181 | 640d062 f9e809d f9e5224 | Interface in progress |
+| S07 | #44 | stories/S07-lose-connection/scenario.test.ts, stories/S07-lose-connection/operators.test.ts | 8d6bb33 |  |  | Engine passes |
+| S08 | #45 | stories/S08-route/scenario.test.ts, stories/S08-route/operators.test.ts | c3d8025 27e0712 |  |  | Engine passes |
+| S09 | #46 | stories/S09-claim-approve/scenario.test.ts, stories/S09-claim-approve/operators.test.ts | 8888d67 98e561c |  |  | Engine passes |
+| S10 | #47 | stories/S10-takeover/scenario.test.ts, stories/S10-takeover/operators.test.ts, tools/takeover-undo.test.ts | d165932 0f1c912 23a561a |  |  | Engine passes |
+| S11 | #48 | stories/S11-send-back/scenario.test.ts, stories/S11-send-back/operators.test.ts | 981b365 07da674 |  |  | Engine passes |
+| S12 | #49 | stories/S12-reminders-escalation/scenario.test.ts, stories/S12-reminders-escalation/operators.test.ts | e85a55b 94a10c9 |  |  | Engine passes |
+| S13 | #50 | stories/S13-withdraw-cancel/scenario.test.ts, stories/S13-withdraw-cancel/operators.test.ts | 0194b88 243cf21 |  |  | Engine passes |
+| S14 | #51 | stories/S14-find-status/scenario.test.ts, stories/S14-find-status/operators.test.ts, tools/step-skipped.test.ts | 4cb4d49 f7ca96e faaadba 17cebe9 |  |  | Engine passes |
+| S15 | #52 | stories/S15-investigate/scenario.test.ts, stories/S15-investigate/operators.test.ts | 2768a41 0c36f20 |  |  | Engine passes |
+| S16 | #53 | stories/S16-undo/scenario.test.ts, stories/S16-undo/operators.test.ts | 5bf4a30 ec6ab98 9b79685 |  |  | Engine passes |
 
 Status values: Not started, Engine in progress, Engine passes, Interface in progress, Done.
 
@@ -292,7 +292,7 @@ enform instance show <id>   # state: in progress; step: advisor; holder: Dr. Oka
 
 **Interface path.** Sam opens a link while he is not signed in. SSO signs him in and returns him to the form. As he types, each field shows "Saved on this device", then "Synced". He submits. The step tracker shows "Waiting for Dr. Okafor. Not opened."
 
-The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The submit step still has no browser path: the public API has no client intent for `instance.submitted@1` (ADR 0010 covers a start and a completion). The `instance.started@1` event has carried the instance identity since #187, so the old reason no longer holds.
+The `gui` path of the scenario covers the start step, where the form is filled and the submission starts. The engine path posts the start and the submit as client intents (ADR 0010, ADR 0014, #256). The submit step still has no browser path: the interface's submit of a draft has no gui step in the harness yet.
 
 **Acceptance**
 

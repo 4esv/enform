@@ -21,8 +21,9 @@ import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { MINUTE_MS } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
-import { INSTANCE_STARTED } from './submission.js'
+import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
+import { standingEvents, TASK_REASSIGNED, TASK_RELEASED } from './undo.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 import { STEP_SKIPPED } from './workflow.js'
 
@@ -136,6 +137,24 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       }
       continue
     }
+    if (event.type === INSTANCE_SUBMITTED) {
+      // The submit completes the request form, the first step, skips the
+      // steps the data skips, and enters the next step (ADR 0014, WF-1, S05).
+      const step = stringField(event.payload, 'step')
+      if (step !== undefined) {
+        states.set(step, 'completed')
+        activities.set(step, event.at)
+      }
+      for (const skipped of readSkipped(event.payload.skipped)) {
+        states.set(skipped.step, 'skipped')
+        conditions.set(skipped.step, skipped.condition)
+      }
+      holder = undefined
+      currentStep = stringField(event.payload, 'currentStep')
+      if (currentStep !== undefined) starts.set(currentStep, event.at)
+      queue = stringField(event.payload, 'queue')
+      continue
+    }
     if (event.type === STEP_CLAIMED) {
       const step = stringField(event.payload, 'step')
       if (step === undefined) continue
@@ -156,6 +175,26 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       queue = undefined
       continue
     }
+    if (event.type === TASK_RELEASED) {
+      // The task is back in the pool: the step waits to be opened again (AS-2).
+      const step = stringField(event.payload, 'step')
+      if (step === undefined) continue
+      states.set(step, 'unopened')
+      activities.set(step, event.at)
+      holder = undefined
+      currentStep = step
+      continue
+    }
+    if (event.type === TASK_REASSIGNED) {
+      const step = stringField(event.payload, 'step')
+      if (step === undefined) continue
+      states.set(step, 'opened')
+      activities.set(step, event.at)
+      holder = stringField(event.payload, 'to')
+      currentStep = step
+      queue = undefined
+      continue
+    }
     if (event.type === STEP_COMPLETED) {
       const step = stringField(event.payload, 'step')
       if (step === undefined) continue
@@ -163,7 +202,16 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       comments.delete(step)
       activities.set(step, event.at)
       holder = undefined
-      const next = nextStep(definition, step)?.key
+      // The completion records the route it decided and the steps it skipped
+      // (WF-1, S05, I4); an older event advances in definition order.
+      for (const skipped of readSkipped(event.payload.skipped)) {
+        states.set(skipped.step, 'skipped')
+        conditions.set(skipped.step, skipped.condition)
+      }
+      const recorded = 'currentStep' in event.payload || event.payload.done === true
+      const next = recorded
+        ? stringField(event.payload, 'currentStep')
+        : nextStep(definition, step)?.key
       if (next !== undefined) starts.set(next, event.at)
       currentStep = next
       queue = stringField(event.payload, 'queue')
@@ -219,7 +267,8 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
 /** The events that name this instance (I4); an instance without an id owns none. */
 function ownEvents(instance: Instance, log: Log): readonly Event[] {
   if (instance.instanceId === undefined) return []
-  return log.filter((event) => event.payload.instanceId === instance.instanceId)
+  // An undone action no longer moves a step (S16, D6); the timeline keeps it.
+  return standingEvents(log.filter((event) => event.payload.instanceId === instance.instanceId))
 }
 
 /**

@@ -1,10 +1,11 @@
 // Issue #244, S14, VT-2, WF-1, WF-3, I4, I6: the per-step tracker of an
 // instance. The tracker is a projection of the instance, its pinned definition
-// and the log: the start's skip is skipped with its condition, the current step
-// is opened once it has a holder and unopened before, a completion keeps the
-// history of an earlier step, a send back marks the target step and keeps the
-// comment, and a done instance shows every step completed or skipped. Events of
-// another instance never change the tracker (I4).
+// and the log: the submit's skip is skipped with its condition (ADR 0014), the
+// current step is opened once it has a holder and unopened before, a
+// completion keeps the history of an earlier step, a send back marks the
+// target step and keeps the comment, and a done instance shows every step
+// completed or skipped. Events of another instance never change the tracker
+// (I4).
 
 import { expect, test } from 'vitest'
 import { claim, complete } from '../engine/action.js'
@@ -17,7 +18,7 @@ import { instanceOf, readInstance } from '../engine/instances.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { sendBack } from '../engine/sendBack.js'
-import { startInstance } from '../engine/submission.js'
+import { startInstance, submitInstance } from '../engine/submission.js'
 import { trackerOf } from '../engine/tracker.js'
 
 const SLUG = 'course-overload'
@@ -33,15 +34,14 @@ const definition: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
     {
+      "key": "request",
+      "targets": [{ "starter": "starter" }]
+    },
+    {
       "key": "chair",
       "targets": [{ "starter": "starter" }],
       "outcomes": ["approve"],
       "skipWhen": { "<=": [{ "var": "credits" }, 2] }
-    },
-    {
-      "key": "request",
-      "targets": [{ "starter": "starter" }],
-      "outcomes": ["submit"]
     },
     {
       "key": "advisor",
@@ -72,7 +72,6 @@ const resolve: TargetResolver = (target) => {
 /** The grants of the cast (AC-1, AC-4): each step's outcome on its own resource. */
 const grants: readonly Grant[] = [
   { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
-  { principal: SAM, scopes: ['step.outcome:submit'], resource: `flow:${SLUG}/step:request` },
   { principal: OKAFOR, scopes: ['step.outcome:approve'], resource: `flow:${SLUG}/step:advisor` },
   {
     principal: OKAFOR,
@@ -105,6 +104,21 @@ function seeded(sources: OperationDeps): State {
 function start(state: State, sources: OperationDeps, instanceId = INSTANCE_ID): State {
   const started = startInstance(flow, instanceId, { credits: 2 }, SAM, sources, resolve, grants)
   return apply(started.operation, state)
+}
+
+/** Submit the draft (ADR 0014): the request form is completed and the route decided. */
+function submit(state: State, sources: OperationDeps, instanceId = INSTANCE_ID): State {
+  const instance = instanceAt(state, instanceId)
+  const submitted = submitInstance(
+    instance,
+    SAM,
+    {},
+    instance.version ?? 0,
+    { flow: SLUG, definition, resolve, grants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  return apply(submitted.operation, state)
 }
 
 /** The projected instance, or a named failure. */
@@ -151,38 +165,28 @@ function act(
   return apply(completed.operation, afterClaim)
 }
 
-test('#244 VT-2 the tracker shows the start skip, the current step, a completion and a send back', () => {
+test('#244 VT-2 the tracker shows the submit skip, the current step, a completion and a send back', () => {
   const sources = deps()
   let state = seeded(sources)
   state = start(state, sources)
 
-  // The start routed past the chair, so `chair` is skipped with its condition
-  // (S05, WF-1), `request` waits unopened, and the later steps are not reached.
+  // The draft sits on the request form (ADR 0014): `request` waits unopened,
+  // and nothing is routed or skipped yet.
   expect(trackerAt(state)).toEqual([
-    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'request', state: 'unopened', startAt: 1_700_000_000_000 },
+    { key: 'chair', state: 'not-reached' },
     { key: 'advisor', state: 'not-reached' },
     { key: 'registrar', state: 'not-reached' },
   ])
 
-  // Sam claims the request step: it is opened and names its holder (S09, AS-2).
-  const request = claim(instanceAt(state), SAM, instanceAt(state).version ?? 0, sources)
-  if (!request.accepted || request.operation === undefined) throw new Error(request.reason)
-  state = apply(request.operation, state)
-  expect(trackerAt(state)[1]).toEqual({
-    key: 'request',
-    state: 'opened',
-    holder: SAM,
-    startAt: 1_700_000_000_000,
-    lastActivityAt: 1_700_000_000_000,
-  })
-
-  // The completion moves the instance to the advisor step and keeps `request`
-  // as history: completed, not the current step (VT-2).
-  state = act(state, sources, SAM, 'submit')
+  // The submit completes the request form and routes past the chair, so
+  // `chair` is skipped with its condition (S05, WF-1), the advisor waits
+  // unopened, and `request` stays as history: completed, not the current
+  // step (VT-2).
+  state = submit(state, sources)
   expect(trackerAt(state)).toEqual([
-    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'request', state: 'completed', startAt: T, lastActivityAt: T },
+    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'advisor', state: 'unopened', startAt: T },
     { key: 'registrar', state: 'not-reached' },
   ])
@@ -205,8 +209,8 @@ test('#244 VT-2 the tracker shows the start skip, the current step, a completion
   if (!sent.accepted || sent.operation === undefined) throw new Error(sent.reason)
   state = apply(sent.operation, state)
   expect(trackerAt(state)).toEqual([
-    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'request', state: 'sent-back', comment: COMMENT, startAt: T, lastActivityAt: T },
+    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'advisor', state: 'opened', startAt: T, lastActivityAt: T },
     { key: 'registrar', state: 'not-reached' },
   ])
@@ -216,14 +220,14 @@ test('#244 VT-2 a done instance shows every step completed or skipped', () => {
   const sources = deps()
   let state = seeded(sources)
   state = start(state, sources)
-  state = act(state, sources, SAM, 'submit')
+  state = submit(state, sources)
   state = act(state, sources, OKAFOR, 'approve')
   state = act(state, sources, ANA, 'approve')
 
   expect(instanceAt(state).done).toBe(true)
   expect(trackerOf(instanceAt(state), definition, state.log)).toEqual([
-    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'request', state: 'completed', startAt: T, lastActivityAt: T },
+    { key: 'chair', state: 'skipped', condition: { '<=': [{ var: 'credits' }, 2] } },
     { key: 'advisor', state: 'completed', startAt: T, lastActivityAt: T },
     { key: 'registrar', state: 'completed', startAt: T, lastActivityAt: T },
   ])
@@ -242,41 +246,18 @@ test('#246 VT-2 the tracker carries the entry time and the last activity from th
   state = start(state, sources)
   const started = state.log[state.log.length - 1]
 
-  // The first active step is entered at the start and has no activity yet.
-  expect(trackerAt(state)[1]).toEqual({
+  // The request form is entered at the start and has no activity yet.
+  expect(trackerAt(state)[0]).toEqual({
     key: 'request',
     state: 'unopened',
     startAt: started.at,
   })
 
-  // The claim is the newest event for the step; the entry time stays the start.
-  const claimed = claim(instanceAt(state), SAM, instanceAt(state).version ?? 0, sources)
-  if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
-  state = apply(claimed.operation, state)
-  const claimEvent = state.log[state.log.length - 1]
-  expect(trackerAt(state)[1]).toEqual({
-    key: 'request',
-    state: 'opened',
-    holder: SAM,
-    startAt: started.at,
-    lastActivityAt: claimEvent.at,
-  })
-
-  // The completion is the newest event for the request, and it enters the
-  // advisor step, so the advisor starts at the completion's time.
-  const completed = complete(
-    instanceAt(state),
-    SAM,
-    'submit',
-    {},
-    instanceAt(state).version ?? 0,
-    { flow: SLUG, definition, grants, resolve },
-    sources
-  )
-  if (!completed.accepted || completed.operation === undefined) throw new Error(completed.reason)
-  state = apply(completed.operation, state)
+  // The submit is the newest event for the request, and it enters the advisor
+  // step, so the advisor starts at the submit's time (ADR 0014).
+  state = submit(state, sources)
   const completionEvent = state.log[state.log.length - 1]
-  expect(trackerAt(state)[1]).toEqual({
+  expect(trackerAt(state)[0]).toEqual({
     key: 'request',
     state: 'completed',
     startAt: started.at,
@@ -305,7 +286,7 @@ test('#246 VT-2 the tracker carries the entry time and the last activity from th
   if (!sent.accepted || sent.operation === undefined) throw new Error(sent.reason)
   state = apply(sent.operation, state)
   const sendBackEvent = state.log[state.log.length - 1]
-  expect(trackerAt(state)[1]).toEqual({
+  expect(trackerAt(state)[0]).toEqual({
     key: 'request',
     state: 'sent-back',
     comment: COMMENT,
@@ -324,14 +305,14 @@ test('#244 I4 another instance never changes the tracker', () => {
   const sources = deps()
   let state = seeded(sources)
   state = start(state, sources)
-  state = act(state, sources, SAM, 'submit')
+  state = submit(state, sources)
   const before = trackerAt(state)
 
   // A second instance starts on the same flow and reaches the advisor step. The
   // first instance's events and the second's are told apart by the instance id
   // (I4), so the first tracker is byte for byte the same.
   state = start(state, sources, OTHER_ID)
-  state = act(state, sources, SAM, 'submit', OTHER_ID)
+  state = submit(state, sources, OTHER_ID)
   expect(trackerAt(state)).toEqual(before)
   expect(trackerAt(state, OTHER_ID)[2]).toEqual({
     key: 'advisor',
@@ -347,6 +328,7 @@ test('#248 VT-2 the tracker carries the step deadline as the due time (SE-4)', (
   const definitionWithTimer = parse(`{
     "schemaVersion": 2,
     "steps": [
+      { "key": "request", "targets": [{ "starter": "starter" }] },
       {
         "key": "wait",
         "targets": [{ "user": "user:okafor" }],
@@ -374,16 +356,27 @@ test('#248 VT-2 the tracker carries the step deadline as the due time (SE-4)', (
   const published = publish(pushed.flow, sources, 'user:dana')
   const seededState = apply(published.operation, apply(pushed.operation, emptyState))
   const started = startInstance(flowWithTimer, INSTANCE_ID, {}, SAM, sources, resolve, grants)
-  const state = apply(started.operation, seededState)
+  // The submit enters the step with the deadline (ADR 0014), so the due time
+  // counts from the submit.
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionWithTimer, resolve, grants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  const state = apply(submitted.operation, apply(started.operation, seededState))
   const instance = instanceOf(state.log, INSTANCE_ID)
   if (instance === undefined) throw new Error('the log holds no started instance')
   const tracker = trackerOf(instance, definitionWithTimer, state.log)
-  expect(tracker[0]).toEqual({
+  expect(tracker[1]).toEqual({
     key: 'wait',
     state: 'unopened',
     startAt: T,
     dueAt: T + 10 * 60_000,
   })
   // The next step is not reached, so it has no start time and no due time.
-  expect(tracker[1]).toEqual({ key: 'after', state: 'not-reached' })
+  expect(tracker[2]).toEqual({ key: 'after', state: 'not-reached' })
 })

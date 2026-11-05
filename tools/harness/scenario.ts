@@ -1,4 +1,5 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
 import {
   type ActorId,
   createOperation,
@@ -18,10 +19,18 @@ export type Step = {
   readonly actor: ActorId
   /** The versioned event type of the operation the step appends. */
   readonly type: string
-  /** The payload of the operation the step appends. */
+  /** The payload of the operation the step appends: the resolved event (ADR 0010). */
   readonly payload: Readonly<Record<string, unknown>>
   /** The side effects that the step causes (I2); absent when it causes none. */
   readonly outbox?: readonly OutboxEntry[]
+  /**
+   * The intent a client posts for this step (ADR 0010, #256): the payload it
+   * honestly knows, which the server resolves through the engine into the
+   * declared `payload` and `outbox`. When present, api and cli mode post the
+   * intent and check that the resolved event equals the declared step; absent,
+   * they post the declared operation as it is.
+   */
+  readonly intent?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -62,6 +71,29 @@ export type Scenario = {
   /** The flow slug that the interface path opens (the `/app/?slug=` value). */
   readonly flowSlug?: string
   readonly steps: readonly Step[]
+  /**
+   * The grants that the installation holds before the story (#256, AC-1): what
+   * `enform init` seeds for the first administrator, and what an earlier story
+   * granted. The harness server authorizes every intent against the grants
+   * that apply to the acting principal (I8), so a story whose first step needs
+   * a scope declares it here rather than appending an unauthorized operation.
+   */
+  readonly bootstrap?: readonly Grant[]
+  /**
+   * The directory groups each principal of the cast holds (ID-4, ID-5, #256),
+   * keyed by principal id, so a grant to a group reaches its members as the
+   * session's groups do on a release server, and a group target resolves to
+   * them (AS-4). A team is read from the log (AS-6): a story that routes to a
+   * team creates it in its steps.
+   */
+  readonly membership?: Readonly<Record<string, readonly string[]>>
+  /**
+   * The step clock of the story (I6): the time of each step. Absent, step i
+   * happens at time i + 1. A story whose engine reads elapsed time (an idle
+   * limit, a deadline, an undo period) declares a clock that places its
+   * steps in time; the Clock operator moves it from there.
+   */
+  readonly clock?: StepClock
   /**
    * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
    * the same steps in a browser). A gui step maps to the engine step at the
@@ -112,6 +144,11 @@ export type StepClock = (stepIndex: number) => number
 /** The golden step clock (I6): step i happens at time i + 1. */
 export const goldenClock: StepClock = (index) => index + 1
 
+/** The step clock of a scenario (I6): its own, or the golden step clock. */
+export function clockOf(scenario: Scenario): StepClock {
+  return scenario.clock ?? goldenClock
+}
+
 /**
  * The operation that one step appends (I2): a step with side effects carries
  * them in the same operation, so one `apply` commits the state change and its
@@ -132,7 +169,7 @@ export function stepOperation(
 
 // The engine-side replay of the steps (I6): the golden end state that a run
 // must reproduce. The clock is the step clock and the IDs are `op-N`.
-export function goldenView(value: Scenario, clock: StepClock = goldenClock): StateView {
+export function goldenView(value: Scenario, clock: StepClock = clockOf(value)): StateView {
   let state = emptyState
   value.steps.forEach((step, i) => {
     state = apply(stepOperation(step, i, clock), state)
@@ -148,7 +185,7 @@ export function goldenView(value: Scenario, clock: StepClock = goldenClock): Sta
 export function goldenViewPrefix(
   value: Scenario,
   count: number,
-  clock: StepClock = goldenClock
+  clock: StepClock = clockOf(value)
 ): StateView {
   let state = emptyState
   for (let i = 0; i < count; i += 1) {

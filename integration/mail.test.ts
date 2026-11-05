@@ -25,8 +25,9 @@ import { type EnformProcess, startEnform } from './server.js'
 // the row queued without crashing the worker, and a refused connection records
 // the attempt count, the last error and a backoff.
 //
-// The assignment email comes from `submitInstance`, which the demo seed calls;
-// the live completion path emits no `instance.submitted@1` yet, so the seed is
+// The assignment emails come from the demo seed's submits and completions
+// (ADR 0014, SE-2): the submit notifies the advisor, and the advisor's
+// completion notifies each registrar team member, so the seed is
 // the product path that records it today.
 
 const RUN = randomUUID().slice(0, 8)
@@ -246,6 +247,18 @@ function castMember(role: string): DemoUser {
   return user
 }
 
+/** Every demo user with one role (the registrar team has two). */
+function castMembers(role: string): readonly DemoUser[] {
+  return (requireSetup().seed.users ?? []).filter((entry) => entry.role === role)
+}
+
+/** The assignment rows that name one step, in outbox order (SE-2). */
+function assignmentRows(step: string): readonly OutboxRow[] {
+  return outboxRows().filter(
+    (row) => row.effect === 'send-assignment' && JSON.parse(row.payload).step === step
+  )
+}
+
 /** One seeded instance by step, or the reason the seed did not carry it. */
 function seededInstance(step: string): DemoInstance {
   const instance = requireSetup().seed.instances?.find((entry) => entry.step === step)
@@ -352,8 +365,10 @@ test('#240 I2 I4 the submit projects one queued assignment row with the recipien
   await clearMailpit()
   // The worker resolves the recipient through the principals projection, so
   // the recipient must have signed in once. That is the normal order: a
-  // person who follows the link has a cached directory profile.
+  // person who follows the link has a cached directory profile. The seed also
+  // queued the registrar team's assignment emails, so both registrars sign in.
   await signIn(castMember('advisor'))
+  for (const registrar of castMembers('registrar')) await signIn(registrar)
 
   const row = outboxRow('send-assignment')
   expect(row.status).toBe('queued')
@@ -374,14 +389,20 @@ test('#240 SE-1 SE-2 the worker sends the assignment email through Mailpit', asy
     expect(row.attempts, 'one successful attempt').toBe(1)
     expect(row.sentAt).not.toBe('')
 
-    const message = await waitForMail('the assignment email', (candidate) =>
-      candidate.Subject.includes('task assigned (advisor)')
-    )
-    expect(message.To.map((to) => to.Address)).toContain(advisor.email)
-    const detail = await mailpitMessage(message.ID)
+    // Three demo instances were submitted, so three assignment emails name
+    // the advisor step; the one for the instance waiting at advisor carries
+    // that instance's link.
     const instanceId = seededInstance('advisor').id
     const link = `${publicUrl}/app/?flow=${encodeURIComponent(seed.flow?.slug ?? '')}&instance=${instanceId}`
-    expect(detail.Text).toContain(link)
+    const detail = await waitFor('the assignment email of the advisor instance', async () => {
+      for (const candidate of await mailpitMessages()) {
+        if (!candidate.Subject.includes('task assigned (advisor)')) continue
+        const read = await mailpitMessage(candidate.ID)
+        if (read.Text.includes(link)) return read
+      }
+      return undefined
+    })
+    expect(detail.To.map((to) => to.Address)).toContain(advisor.email)
     expect(detail.Text, 'the template carries no form value').not.toContain('Three extra credits')
     expect(detail.HTML).toContain(link.replace(/&/g, '&amp;'))
   } finally {
@@ -399,10 +420,13 @@ test('#240 I3 I4 a rebuild keeps the delivery status and a second pass sends no 
   expect(after?.status, 'a delivered row stays delivered across a rebuild').toBe('sent')
   expect(after?.attempts).toBe(1)
 
+  // Three demo instances were submitted, so the advisor got three assignment
+  // emails, one per row (SE-2); the worker delivered every assignment row.
+  const advisorRows = assignmentRows('advisor')
   const countBefore = (await mailpitMessages()).filter((message) =>
     message.Subject.includes('task assigned (advisor)')
   ).length
-  expect(countBefore).toBe(1)
+  expect(countBefore).toBe(advisorRows.length)
 
   const worker = startWorker(configPath)
   await delay(2_500)
@@ -410,10 +434,10 @@ test('#240 I3 I4 a rebuild keeps the delivery status and a second pass sends no 
   const countAfter = (await mailpitMessages()).filter((message) =>
     message.Subject.includes('task assigned (advisor)')
   ).length
-  expect(countAfter, 'the sent row is not delivered again (I3)').toBe(1)
+  expect(countAfter, 'the sent rows are not delivered again (I3)').toBe(advisorRows.length)
   expect(outboxRow('send-assignment').status).toBe('sent')
   expect(queryDatabase(databaseUrl, "select count(*) from outbox where status = 'sent'")[0]).toBe(
-    '1'
+    String(assignmentRows('advisor').length + assignmentRows('registrar').length)
   )
 })
 
@@ -473,6 +497,8 @@ test('#240 SE-2 a withdrawal delivers the withdrawn-or-cancelled template', asyn
   const { configPath, publicUrl, seed } = requireSetup()
   const starter = castMember('starter')
   const starterToken = await signIn(starter)
+  // The request instance is Sam's unsubmitted draft (ADR 0014); withdrawing
+  // it discards the draft and notifies its only assignee, Sam himself.
   const instanceId = seededInstance('request').id
   const withdrawn = await postOperation(starterToken, {
     id: randomUUID(),

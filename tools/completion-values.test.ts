@@ -9,16 +9,17 @@ import { contentHash, type Instance } from '../engine/instance.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
-import { startInstance } from '../engine/submission.js'
+import { startInstance, submitInstance } from '../engine/submission.js'
 
-// Issue #191, FM-3, FM-7, FM-4, AS-2, I8, A9: the write rule of FM-3, in the
-// engine. A completion records the values that the step captured (FM-7), and
-// the engine refuses a captured key the current step does not make editable,
-// naming the field (FM-3 criterion 2, FM-4). The refusal uses the same function
-// that the step-scoped read uses for `editable` (engine/editable.ts), so a
-// field the read does not list is exactly a field the completion refuses. The
-// rule lives in the engine only (A9): the CLI, the API and the interface do not
-// repeat it.
+// Issue #191, #256, FM-3, FM-7, FM-4, AS-2, I8, A9, ADR 0014: the write rule
+// of FM-3, in the engine. A completion records the values that the step
+// captured (FM-7), and the engine refuses a captured key the current step does
+// not make editable, naming the field (FM-3 criterion 2, FM-4). The refusal
+// uses the same function that the step-scoped read uses for `editable`
+// (engine/editable.ts), so a field the read does not list is exactly a field
+// the completion refuses. The instance sits on the review step: the starter
+// submitted the request form, and Okafor holds the review. The rule lives in
+// the engine only (A9): the CLI, the API and the interface do not repeat it.
 
 const SLUG = 'course-overload'
 const SAM = 'user:sam'
@@ -53,7 +54,7 @@ const definition: FlowDefinition = parse(`{
 }
 `)
 
-/** A one-step flow whose step declares no `editable`, so it makes no field editable (FM-3). */
+/** A flow whose review step declares no `editable`, so it makes no field editable (FM-3). */
 const lockedDefinition: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
@@ -62,7 +63,14 @@ const lockedDefinition: FlowDefinition = parse(`{
       "targets": [{ "starter": "starter" }],
       "fields": [{ "key": "summary", "control": "text" }],
       "visible": ["summary"],
-      "outcomes": ["submit"]
+      "editable": ["summary"]
+    },
+    {
+      "key": "review",
+      "targets": [{ "user": "${OKAFOR}" }],
+      "fields": [{ "key": "summary", "control": "text" }],
+      "visible": ["summary"],
+      "outcomes": ["approve"]
     }
   ]
 }
@@ -78,9 +86,14 @@ const resolve: TargetResolver = (target) => {
   return []
 }
 
-/** Sam's grants (AC-1, AC-4): he may start the flow and submit the request step. */
+/** Sam's grant (AC-1): he may start the flow, and the starter submits the request form (ADR 0014). */
+const samGrants: readonly Grant[] = [
+  { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
+]
+
+/** Okafor's grant (AC-4): he may approve the review step. */
 const grants: readonly Grant[] = [
-  { principal: SAM, scopes: ['instance.start', 'step.outcome:submit'], resource: `flow:${SLUG}` },
+  { principal: OKAFOR, scopes: ['step.outcome:approve'], resource: `flow:${SLUG}` },
 ]
 
 /** The injected sources of the test (I6): a fixed time and `op-N` IDs. */
@@ -111,7 +124,8 @@ function seeded(definition: FlowDefinition, sources: OperationDeps): State {
 }
 
 /**
- * The claimed instance of the request step (S09, AS-2, I5): a start then a
+ * The claimed instance of the review step (S06, S09, AS-2, I5, ADR 0014): a
+ * start, the starter's submit, which routes to the review, then Okafor's
  * claim, so a completion has a holder. The state carries the log, so the read
  * can project the same instance.
  */
@@ -126,11 +140,22 @@ function claimed(
     SAM,
     sources,
     resolve,
-    grants
+    samGrants
   )
-  const state = apply(started.operation, seeded(definition, sources))
-  const opened = state.log.length
-  const claimResult = claim({ ...started.instance, version: opened }, SAM, opened, sources)
+  let state = apply(started.operation, seeded(definition, sources))
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) {
+    throw new Error(`the submit was refused: ${submitted.reason}`)
+  }
+  state = apply(submitted.operation, state)
+  const claimResult = claim(submitted.instance, OKAFOR, submitted.instance.version ?? 0, sources)
   if (!claimResult.accepted || claimResult.operation === undefined) {
     throw new Error(`the claim was refused: ${claimResult.reason}`)
   }
@@ -151,9 +176,9 @@ test('#191 FM-7 a completion records the values the step captured in step.comple
   const { instance } = claimed(definition, sources)
   const result = complete(
     instance,
-    SAM,
-    'submit',
-    { summary: 'hello' },
+    OKAFOR,
+    'approve',
+    { decision: 'approve' },
     instance.version ?? 0,
     completion(definition),
     sources
@@ -165,22 +190,22 @@ test('#191 FM-7 a completion records the values the step captured in step.comple
   expect(result.operation.type).toBe(STEP_COMPLETED)
   // The captured values ride in the payload beside the step and the outcome
   // (FM-7).
-  expect(result.operation.payload.values).toEqual({ summary: 'hello' })
-  expect(result.operation.payload.step).toBe('request')
-  expect(result.operation.payload.outcome).toBe('submit')
+  expect(result.operation.payload.values).toEqual({ decision: 'approve' })
+  expect(result.operation.payload.step).toBe('review')
+  expect(result.operation.payload.outcome).toBe('approve')
 })
 
 test('#191 FM-3 a completion refuses a value the step does not make editable, naming the field', () => {
   const sources = deps()
   const { instance } = claimed(definition, sources)
-  // `detail` is a field of the request step that it does not make editable,
-  // `decision` is a field of the review step, and `other` names no field at
-  // all: none of them is editable here (FM-3).
-  for (const key of ['detail', 'decision', 'other']) {
+  // `summary` and `detail` are fields of the request step, not of the review
+  // step the instance sits on, and `other` names no field at all: none of
+  // them is editable here (FM-3).
+  for (const key of ['summary', 'detail', 'other']) {
     const result = complete(
       instance,
-      SAM,
-      'submit',
+      OKAFOR,
+      'approve',
       { [key]: 'value' },
       instance.version ?? 0,
       completion(definition),
@@ -197,8 +222,8 @@ test('#191 FM-3 a completion refuses a value the step does not make editable, na
   const locked = claimed(lockedDefinition, sources)
   const refused = complete(
     locked.instance,
-    SAM,
-    'submit',
+    OKAFOR,
+    'approve',
     { summary: 'hello' },
     locked.instance.version ?? 0,
     completion(lockedDefinition),
@@ -213,8 +238,8 @@ test('#191 a completion with an empty values record is accepted and advances as 
   const { instance } = claimed(definition, sources)
   const result = complete(
     instance,
-    SAM,
-    'submit',
+    OKAFOR,
+    'approve',
     {},
     instance.version ?? 0,
     completion(definition),
@@ -224,9 +249,10 @@ test('#191 a completion with an empty values record is accepted and advances as 
   expect(result.operation?.payload.values).toEqual({})
   // The step still advances and clears the holder, exactly as it did before
   // the values parameter: a step that captures nothing is not a regression.
-  expect(result.instance.currentStep).toBe('review')
+  // The review step is the last, so the instance is done (WF-1).
+  expect(result.instance.currentStep).toBeUndefined()
   expect(result.instance.holder).toBeUndefined()
-  expect(result.instance.done).toBe(false)
+  expect(result.instance.done).toBe(true)
 })
 
 test('#191 FM-3 the read and the write agree on the editable field keys', () => {
@@ -234,22 +260,24 @@ test('#191 FM-3 the read and the write agree on the editable field keys', () => 
   const { instance, state } = claimed(definition, sources)
   const projected = instanceOf(state.log, INSTANCE_ID)
   if (projected === undefined) throw new Error('the log holds no instance')
-  const view = readInstance(SAM, projected, {
+  const view = readInstance(OKAFOR, projected, {
     flow: SLUG,
     definition,
     log: state.log,
     grants,
   })
-  expect(view?.editable).toEqual(['summary'])
+  expect(view?.editable).toEqual(['decision'])
   // A field the read lists as editable is accepted and a field it does not
   // list is refused, so the read and the write share one rule and cannot
   // disagree (FM-3, FM-4).
-  for (const key of ['summary', 'detail', 'decision']) {
+  // The value of `decision` is one of its options, so only the editability
+  // decides (FM-3), not the control's validation (FM-4).
+  for (const key of ['decision', 'summary', 'detail']) {
     const result = complete(
       instance,
-      SAM,
-      'submit',
-      { [key]: 'value' },
+      OKAFOR,
+      'approve',
+      { [key]: key === 'decision' ? 'approve' : 'value' },
       instance.version ?? 0,
       completion(definition),
       sources

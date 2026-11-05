@@ -34,8 +34,9 @@ export const TAKEOVER_NOTIFICATION = 'send-takeover'
  * The result of a takeover (I5, AS-3, I14). `accepted` says whether the engine
  * reassigned the holder. When it did not, the instance is unchanged,
  * `operation` and `outbox` are absent, and `reason` says why: a stale view, an
- * actor that is not an assignee, an unclaimed step, or a holder whose idle time
- * is below the idle period, with the remaining time.
+ * actor that is not an assignee, an unclaimed step, a holder who takes over
+ * from himself, or a holder whose idle time is below the idle period, with the
+ * remaining time.
  */
 export type TakeoverResult = {
   readonly accepted: boolean
@@ -90,6 +91,11 @@ export function takeover(
   const holder = instance.holder
   if (holder === undefined) {
     return { accepted: false, instance, reason: `step ${step}: the task is not claimed` }
+  }
+  // A takeover moves the task from a peer (AS-3): the holder already has it,
+  // so a takeover by the holder changes nothing and is refused.
+  if (holder === actor) {
+    return { accepted: false, instance, reason: `step ${step}: ${actor} already holds the task` }
   }
   const claimedAt = claimTimeOf(log, instance.instanceId ?? '', step, holder)
   if (claimedAt === undefined) {

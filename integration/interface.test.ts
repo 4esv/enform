@@ -256,21 +256,20 @@ test('#226 a person fills, claims, approves and reads the three inbox tabs', asy
   const instanceId = instanceOfHref(href, publicUrl)
   const taskUrl = new URL(href, publicUrl).toString()
 
-  // After the start, Started by me holds the instance and the request is
-  // unopened (VT-1, VT-2).
+  // After the start, Started by me holds the instance as a draft (ADR 0014,
+  // VT-1, VT-2).
   await page.goto(`${publicUrl}/?inbox=1&tab=started`)
   const startedItem = page.locator(`[data-inbox-instance="${instanceId}"]`)
   await startedItem.waitFor({ timeout: 30_000 })
-  expect(await startedItem.getAttribute('data-inbox-state')).toBe('unopened')
+  expect(await startedItem.getAttribute('data-inbox-state')).toBe('draft')
 
-  // Claim the request, then submit it. The page re-reads after each accepted
-  // action, so it shows the approval step next (AS-2, I5).
+  // Submit the draft from its page. The page re-reads after the accepted
+  // submit, so it shows the approval step next (ADR 0014, I5).
   await page.goto(taskUrl)
-  await page.locator('[data-claim]').waitFor({ timeout: 30_000 })
+  await page.locator('[data-submit]').waitFor({ timeout: 30_000 })
   expect(await page.textContent('.instance-status')).toContain('Step 1 of 2')
-  await page.click('[data-claim]')
-  await page.waitForFunction(() => document.querySelector('.status')?.textContent === 'Claimed')
-  await page.click('[data-outcome="submit"]')
+  expect(await page.textContent('.instance-status')).toContain('draft')
+  await page.click('[data-submit]')
   await page.waitForFunction(() =>
     document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
   )
@@ -288,7 +287,7 @@ test('#226 a person fills, claims, approves and reads the three inbox tabs', asy
     'the completed request left my tasks'
   ).toBe(0)
 
-  // A stale completion reusing the version the request was completed at
+  // A stale completion reusing the version the draft was submitted at
   // answers 409 and appends nothing (I5).
   const token = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
   const stale = await fetch(`${publicUrl}/api/v1/operations`, {
@@ -299,7 +298,7 @@ test('#226 a person fills, claims, approves and reads the three inbox tabs', asy
       type: 'step.completed@1',
       at: Date.now(),
       actor: 'user:someone-else',
-      payload: { instanceId, version: 1, outcome: 'submit', values: {} },
+      payload: { instanceId, version: 0, outcome: 'approve', values: {} },
     }),
   })
   expect(stale.status, await stale.text()).toBe(409)
@@ -470,9 +469,9 @@ test('#228 an administrator creates a second user who claims and approves', asyn
   await grantOutcomes(page, 0)
   await grantOutcomes(page, 1)
 
-  // The administrator fills and starts the form, then claims and submits the
-  // request step (FM-7, AS-2). The published definition keeps the labels and
-  // the non-default controls: the start page shows `Summary` as an email
+  // The administrator fills and saves the draft, then submits it from the
+  // draft page (FM-7, ADR 0014). The published definition keeps the labels
+  // and the non-default controls: the start page shows `Summary` as an email
   // input and `Credits` as a number input (FM-1).
   await page.goto(`${publicUrl}/?flow=${TWO_USER_SLUG}`)
   const summary = page.locator('input[name="summary"]')
@@ -493,15 +492,13 @@ test('#228 an administrator creates a second user who claims and approves', asyn
   const taskUrl = new URL(href, publicUrl).toString()
 
   await page.goto(taskUrl)
-  await page.locator('[data-claim]').waitFor({ timeout: 30_000 })
-  // The task page renders from the instance read, so the label and the control
-  // that the read carries are the ones the holder sees (FM-1, FM-3).
+  await page.locator('[data-submit]').waitFor({ timeout: 30_000 })
+  // The draft page renders from the instance read, so the label and the
+  // control that the read carries are the ones the starter sees (FM-1, FM-3).
   const heldSummary = page.locator('.field', { hasText: 'Summary' })
-  expect(await heldSummary.count(), 'the task page shows the field label').toBe(1)
+  expect(await heldSummary.count(), 'the draft page shows the field label').toBe(1)
   expect(await heldSummary.locator('input[name="summary"]').getAttribute('type')).toBe('email')
-  await page.click('[data-claim]')
-  await page.waitForFunction(() => document.querySelector('.status')?.textContent === 'Claimed')
-  await page.click('[data-outcome="submit"]')
+  await page.click('[data-submit]')
   await page.waitForFunction(() =>
     document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
   )
@@ -632,7 +629,8 @@ test('#232 a requester added as a starter starts and submits a published flow', 
 
   // The Starters section adds the requester through the write path: two grant
   // operations, `instance.start` on the flow and `step.outcome:submit` on the
-  // first step (AC-1, AC-2, I8).
+  // first step (AC-1, AC-2, I8). The submit itself needs only `instance.start`
+  // (ADR 0014); the outcome grant is what the builder's starter grid records.
   expect(await page.locator('[data-starters-empty]').count(), 'no starter is set yet').toBe(1)
   await page.fill('[data-starter-input]', `user:${requesterId}`)
   await page.click('[data-add-starter]')
@@ -671,13 +669,9 @@ test('#232 a requester added as a starter starts and submits a published flow', 
     const taskUrl = new URL(href, publicUrl).toString()
 
     await requesterPage.goto(taskUrl)
-    await requesterPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
+    await requesterPage.locator('[data-submit]').waitFor({ timeout: 30_000 })
     expect(await requesterPage.textContent('.instance-status')).toContain('Step 1 of 2')
-    await requesterPage.click('[data-claim]')
-    await requesterPage.waitForFunction(
-      () => document.querySelector('.status')?.textContent === 'Claimed'
-    )
-    await requesterPage.click('[data-outcome="submit"]')
+    await requesterPage.click('[data-submit]')
     await requesterPage.waitForFunction(() =>
       document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 2')
     )

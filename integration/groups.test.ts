@@ -172,17 +172,21 @@ beforeAll(async () => {
       escalationGroup,
     }
 
+    // The request form is the first step (ADR 0014): the starter's draft sits
+    // on it, and the submit routes to the group step under test.
+    const request = { key: 'request', targets: [{ starter: 'starter' }] }
     await publishFlow(CHAIR_SLUG, {
       schemaVersion: 2,
-      steps: [{ key: 'review', targets: [{ group: chairsGroup }], outcomes: ['approve'] }],
+      steps: [request, { key: 'review', targets: [{ group: chairsGroup }], outcomes: ['approve'] }],
     })
     await publishFlow(EMPTY_SLUG, {
       schemaVersion: 2,
-      steps: [{ key: 'empty', targets: [{ group: emptyGroup }], outcomes: ['approve'] }],
+      steps: [request, { key: 'empty', targets: [{ group: emptyGroup }], outcomes: ['approve'] }],
     })
     await publishFlow(ESCALATION_SLUG, {
       schemaVersion: 2,
       steps: [
+        request,
         {
           key: 'review',
           targets: [{ user: chair.id }],
@@ -331,7 +335,11 @@ async function grant(
   })
 }
 
-/** Start one published flow as the starter through the public API (ADR 0010). */
+/**
+ * Start one published flow as the starter through the public API and submit
+ * the draft (ADR 0010, ADR 0014): the submit routes to the group step under
+ * test and resolves the group through the directory.
+ */
 async function start(slug: string, instanceId: string): Promise<void> {
   const { starter } = requireSetup()
   const response = await personFetch(starter.token, '/api/v1/operations', {
@@ -345,6 +353,17 @@ async function start(slug: string, instanceId: string): Promise<void> {
     }),
   })
   await json(response, `starting ${slug}`)
+  const submitted = await personFetch(starter.token, '/api/v1/operations', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: randomUUID(),
+      type: 'instance.submitted@1',
+      at: Date.now(),
+      actor: starter.id,
+      payload: { instanceId, version: 0, values: {} },
+    }),
+  })
+  await json(submitted, `submitting ${slug}`)
 }
 
 /** Read one inbox tab for one person. */
@@ -456,7 +475,7 @@ test('#252 S08 AS-1 a group target resolves to every member and no one else', as
   expect(view.status.currentStep).toBe('review')
 }, 120_000)
 
-test('#252 S08 I10 an empty group starts in the Unroutable queue and alerts the owner', async () => {
+test('#252 S08 I10 an empty group routes to the Unroutable queue and alerts the owner', async () => {
   const { owner, outsider, configPath } = requireSetup()
   await clearMailpit()
 
@@ -501,7 +520,7 @@ test('#252 S08 I10 an empty group starts in the Unroutable queue and alerts the 
   )
   expect(outsiderQueue, 'a principal without task.reassign reads no row').toEqual([])
 
-  // A rebuild reproduces the queue from the start event (I4, I10).
+  // A rebuild reproduces the queue from the submit event (I4, I10).
   const rebuilt = runCli(['admin', 'rebuild', '--config', configPath])
   expect(rebuilt.status, rebuilt.stderr).toBe(0)
   expect(taskRow(instances.empty).queue, 'the rebuild keeps the queue').toBe('queue:unroutable')

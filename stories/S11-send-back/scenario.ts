@@ -1,96 +1,255 @@
-import type { Grant } from '../../engine/authorize.js'
-import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, parse } from '../../engine/definition.js'
-import type { Flow, FlowVersion } from '../../engine/flow.js'
-import { contentHash } from '../../engine/instance.js'
-import type { TargetResolver } from '../../engine/routing.js'
+import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { DEFINITION_CHANGED } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
+import { STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
+import {
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  ANA,
+  bootstrap,
+  declared,
+  definitionV1,
+  directory,
+  FLOW,
+  flow,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
+  LEE,
+  membership,
+  OKAFOR,
+  REGISTRAR_STEP,
+  REQUEST_STEP,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+  stepResource,
+} from '../example-flow.js'
 
-// S11: send back for revision (STORIES.md). Sam's course-overload request is at
-// the registrar step, held by Jordan, a registrar reviewer. Jordan holds only
-// `step.outcome:send_back` on that step (AC-4), so he may send the request back
-// to the starter's `request` step with a note and may not approve it. The send
-// back needs a comment (WF-3), it moves the instance back to `request` as
-// revision 2, and the note to Sam rides in the same commit (I2, SE-2). The path
-// is deterministic (I6): it reads no clock and no random source, and the
-// directory is injected.
+// S11: send back for revision (STORIES.md). Dr. Okafor holds Sam's request at
+// the advisor step and sends it back to the request form with a note (WF-2,
+// WF-3): the instance becomes a draft again (ADR 0014), Sam corrects it and
+// submits it a second time, and the request reaches the advisor step as
+// revision 2. Dr. Okafor approves, and at the registrar step Jordan, who
+// holds `step.outcome:send_back` only (S02, AC-4), sends it back to the
+// advisor step with a note. Every step after the setup is a client intent
+// that the server resolves (ADR 0010). The path is deterministic (I6).
 
-/** The flow slug of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
+/** Sam's request: a two-credit overload, so the chair step is skipped (S05). */
+export const values = samValues(2)
 
-/** Sam, the student who starts the request (S06). */
-export const STARTER = 'user:sam'
+/** The note that Dr. Okafor attaches to the send back (WF-3, SE-2). */
+export const COMMENT = 'Attach your degree audit'
 
-/** Jordan, the registrar reviewer: he holds send back only, never approve (S02, AC-4). */
-export const JORDAN = 'user:jordan'
+/** The note that Jordan attaches to his send back at the registrar step (WF-3). */
+export const JORDAN_COMMENT = 'Confirm the advisor signature'
 
-/** The team that holds the registrar task (AS-1, AS-4). */
-export const REGISTRAR_TEAM = 'registrar-office'
+/** The correction that Sam makes before he submits again (WF-3). */
+export const CORRECTION = { summary: 'three extra credits, degree audit attached' }
 
-/** The two steps: the starter's request, then the registrar task (WF-1). */
-export const REQUEST_STEP = 'request'
-export const REGISTRAR_STEP = 'registrar'
+/** The indexes of the story's steps after the setup. */
+export const STEP = {
+  start: 6,
+  submit: 7,
+  okaforClaim: 8,
+  okaforSendBack: 9,
+  resubmit: 10,
+  okaforClaimAgain: 11,
+  okaforApprove: 12,
+  jordanClaim: 13,
+  jordanSendBack: 14,
+} as const
 
-/** The resource of each step (MVP.md 5.6). */
-export const REQUEST_RESOURCE = `flow:${SLUG}/step:${REQUEST_STEP}`
-export const REGISTRAR_RESOURCE = `flow:${SLUG}/step:${REGISTRAR_STEP}`
+/** The golden path: the setup, then the request, its send back, its resubmission, and Jordan's send back. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps()]
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
+  const okafor = grantsOfPerson(OKAFOR)
+  const okaforContext = (actorValues = values) => ({
+    flow: SLUG,
+    definition: definitionV1,
+    grants: okafor,
+    resolve: directory(actorValues),
+  })
 
-/** The members of the registrar team when the request reaches it (AS-1, I13). */
-export const REGISTRAR_MEMBERS: readonly string[] = [JORDAN]
+  // Sam starts and submits; the submit routes to Dr. Okafor (ADR 0014).
+  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(STEP.start), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: sam, owner: SAM },
+    depsFor(STEP.submit)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
 
-/** The definition of version 1: a request step, then a registrar step (WF-1). */
-export const definition: FlowDefinition = parse(`{
-  "schemaVersion": 1,
-  "steps": [
+  // Dr. Okafor claims the advisor task and sends the request back to the
+  // request form with a note: the instance is a draft again, revision 2 of
+  // the request step, and the note to Sam rides in the same commit (WF-3,
+  // ADR 0014, I2, SE-2).
+  const okaforClaim = claim(instanceAfter(steps), OKAFOR, 1, depsFor(STEP.okaforClaim))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const sentBack = sendBack(
+    instanceAfter(steps),
+    OKAFOR,
+    REQUEST_STEP,
+    COMMENT,
+    2,
+    okaforContext(),
+    depsFor(STEP.okaforSendBack)
+  )
+  if (sentBack.operation === undefined) throw new Error(sentBack.reason)
+  steps.push(
+    declared(sentBack.operation, {
+      instanceId: INSTANCE_ID,
+      to: REQUEST_STEP,
+      comment: COMMENT,
+      version: 2,
+    })
+  )
+
+  // Sam corrects the summary and submits again: the request goes to the
+  // advisor step again, and the timeline keeps both revisions (WF-3).
+  const corrected = { ...values, ...CORRECTION }
+  const resubmitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    CORRECTION,
+    3,
     {
-      "key": "${REQUEST_STEP}",
-      "targets": [{ "starter": "starter" }],
-      "outcomes": ["submit"]
+      flow: SLUG,
+      definition: definitionV1,
+      resolve: directory(corrected),
+      grants: sam,
+      owner: SAM,
     },
+    depsFor(STEP.resubmit)
+  )
+  if (resubmitted.operation === undefined) throw new Error(resubmitted.reason)
+  steps.push(
+    declared(resubmitted.operation, { instanceId: INSTANCE_ID, version: 3, values: CORRECTION })
+  )
+
+  // Dr. Okafor claims again and approves: the chair step is skipped for two
+  // credits, so the request routes to the registrar team (WF-1, AS-4).
+  const claimAgain = claim(instanceAfter(steps), OKAFOR, 4, depsFor(STEP.okaforClaimAgain))
+  if (claimAgain.operation === undefined) throw new Error(claimAgain.reason)
+  steps.push(declared(claimAgain.operation, { instanceId: INSTANCE_ID, expectedVersion: 4 }))
+  const approved = complete(
+    instanceAfter(steps),
+    OKAFOR,
+    'approve',
+    {},
+    5,
+    { ...okaforContext(corrected), owner: SAM },
+    depsFor(STEP.okaforApprove)
+  )
+  if (approved.operation === undefined) throw new Error(approved.reason)
+  steps.push(
+    declared(approved.operation, {
+      instanceId: INSTANCE_ID,
+      version: 5,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+
+  // Jordan, a registrar reviewer, claims the registrar task and sends it back
+  // to the advisor step: he may send back and may not approve (S02, AC-4).
+  const jordanClaim = claim(instanceAfter(steps), JORDAN, 6, depsFor(STEP.jordanClaim))
+  if (jordanClaim.operation === undefined) throw new Error(jordanClaim.reason)
+  steps.push(declared(jordanClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 6 }))
+  const jordanSentBack = sendBack(
+    instanceAfter(steps),
+    JORDAN,
+    ADVISOR_STEP,
+    JORDAN_COMMENT,
+    7,
     {
-      "key": "${REGISTRAR_STEP}",
-      "targets": [{ "team": "${REGISTRAR_TEAM}" }],
-      "outcomes": ["approve", "reject", "send_back"]
-    }
-  ]
-}
-`)
-
-/** The published version 1: a start needs a version with a content hash (DF-2). */
-export const versionV1: FlowVersion = {
-  version: 1,
-  contentHash: contentHash(definition),
-  definition,
-}
-
-/** The flow of the story: version 1 published, ready for a start (DF-2). */
-export const flow: Flow = { slug: SLUG, versions: [versionV1] }
-
-/** The data of Sam's request: no step has a skip condition, so the request step is first (WF-1). */
-export const data: ConditionData = {}
-
-/** The directory of the story (AS-1, I13): the starter and a team resolve, a user to itself. */
-export const resolve: TargetResolver = (target) => {
-  if ('starter' in target) return [STARTER]
-  if ('team' in target) return REGISTRAR_MEMBERS
-  if ('user' in target) return [target.user]
-  return []
+      flow: SLUG,
+      definition: definitionV1,
+      grants: grantsOfPerson(JORDAN),
+      resolve: directory(corrected),
+    },
+    depsFor(STEP.jordanSendBack)
+  )
+  if (jordanSentBack.operation === undefined) throw new Error(jordanSentBack.reason)
+  steps.push(
+    declared(jordanSentBack.operation, {
+      instanceId: INSTANCE_ID,
+      to: ADVISOR_STEP,
+      comment: JORDAN_COMMENT,
+      version: 7,
+    })
+  )
+  return steps
 }
 
-/** The grants that apply to Sam: the All-Students group may start the flow (S02, ID-4, AC-1). */
-export const starterGrants: readonly Grant[] = [
-  { principal: STARTER, scopes: ['instance.start'], resource: `flow:${SLUG}` },
-]
+/** The injected sources of step `index` (I6): the golden step clock and the `op-N` id. */
+function depsFor(index: number): { clock: () => number; ids: () => string } {
+  return { clock: () => index + 1, ids: () => `op-${index + 1}` }
+}
 
-/** The grants that apply to Sam on the request step: he submits his own request (S11, WF-1). */
-export const samGrants: readonly Grant[] = [
-  { principal: STARTER, scopes: ['step.outcome:submit'], resource: REQUEST_RESOURCE },
-]
+export const golden = scenario({
+  slug: 'send-back',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
+})
 
 /**
- * The grants that apply to Jordan (S11, AC-4): he holds
- * `step.outcome:send_back` on the registrar step and no other scope, so he may
- * send the task back and may not approve it.
+ * What each step requires of its actor (I8): the starter for a submit, an
+ * assignee for a claim, the holder with `step.outcome:send_back` for a send
+ * back and with `step.outcome:approve` for an approval (AC-4).
  */
-export const jordanGrants: readonly Grant[] = [
-  { principal: JORDAN, scopes: ['step.outcome:send_back'], resource: REGISTRAR_RESOURCE },
-]
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      return { actors: index === STEP.jordanClaim ? [LEE, ANA, JORDAN] : [OKAFOR] }
+    case STEP_SENT_BACK:
+      return index === STEP.jordanSendBack
+        ? {
+            scope: 'step.outcome:send_back',
+            resource: stepResource(REGISTRAR_STEP),
+            actors: [JORDAN],
+          }
+        : {
+            scope: 'step.outcome:send_back',
+            resource: stepResource(ADVISOR_STEP),
+            actors: [OKAFOR],
+          }
+    case STEP_COMPLETED:
+      return {
+        scope: 'step.outcome:approve',
+        resource: stepResource(ADVISOR_STEP),
+        actors: [OKAFOR],
+      }
+    default:
+      throw new Error(`S11: step ${index + 1} has no requirement (${step.type})`)
+  }
+}

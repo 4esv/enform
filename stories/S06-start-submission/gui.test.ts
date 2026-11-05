@@ -2,16 +2,18 @@ import { expect, test } from 'vitest'
 import { outboxOf } from '../../engine/outbox.js'
 import { runSteps } from '../../tools/harness/runner.js'
 import { goldenViewPrefix, toView } from '../../tools/harness/scenario.js'
-import { flowState, golden, resolve, samGrants } from './scenario.js'
+import { flowState, guiGolden as golden, resolve, samGrants } from './scenario.js'
 
 // Issue #27, STORIES.md Golden path and Interface path: gui mode runs a
 // scenario's steps in a browser, and each covered GUI step maps to the engine
 // step at the same index. The interface path of S06 covers the start step
 // only: Sam opens the form link, fills the request form and submits it, which
-// appends instance.started@1. The submit step is uncovered today, because no
-// submit intent exists yet: the log carries the instance id since #187, but
-// nothing resolves a submit, so the scenario's gui path declares the start
-// prefix and this check compares that prefix to api mode's.
+// appends instance.started@1. The submit intent exists since #256 (ADR 0014),
+// but the browser's submit of a draft has no gui step yet, so the scenario's
+// gui path declares the start prefix and this check compares that prefix to
+// api mode's. The browser posts the start intent against the seeded server,
+// which resolves it through the engine; the resolved event must equal the
+// declared step (ADR 0010).
 //
 // The runner injects the same step clock and ID sources that stepOperation
 // uses, so the browser's intent carries `op-1`, the step's instance id and

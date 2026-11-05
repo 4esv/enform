@@ -1,95 +1,168 @@
-import type { Grant } from '../../engine/authorize.js'
-import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, parse } from '../../engine/definition.js'
-import type { Flow, FlowVersion } from '../../engine/flow.js'
-import { contentHash } from '../../engine/instance.js'
-import type { TargetResolver } from '../../engine/routing.js'
+import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { DEFINITION_CHANGED } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
+import {
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  ANA,
+  bootstrap,
+  declared,
+  definitionV1,
+  depsFor,
+  directory,
+  FLOW,
+  flow,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
+  LEE,
+  membership,
+  OKAFOR,
+  REGISTRAR_STEP,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+  stepResource,
+} from '../example-flow.js'
 
-// S09: claim and approve (STORIES.md). The registrar task of the
-// course-overload flow shows in the Available tab of Lee, Ana and Jordan. The
-// first to claim it owns it (AS-2). Lee claims it and completes it with
-// approve, which his `step.outcome:approve` grant authorizes and no other
-// outcome does (AC-4). The path is deterministic (I6): it reads no clock and
-// no random source, and the directory is injected.
+// S09: claim and approve (STORIES.md). Sam's request reaches the registrar
+// step, whose team target resolves to Lee, Ana and Jordan (AS-4). The task
+// shows in their Available tab; the first to claim it owns it (AS-2). Lee
+// claims it and completes it with approve, which his `step.outcome:approve`
+// grant authorizes and no other outcome does (AC-4), and the flow is done.
+// Every step after the setup is a client intent that the server resolves
+// (ADR 0010): the start and the submit by Sam, Dr. Okafor's claim and
+// approval of the advisor step, which skips the chair step for a two-credit
+// overload (S05), and Lee's claim and approval. The path is deterministic
+// (I6): it reads no clock and no random source, and the directory is injected.
 
-/** The flow slug of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
+/** Sam's request: a two-credit overload, so the chair step is skipped (S05, WF-1). */
+export const values = samValues(2)
 
-/** Sam, the student who starts the request (S06). */
-export const STARTER = 'user:sam'
+/** The golden path: the setup, then the request from the start to Lee's approval. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps()]
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
 
-/** Lee and Ana, registrar staff, and Jordan, the registrar reviewer (STORIES.md, the cast). */
-export const LEE = 'user:lee'
-export const ANA = 'user:ana'
-export const JORDAN = 'user:jordan'
+  // Sam starts a draft with his answers and submits it: the submit routes
+  // the request to the advisor step and emails Dr. Okafor (ADR 0014, SE-1).
+  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(6), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: sam, owner: SAM },
+    depsFor(7)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
 
-/** Priya, the department coordinator, holds the archive step (STORIES.md, the cast). */
-export const PRIYA = 'user:priya'
+  // Dr. Okafor claims the advisor task and approves it. The chair step is
+  // skipped for two credits, so the request routes to the registrar team and
+  // emails its three members (WF-1, AS-4).
+  const okaforClaim = claim(instanceAfter(steps), OKAFOR, 1, depsFor(8))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const okaforApprove = complete(
+    instanceAfter(steps),
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    depsFor(9)
+  )
+  if (okaforApprove.operation === undefined) throw new Error(okaforApprove.reason)
+  steps.push(
+    declared(okaforApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    })
+  )
 
-/** The team that holds the registrar task (AS-1, AS-4). */
-export const REGISTRAR_TEAM = 'registrar-office'
-
-/** The two steps of the story: the registrar task, then the archive task (WF-1). */
-export const REGISTRAR_STEP = 'registrar'
-export const ARCHIVE_STEP = 'archive'
-
-/** The resource of the registrar step (MVP.md 5.6). */
-export const REGISTRAR_RESOURCE = `flow:${SLUG}/step:${REGISTRAR_STEP}`
-
-/** The members of the registrar team when the request starts (AS-1, I13). */
-export const REGISTRAR_MEMBERS: readonly string[] = [LEE, ANA, JORDAN]
-
-/** The definition of version 1: a registrar step, then an archive step (WF-1). */
-export const definition: FlowDefinition = parse(`{
-  "schemaVersion": 1,
-  "steps": [
-    {
-      "key": "${REGISTRAR_STEP}",
-      "targets": [{ "team": "${REGISTRAR_TEAM}" }],
-      "outcomes": ["approve", "reject"]
-    },
-    {
-      "key": "${ARCHIVE_STEP}",
-      "targets": [{ "user": "${PRIYA}" }],
-      "outcomes": ["record"]
-    }
-  ]
+  // Lee claims the registrar task and approves it: the registrar step is the
+  // last, so the instance is done (S09).
+  const leeClaim = claim(instanceAfter(steps), LEE, 3, depsFor(10))
+  if (leeClaim.operation === undefined) throw new Error(leeClaim.reason)
+  steps.push(declared(leeClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 3 }))
+  const leeApprove = complete(
+    instanceAfter(steps),
+    LEE,
+    'approve',
+    {},
+    4,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(LEE), resolve, owner: SAM },
+    depsFor(11)
+  )
+  if (leeApprove.operation === undefined) throw new Error(leeApprove.reason)
+  steps.push(
+    declared(leeApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 4,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+  return steps
 }
-`)
 
-/** The registrar step alone: the last step, so a completion marks the instance done (S09). */
-export const terminalDefinition: FlowDefinition = { ...definition, steps: [definition.steps[0]] }
+export const golden = scenario({
+  slug: 'claim-approve',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
+})
 
-/** The published version 1: a start needs a version with a content hash (DF-2). */
-export const versionV1: FlowVersion = {
-  version: 1,
-  contentHash: contentHash(definition),
-  definition,
-}
-
-/** The flow of the story: version 1 published, ready for a start (DF-2). */
-export const flow: Flow = { slug: SLUG, versions: [versionV1] }
-
-/** The data of Sam's request: no step has a skip condition, so the registrar task is first (WF-1). */
-export const data: ConditionData = {}
-
-/** The directory of the story (AS-1, I13): a team resolves to its members, and a user to itself. */
-export const resolve: TargetResolver = (target) => {
-  if ('team' in target) return REGISTRAR_MEMBERS
-  if ('user' in target) return [target.user]
-  return []
-}
-
-/** The grants that apply to Sam: the All-Students group may start the flow (S02, ID-4, AC-1). */
-export const starterGrants: readonly Grant[] = [
-  { principal: 'group:All-Students', scopes: ['instance.start'], resource: `flow:${SLUG}` },
-]
+/** The indexes of the story's steps after the setup, for the requirements and the tests. */
+export const STEP = {
+  start: 6,
+  submit: 7,
+  okaforClaim: 8,
+  okaforApprove: 9,
+  leeClaim: 10,
+  leeApprove: 11,
+} as const
 
 /**
- * The grants that apply to Lee (S09, AC-4): he holds `step.outcome:approve`
- * on the registrar step and no other scope, so he may approve the task and may
- * not choose another outcome.
+ * What each step requires of its actor (I8), for the Actor operator: the
+ * build scope for the flow, org.teams for the team, instance.start for the
+ * start, the starter for the submit, an assignee for a claim, and the holder
+ * with the outcome scope for a completion (AS-2, AC-4).
  */
-export const leeGrants: readonly Grant[] = [
-  { principal: LEE, scopes: ['step.outcome:approve'], resource: REGISTRAR_RESOURCE },
-]
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      return { actors: index === STEP.okaforClaim ? [OKAFOR] : [LEE, ANA, JORDAN] }
+    case STEP_COMPLETED:
+      return index === STEP.okaforApprove
+        ? { scope: 'step.outcome:approve', resource: stepResource(ADVISOR_STEP), actors: [OKAFOR] }
+        : { scope: 'step.outcome:approve', resource: stepResource(REGISTRAR_STEP), actors: [LEE] }
+    default:
+      throw new Error(`S09: step ${index + 1} has no requirement (${step.type})`)
+  }
+}

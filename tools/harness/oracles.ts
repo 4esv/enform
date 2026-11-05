@@ -6,7 +6,9 @@ import { outboxOf } from '../../engine/outbox.js'
 import { decryptDraft, isSealed, type Session } from '../../engine/session.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
 import { confirmedOnly, type UpdateLog } from '../../engine/updates.js'
-import { goldenView, type Scenario, type StepClock, toView } from './scenario.js'
+import { expectedView } from './predict.js'
+import type { Scenario, StepClock } from './scenario.js'
+import { toView } from './scenario.js'
 
 // Issue #28, STORIES.md Test method: the oracle pipeline that every run,
 // golden or generated, passes through in this order: (1) all invariants are
@@ -98,7 +100,7 @@ const I4: InvariantOracle = {
 const I6: InvariantOracle = {
   id: 'I6',
   check: ({ state, scenario, clock }) => {
-    if (!isDeepStrictEqual(toView(state), goldenView(scenario, clock))) {
+    if (!isDeepStrictEqual(toView(state), expectedView(scenario, clock))) {
       throw new Error('I6: the end state differs from the golden end state (determinism)')
     }
   },
@@ -233,9 +235,13 @@ function assertInvariants(run: RunResult): void {
   for (const oracle of INVARIANT_ORACLES) oracle.check(run)
 }
 
-/** Check 2: the end state is the golden end state (the deterministic replay under the run's clock). */
+/**
+ * Check 2: the end state is the golden end state, or the deviation the engine
+ * predicts for a fuzzy path (STORIES.md, Oracles): the deterministic replay of
+ * the steps under the run's clock, with each intent resolved by the engine.
+ */
 function assertGoldenEndState(state: State, scenario: Scenario, clock?: StepClock): void {
-  if (!isDeepStrictEqual(toView(state), goldenView(scenario, clock))) {
+  if (!isDeepStrictEqual(toView(state), expectedView(scenario, clock))) {
     throw new Error('the end state is not the golden end state')
   }
 }

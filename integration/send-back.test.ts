@@ -210,17 +210,14 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
   await signIn(okaforPage, publicUrl, okafor.email, okafor.password)
   await okaforPage.goto(taskUrl)
   await okaforPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
-  expect(await okaforPage.textContent('.instance-status')).toContain('Step 3 of 4')
+  expect(await okaforPage.textContent('.instance-status')).toContain('Step 2 of 4')
   await okaforPage.click('[data-claim]')
   await okaforPage.waitForFunction(
     () => document.querySelector('.status')?.textContent === 'Claimed'
   )
   await okaforPage.locator('[data-send-back]').waitFor({ timeout: 30_000 })
   const offered = await okaforPage.locator('[data-send-back-step] option').allTextContents()
-  expect(offered, 'the read names the earlier steps in definition order').toEqual([
-    'chair',
-    'request',
-  ])
+  expect(offered, 'the read names the earlier steps in definition order').toEqual(['request'])
 
   // The API refuses a raw event and a blank comment before the real send back
   // (WF-3). The engine decides both: the raw shape is a 400 and so is the
@@ -232,7 +229,7 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
     }),
     'GET the advisor instance as Okafor'
   )
-  expect(held.previousSteps).toEqual(['chair', 'request'])
+  expect(held.previousSteps).toEqual(['request'])
   const raw = await fetch(`${publicUrl}/api/v1/operations`, {
     method: 'POST',
     headers: { authorization: `Bearer ${okaforToken}`, 'content-type': 'application/json' },
@@ -274,23 +271,29 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
   // is at `request` and the note is on the page.
   await okaforPage.selectOption('[data-send-back-step]', 'request')
   await okaforPage.fill('[data-send-back-comment]', COMMENT)
-  await okaforPage.click('[data-send-back]')
-  await okaforPage.waitForFunction(() =>
-    document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 4')
+  const sentBack = okaforPage.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/v1/operations') && response.request().method() === 'POST'
   )
-  const okaforNotes = okaforPage.locator('[data-note]')
-  await okaforNotes.first().waitFor({ timeout: 30_000 })
-  expect(await okaforNotes.first().textContent()).toContain(COMMENT)
-  expect(await okaforNotes.first().textContent()).toContain(okafor.id)
+  await okaforPage.click('[data-send-back]')
+  expect((await sentBack).status(), 'the send back is appended').toBe(201)
+  // The instance is a draft again, private to Sam (ADR 0014, D1): Okafor
+  // reads nothing until Sam submits it again.
+  const privateDraft = await fetch(`${publicUrl}/api/v1/instances/${advisorInstance.id}`, {
+    headers: { authorization: `Bearer ${okaforToken}` },
+  })
+  expect(privateDraft.status, await privateDraft.text()).toBe(403)
 
-  // The requester's second context opens the same instance. The task is at
-  // `request`, and the note to that step is visible (VT-3, I8).
+  // The requester's second context opens the same instance. The send back to
+  // the request form made it a draft again (ADR 0014): the draft page shows
+  // the note to that step above the form (VT-3, I8).
   const samContext = await browser.newContext()
   const samPage = await samContext.newPage()
   await signIn(samPage, publicUrl, sam.email, sam.password)
   await samPage.goto(taskUrl)
-  await samPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
-  expect(await samPage.textContent('.instance-status')).toContain('Step 2 of 4')
+  await samPage.locator('[data-submit]').waitFor({ timeout: 30_000 })
+  expect(await samPage.textContent('.instance-status')).toContain('Step 1 of 4')
+  expect(await samPage.textContent('.instance-status')).toContain('draft')
   const samNote = samPage.locator('[data-note]')
   await samNote.first().waitFor({ timeout: 30_000 })
   expect(await samNote.first().textContent()).toContain(COMMENT)
@@ -298,13 +301,12 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
     await samPage.locator('[data-send-back]').count(),
     'Sam does not hold the advisor step'
   ).toBe(0)
+  expect(await samPage.locator('[data-claim]').count(), 'a draft is not claimed').toBe(0)
 
-  // Sam claims and submits again, so the instance returns to the advisor.
-  await samPage.click('[data-claim]')
-  await samPage.waitForFunction(() => document.querySelector('.status')?.textContent === 'Claimed')
-  await samPage.click('[data-outcome="submit"]')
+  // Sam submits again, so the instance returns to the advisor.
+  await samPage.click('[data-submit]')
   await samPage.waitForFunction(() =>
-    document.querySelector('.instance-status')?.textContent?.includes('Step 3 of 4')
+    document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 4')
   )
 
   // Okafor claims the returned advisor task and approves it; the instance
@@ -315,6 +317,10 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
   await okaforPage.waitForFunction(
     () => document.querySelector('.status')?.textContent === 'Claimed'
   )
+  const returnedNotes = okaforPage.locator('[data-note]')
+  await returnedNotes.first().waitFor({ timeout: 30_000 })
+  expect(await returnedNotes.first().textContent()).toContain(COMMENT)
+  expect(await returnedNotes.first().textContent()).toContain(okafor.id)
   await okaforPage.click('[data-outcome="approve"]')
   await okaforPage.waitForFunction(() =>
     document.querySelector('.instance-status')?.textContent?.includes('Step 4 of 4')
@@ -373,7 +379,7 @@ test('#236 S11 the holder sends the advisor task back, the requester resubmits, 
     'GET the rebuilt instance as Sam'
   )
   expect(samAfterRebuild.status.currentStep).toBe('registrar')
-  expect(samAfterRebuild.previousSteps).toEqual(['chair', 'request', 'advisor'])
+  expect(samAfterRebuild.previousSteps).toEqual(['request', 'advisor', 'chair'])
   expect(samAfterRebuild.notes).toContainEqual({
     step: 'request',
     actor: okafor.id,

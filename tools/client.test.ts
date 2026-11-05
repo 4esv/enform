@@ -69,8 +69,8 @@ test('#93 DX-4 the generated client exposes the four typed operations (I12)', ()
   expect(source, 'appendOperation takes an Operation and returns an Event').toContain(
     'export async function appendOperation(operation: Operation): Promise<Event> {'
   )
-  expect(source, 'readLog returns a Log').toContain(
-    'export async function readLog(): Promise<Log> {'
+  expect(source, 'readLog takes the instance and limit filters and returns a Log').toContain(
+    'export async function readLog(instance?: string, limit?: number): Promise<Log> {'
   )
   expect(source, 'readState returns a State').toContain(
     'export async function readState(): Promise<State> {'

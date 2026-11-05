@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/draft.rebound@1.json",
+  "title": "enform draft.rebound@1 event payload",
+  "description": "The payload of a draft.rebound@1 event (#256, RT-6, S04, DF-2, A7, I4). An open draft moved to a newer published version when its starter opened it: the event names the draft, the version it left, the version it is on, the values that no longer fit the new request form (kept, never deleted) and the required fields of the new form the draft leaves empty.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "from", "definitionVersion", "misfits", "newRequired"],
+  "properties": {
+    "instanceId": {
+      "type": "string"
+    },
+    "from": {
+      "description": "The content hash of the version the draft left (DF-2).",
+      "type": "string"
+    },
+    "definitionVersion": {
+      "description": "The content hash of the version the draft is on now (DF-2).",
+      "type": "string"
+    },
+    "misfits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "reason"],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "newRequired": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -20,10 +20,11 @@ import type { FlowDefinition, JsonValue } from './definition.js'
 import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { STEP_SENT_BACK } from './sendBack.js'
+import { standingEvents } from './undo.js'
 import type { SkippedStep } from './workflow.js'
 
 /** The plain-language state of an instance (VT-2, S14). */
-export type StatusState = 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
+export type StatusState = 'draft' | 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
 
 /** The status line of an instance (VT-1, VT-2, S14). */
 export type Status = {
@@ -141,14 +142,23 @@ export function notesOf(log: Log): readonly Note[] {
  * The notes that one actor may read (VT-3, I8). An actor reads a note when it
  * wrote the note, or when it holds one of the outcome scopes of the note's
  * step (AC-4): a note is the discussion of the people who act on the step, so
- * an actor without the step's outcome scope does not read it.
+ * an actor without the step's outcome scope does not read it. The starter
+ * reads a note on the request form, the first step (ADR 0014, S11): a send
+ * back to the form addresses the starter, who holds no outcome scope on it.
  */
 export function visibleNotes(
   actor: ActorId,
   notes: readonly Note[],
-  context: StatusContext
+  context: StatusContext,
+  starter?: ActorId
 ): readonly Note[] {
-  return notes.filter((note) => note.actor === actor || holdsOutcomeScope(context, note.step))
+  const requestForm = context.definition.steps[0]?.key
+  return notes.filter(
+    (note) =>
+      note.actor === actor ||
+      holdsOutcomeScope(context, note.step) ||
+      (starter !== undefined && actor === starter && note.step === requestForm)
+  )
 }
 
 /**
@@ -185,7 +195,7 @@ export function visibleTo(
   return {
     readable: true,
     status: status(instance, context.definition, context.log),
-    notes: visibleNotes(actor, notesOf(context.log), context),
+    notes: visibleNotes(actor, notesOf(context.log), context, instance.starter),
     values: visibleValues(values, context.grants),
   }
 }
@@ -198,6 +208,9 @@ export function visibleTo(
  */
 export function mayRead(actor: ActorId, instance: Instance, context: StatusContext): boolean {
   if (actor === instance.starter) return true
+  // A draft is private until its submission (ADR 0014, D1, VT-4): nobody but
+  // the starter reads its contents, whatever scope they hold.
+  if (instance.submitted === false) return false
   if (instance.assignees.some((assignee) => assignee.members.includes(actor))) return true
   return authorize(context.grants, 'instance.read', `flow:${context.flow}`)
 }
@@ -207,6 +220,7 @@ function statusState(instance: Instance): StatusState {
   if (instance.withdrawal === 'withdrawn') return 'withdrawn'
   if (instance.withdrawal === 'cancelled') return 'cancelled'
   if (instance.done === true) return 'done'
+  if (instance.submitted === false) return 'draft'
   if (instance.holder !== undefined) return 'in-progress'
   return 'waiting'
 }
@@ -234,7 +248,7 @@ function activePosition(instance: Instance, definition: FlowDefinition): number 
 function skippedSteps(instance: Instance, log: Log): readonly SkippedStep[] {
   if (instance.instanceId === undefined) return []
   const skipped: SkippedStep[] = []
-  for (const event of log) {
+  for (const event of standingEvents(log)) {
     if (event.payload.instanceId !== instance.instanceId) continue
     skipped.push(...readSkipped(event.payload.skipped))
   }

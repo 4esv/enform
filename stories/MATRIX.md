@@ -29,14 +29,14 @@ Refs: AC-1 to AC-4, VT-6, I8, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S03: Edit the text of a form (`edit-text`)
 
@@ -44,14 +44,14 @@ Refs: DF-3, DF-5, DF-6, RT-2, D2, A1, I1, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S04: Add a field while submissions are in progress (`add-field-live`)
 
@@ -59,14 +59,14 @@ Refs: DF-2, DF-6, RT-6, A7
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S05: Skip a step when a condition is true (`skip-step`)
 
@@ -74,14 +74,14 @@ Refs: WF-1, FM-5, DR-1, I6, I7, I13
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S06: Start a submission (`start-submission`)
 
@@ -89,14 +89,14 @@ Refs: ID-2, ID-3, RT-3, SE-1, VT-2, FM-7, I2, I15
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S07: Lose the connection during fill-in (`lose-connection`)
 
@@ -104,14 +104,14 @@ Refs: RT-1, RT-3, RT-4, RT-5, I1, I11, I15, I16
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | skip | - | - |
-| Duplicate | - | skip | - | - |
-| Race | - | skip | - | - |
-| Fault | - | skip | - | - |
-| Offline | - | skip | - | - |
-| Clock | - | skip | - | - |
-| Data | - | skip | - | - |
-| Version | - | skip | - | - |
+| Actor | run | skip | run | - |
+| Duplicate | run | skip | run | - |
+| Race | run | skip | run | - |
+| Fault | run | skip | run | - |
+| Offline | run | skip | run | - |
+| Clock | run | skip | run | - |
+| Data | run | skip | run | - |
+| Version | run | skip | run | - |
 
 ## S08: Route to the correct people (`route`)
 
@@ -119,14 +119,14 @@ Refs: AS-1, AS-4, AS-5, ID-4, ID-5, I10, I13
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S09: Claim and approve (`claim-approve`)
 
@@ -134,14 +134,14 @@ Refs: AS-2, AC-4, RT-2, VT-1, I5, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S10: Take over from a peer on vacation (`takeover`)
 
@@ -149,14 +149,14 @@ Refs: AS-3, WF-5, A1, A2, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S11: Send back for revision (`send-back`)
 
@@ -164,14 +164,14 @@ Refs: WF-2, WF-3, AC-4, SE-2
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S12: Reminders and escalation (`reminders-escalation`)
 
@@ -179,14 +179,14 @@ Refs: SE-3, SE-4, SE-5, DR-3, DR-4, I2, I3, I7
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S13: Withdraw or cancel a submission (`withdraw-cancel`)
 
@@ -194,14 +194,14 @@ Refs: WF-4, WF-5, AC-1, AC-5, SE-5, I4
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S14: Find the status of a submission (`find-status`)
 
@@ -209,14 +209,14 @@ Refs: VT-1, VT-2, VT-3, VT-4, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S15: Investigate a problem (`investigate`)
 
@@ -224,14 +224,14 @@ Refs: DF-6, VT-5, VT-6, I4, I13, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## S16: Undo a mistake (`undo`)
 
@@ -239,14 +239,14 @@ Refs: WF-5, A2, I4, D6
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | - | - | - | - |
-| Duplicate | - | - | - | - |
-| Race | - | - | - | - |
-| Fault | - | - | - | - |
-| Offline | - | - | - | - |
-| Clock | - | - | - | - |
-| Data | - | - | - | - |
-| Version | - | - | - | - |
+| Actor | run | run | run | - |
+| Duplicate | run | run | run | - |
+| Race | run | run | run | - |
+| Fault | run | run | run | - |
+| Offline | run | run | run | - |
+| Clock | run | run | run | - |
+| Data | run | run | run | - |
+| Version | run | run | run | - |
 
 ## Skipped cells
 

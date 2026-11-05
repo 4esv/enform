@@ -1,193 +1,361 @@
-import { STEP_COMPLETED } from '../../engine/action.js'
-import type { Grant } from '../../engine/authorize.js'
-import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, parse } from '../../engine/definition.js'
-import type { Flow, FlowVersion } from '../../engine/flow.js'
-import { type ConnectorCall, contentHash } from '../../engine/instance.js'
-import type { Event, Log } from '../../engine/operation.js'
-import type { OutboxEntry } from '../../engine/outbox.js'
-import type { TargetResolver } from '../../engine/routing.js'
-import { EMAIL_CONNECTOR } from '../../engine/submission.js'
-import { SENT_OUTCOME } from '../../engine/undo.js'
+import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED, type Flow } from '../../engine/flow.js'
+import { contentHash } from '../../engine/instance.js'
+import type { Operation } from '../../engine/operation.js'
+import {
+  ASSIGNMENT_EMAIL,
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import { CONNECTOR_CALLED } from '../../engine/timeline.js'
+import { EVENT_UNDONE, SENT_OUTCOME, undoAction } from '../../engine/undo.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { goldenClock, type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  ANA,
+  bootstrap,
+  CHAIR_STEP,
+  CHAIRS_GROUP,
+  declared,
+  depsFor,
+  directory,
+  FLOW,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
+  LEE,
+  membership,
+  OKAFOR,
+  PRIYA,
+  REGISTRAR_STEP,
+  REGISTRAR_TEAM,
+  REQUEST_STEP,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+  stateAfter,
+  stepResource,
+} from '../example-flow.js'
 
 // S16: undo a mistake (STORIES.md). Lee approves the wrong course-overload
-// request at the registrar step, and the flow's automation sends the student a
-// confirmation email and the decision as a PDF, with a copy to the coordinator
-// (SE-1, I2). Lee undoes the approval, because one wrong click must not damage
-// the semester of a student. The undo is a compensating event (WF-5, A2, D6):
-// the engine appends an `event.undone@1` event, and the approval stays in the
-// log (I4). The emails already went out, so the undo does not reverse them: it
-// marks them "Already sent" and notifies the people they reached (S16, A2). The
-// flow marks a point final, a later schema change, so the story injects the
-// final point; once the flow moved past it the engine refuses the undo and
-// gives the reason (S16, WF-5). The path is deterministic (I6): it reads no
-// clock and no random source, and the directory is injected.
+// request at the registrar step, which assigns the archive task to Priya and
+// emails her (SE-1, I2); the worker sends the email and records the call
+// (I13). Lee undoes the approval: the undo is a compensating event (WF-5, A2,
+// D6), the approval stays in the log (I4), the email that already went out
+// is marked "Already sent" and Priya, whom it reached, is notified (S16,
+// A2). The flow marks the archive step final: once Priya recorded the
+// decision, nothing on the instance can be undone (S16, WF-5). Every step
+// after the setup is a client intent that the server resolves (ADR 0010),
+// except the worker's record of the call, which is the occurrence it is. The
+// path is deterministic (I6).
 
-/** The flow slug of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
+/** The archive step: Priya records the decision after the registrar (WF-1). */
+export const ARCHIVE_STEP = 'archive'
 
-/** Sam, the student who starts the request (S06). */
-export const STARTER = 'user:sam'
+/** The outcome that records the decision on the archive step (WF-2). */
+export const RECORD = 'record'
 
-/** Dr. Okafor, the advisor of Sam: he acts on the advisor step (S08, AS-1). */
-export const OKAFOR = 'user:okafor'
-
-/** Lee, registrar staff: he approves the wrong request (S16). */
-export const LEE = 'user:lee'
-
-/** Ana, registrar staff, a peer of Lee in the registrar team (S10). */
-export const ANA = 'user:ana'
-
-/** Priya, the department coordinator: she gets the copy of a decision (S14, S16). */
-export const PRIYA = 'user:priya'
-
-/** The worker, which records the connector calls that it ran (SE-1, I13). */
-export const SYSTEM = 'system'
-
-/** The team that holds the registrar task (AS-1, AS-4). */
-export const REGISTRAR_TEAM = 'registrar-office'
-
-/** The three steps of the story: the request, the advisor, then the registrar (WF-1). */
-export const REQUEST_STEP = 'request'
-export const ADVISOR_STEP = 'advisor'
-export const REGISTRAR_STEP = 'registrar'
-
-/** The resource of each step (MVP.md 5.6). */
-export const REQUEST_RESOURCE = `flow:${SLUG}/step:${REQUEST_STEP}`
-export const ADVISOR_RESOURCE = `flow:${SLUG}/step:${ADVISOR_STEP}`
-export const REGISTRAR_RESOURCE = `flow:${SLUG}/step:${REGISTRAR_STEP}`
-
-/** The outcome that submits the request (WF-1). */
-export const SUBMIT = 'submit'
-
-/** The outcome that approves a step (WF-2, S16). */
-export const APPROVE = 'approve'
-
-/** The members of the registrar team when the request reaches it (AS-1, I13). */
-export const REGISTRAR_MEMBERS: readonly string[] = [LEE, ANA]
-
-/** The definition of version 1: the request, the advisor and the registrar (WF-1). */
+/**
+ * The flow of the story: the example flow with an archive step after the
+ * registrar, which the flow marks final (S16, WF-5): once an instance
+ * completed it, no action on the instance can be undone.
+ */
 export const definition: FlowDefinition = parse(`{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "finalStep": "${ARCHIVE_STEP}",
   "steps": [
     {
       "key": "${REQUEST_STEP}",
       "targets": [{ "starter": "starter" }],
-      "outcomes": ["${SUBMIT}"]
+      "fields": [
+        { "key": "summary", "control": "text", "required": true },
+        { "key": "overload_credits", "control": "number", "required": true },
+        { "key": "advisor", "control": "user", "required": true }
+      ],
+      "editable": ["summary", "overload_credits", "advisor"]
     },
     {
       "key": "${ADVISOR_STEP}",
       "targets": [{ "field": "advisor" }],
-      "outcomes": ["${APPROVE}", "send_back"]
+      "outcomes": ["approve", "send_back"]
+    },
+    {
+      "key": "${CHAIR_STEP}",
+      "targets": [{ "group": "${CHAIRS_GROUP}" }],
+      "outcomes": ["approve", "send_back"],
+      "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
     },
     {
       "key": "${REGISTRAR_STEP}",
       "targets": [{ "team": "${REGISTRAR_TEAM}" }],
-      "outcomes": ["${APPROVE}", "reject", "send_back"]
+      "outcomes": ["approve", "reject"],
+      "takeover": "after-idle",
+      "idleMinutes": 240
+    },
+    {
+      "key": "${ARCHIVE_STEP}",
+      "targets": [{ "user": "${PRIYA}" }],
+      "outcomes": ["${RECORD}"]
     }
   ]
 }
 `)
 
-/** The published version 1: a start needs a version with a content hash (DF-2). */
-export const versionV1: FlowVersion = {
-  version: 1,
-  contentHash: contentHash(definition),
-  definition,
-}
-
 /** The flow of the story: version 1 published, ready for a start (DF-2). */
-export const flow: Flow = { slug: SLUG, versions: [versionV1] }
-
-/** The data of Sam's request: no step has a skip condition, so the request step is first (WF-1). */
-export const data: ConditionData = {}
-
-/** The directory of the story (AS-1, I13): the starter, a field and a team resolve. */
-export const resolve: TargetResolver = (target) => {
-  if ('starter' in target) return [STARTER]
-  if ('field' in target) return [OKAFOR]
-  if ('team' in target) return REGISTRAR_MEMBERS
-  return []
+export const flow: Flow = {
+  slug: SLUG,
+  versions: [{ version: 1, contentHash: contentHash(definition), definition }],
 }
 
-/** The grants that apply to Sam: the All-Students group may start the flow (S02, AC-1). */
-export const starterGrants: readonly Grant[] = [
-  { principal: STARTER, scopes: ['instance.start'], resource: `flow:${SLUG}` },
+/** The grants of the cast, and Priya's outcome on the archive step (S02, AC-4). */
+export const storyGrants = [
+  ...bootstrap,
+  { principal: PRIYA, scopes: [`step.outcome:${RECORD}`], resource: stepResource(ARCHIVE_STEP) },
 ]
 
-/** The grants that apply to Sam on the request step: he submits his own request (S06, WF-1). */
-export const samGrants: readonly Grant[] = [
-  { principal: STARTER, scopes: [`step.outcome:${SUBMIT}`], resource: REQUEST_RESOURCE },
-]
+/** Sam's request: a two-credit overload, so the chair step is skipped (S05). */
+export const values = samValues(2)
 
-/** The grants that apply to Dr. Okafor: he approves on the advisor step (S08, AC-4). */
-export const okaforGrants: readonly Grant[] = [
-  { principal: OKAFOR, scopes: [`step.outcome:${APPROVE}`], resource: ADVISOR_RESOURCE },
-]
+/** The reason that Lee gives for the undo (STORIES.md, S16). */
+export const REASON = 'Approved the wrong request'
 
-/** The grants that apply to Lee: he approves on the registrar step (S16, AC-4). */
-export const leeGrants: readonly Grant[] = [
-  { principal: LEE, scopes: [`step.outcome:${APPROVE}`], resource: REGISTRAR_RESOURCE },
-]
+/** The undo period of the flow (WF-5): the server default of twenty-four hours. */
+export const UNDO_PERIOD = 24 * 3_600_000
 
-/** The connector operation that sends the confirmation email of a template (SE-2, D7). */
-export const CONFIRMATION_EMAIL = 'send-confirmation'
+/** The worker, which records the connector calls that it ran (SE-1, I13). */
+export const SYSTEM = 'system'
 
-/** The connector operation that sends the decision as a PDF (SE-2, D7). */
-export const DECISION_PDF = 'send-decision-pdf'
+/** The indexes of the story's steps after the setup, for the requirements and the tests. */
+export const STEP = {
+  start: 6,
+  submit: 7,
+  okaforClaim: 8,
+  okaforApprove: 9,
+  leeClaim: 10,
+  leeApprove: 11,
+  emailSent: 12,
+  leeUndo: 13,
+  leeApproveAgain: 14,
+  priyaClaim: 15,
+  priyaRecord: 16,
+} as const
 
-/** The connector operation that sends the coordinator the copy of a decision (SE-2, S14). */
-export const OFFICE_COPY = 'send-office-copy'
-
-/**
- * The side effects of the registrar approval (I2, SE-1): the confirmation email
- * to Sam, the decision as a PDF to Sam, and the copy to Priya. The approval
- * operation carries them, so one apply commits the decision and its side
- * effects together (I2).
- */
-export const approvalOutbox: readonly OutboxEntry[] = [
-  {
-    operation: CONFIRMATION_EMAIL,
-    target: EMAIL_CONNECTOR,
-    payload: { to: STARTER, step: REGISTRAR_STEP },
-  },
-  {
-    operation: DECISION_PDF,
-    target: EMAIL_CONNECTOR,
-    payload: { to: STARTER, step: REGISTRAR_STEP },
-  },
-  {
-    operation: OFFICE_COPY,
-    target: EMAIL_CONNECTOR,
-    payload: { to: PRIYA, step: REGISTRAR_STEP },
-  },
-]
-
-/**
- * The connector calls that the worker already ran for the approval (I13, A2).
- * The worker records each one on the log, so the undo reads them as the side
- * effects that already occurred.
- */
-export const sentCalls: readonly ConnectorCall[] = approvalOutbox.map((entry, index) => ({
-  operation: entry.operation,
-  time: 1_700_000_000_000 + index * 60_000,
+/** The record of the worker's call for the email that Lee's approval sent (I13, A2). */
+export const sentCall = {
+  instanceId: INSTANCE_ID,
+  operation: ASSIGNMENT_EMAIL,
+  time: goldenClock(STEP.emailSent),
   outcome: SENT_OUTCOME,
-}))
+}
+
+/** The grants that apply to one person of the cast in this story (AC-1). */
+export function storyGrantsOf(person: string): readonly (typeof storyGrants)[number][] {
+  return [...grantsOfPerson(person), ...storyGrants.filter((grant) => grant.principal === person)]
+}
 
 /**
- * The final point of the course-overload flow (S16, WF-5): a later flow setting
- * states it, so the story injects the predicate, as S10 injects the idle
- * timeout and S13 the undo period. The flow marks a decision final once a later
- * step of the flow decided (I4, the log is the one order), so the registrar
- * decision, the last step, stays undoable while the advisor decision does not.
+ * The step that declares an undo (ADR 0010): the engine records the outbox
+ * of a compensating event even when it notifies nobody, so the declared
+ * payload keeps the empty outbox that `declared` would drop.
  */
-export const finalPoint = (event: Event, log: Log): string | undefined => {
-  if (event.type !== STEP_COMPLETED) return undefined
-  const step = event.payload.step
-  if (typeof step !== 'string') return undefined
-  const decidedLater = log.some(
-    (candidate) => candidate.seq > event.seq && candidate.type === STEP_COMPLETED
+function declaredUndo(operation: Operation, intent: Readonly<Record<string, unknown>>): Step {
+  const step = declared(operation, intent)
+  return step.outbox === undefined ? { ...step, payload: { ...step.payload, outbox: [] } } : step
+}
+
+/** The golden path: the setup, the request to the registrar, the wrong approval, its undo, the right one and the record. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps(definition)]
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
+
+  // Sam starts and submits (S06, ADR 0014); Dr. Okafor approves; the chair
+  // step is skipped and the registrar team gets the task (S05, S09).
+  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(6), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: sam, owner: SAM },
+    depsFor(7)
   )
-  if (!decidedLater) return undefined
-  return `the flow decided a later step after the ${step} decision, so the flow passed the point that marks ${step} final (S16, WF-5)`
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
+  const okaforClaim = claim(instanceAfter(steps), OKAFOR, 1, depsFor(8))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const okaforApprove = complete(
+    instanceAfter(steps),
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    depsFor(9)
+  )
+  if (okaforApprove.operation === undefined) throw new Error(okaforApprove.reason)
+  steps.push(
+    declared(okaforApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+
+  // Lee claims the registrar task and approves the wrong request: the
+  // approval assigns the archive task to Priya and emails her (SE-1, I2).
+  const leeClaim = claim(instanceAfter(steps), LEE, 3, depsFor(10))
+  if (leeClaim.operation === undefined) throw new Error(leeClaim.reason)
+  steps.push(declared(leeClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 3 }))
+  const leeContext = {
+    flow: SLUG,
+    definition,
+    grants: grantsOfPerson(LEE),
+    resolve,
+    owner: SAM,
+  }
+  const wrong = complete(instanceAfter(steps), LEE, 'approve', {}, 4, leeContext, depsFor(11))
+  if (wrong.operation === undefined) throw new Error(wrong.reason)
+  steps.push(
+    declared(wrong.operation, {
+      instanceId: INSTANCE_ID,
+      version: 4,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+
+  // The worker sent the email and records the call (I13): the log states
+  // what already occurred.
+  steps.push({ actor: SYSTEM, type: CONNECTOR_CALLED, payload: sentCall })
+
+  // Lee undoes the approval (WF-5, A2, D6): the compensating event marks the
+  // email "Already sent" and notifies Priya.
+  const undone = undoAction(
+    instanceAfter(steps),
+    LEE,
+    STEP.leeApprove + 1,
+    REASON,
+    5,
+    {
+      flow: SLUG,
+      definition,
+      log: stateAfter(steps).log,
+      grants: grantsOfPerson(LEE),
+      now: goldenClock(13),
+      undoPeriod: UNDO_PERIOD,
+    },
+    depsFor(13)
+  )
+  if (undone.operation === undefined) throw new Error(undone.reason)
+  steps.push(
+    declaredUndo(undone.operation, {
+      instanceId: INSTANCE_ID,
+      eventId: STEP.leeApprove + 1,
+      reason: REASON,
+      version: 5,
+    })
+  )
+
+  // Lee approves the right request; Priya claims the archive task and
+  // records the decision, the final step of the flow (S16, WF-5).
+  const right = complete(instanceAfter(steps), LEE, 'approve', {}, 6, leeContext, depsFor(14))
+  if (right.operation === undefined) throw new Error(right.reason)
+  steps.push(
+    declared(right.operation, {
+      instanceId: INSTANCE_ID,
+      version: 6,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+  const priyaClaim = claim(instanceAfter(steps), PRIYA, 7, depsFor(15))
+  if (priyaClaim.operation === undefined) throw new Error(priyaClaim.reason)
+  steps.push(declared(priyaClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 7 }))
+  const recorded = complete(
+    instanceAfter(steps),
+    PRIYA,
+    RECORD,
+    {},
+    8,
+    { flow: SLUG, definition, grants: storyGrantsOf(PRIYA), resolve, owner: SAM },
+    depsFor(16)
+  )
+  if (recorded.operation === undefined) throw new Error(recorded.reason)
+  steps.push(
+    declared(recorded.operation, {
+      instanceId: INSTANCE_ID,
+      version: 8,
+      outcome: RECORD,
+      values: {},
+    })
+  )
+  return steps
+}
+
+export const golden = scenario({
+  slug: 'undo',
+  flowSlug: SLUG,
+  bootstrap: storyGrants,
+  membership,
+  steps: goldenSteps(),
+})
+
+/**
+ * What each step requires of its actor (I8), for the Actor operator: the
+ * actor of an action or a flow owner with task.reassign undoes it (WF-5);
+ * the worker alone records a call.
+ */
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      if (index === STEP.okaforClaim) return { actors: [OKAFOR] }
+      if (index === STEP.priyaClaim) return { actors: [PRIYA] }
+      return { actors: [LEE, ANA, JORDAN] }
+    case STEP_COMPLETED:
+      if (index === STEP.okaforApprove) {
+        return {
+          scope: 'step.outcome:approve',
+          resource: stepResource(ADVISOR_STEP),
+          actors: [OKAFOR],
+        }
+      }
+      if (index === STEP.priyaRecord) {
+        return {
+          scope: `step.outcome:${RECORD}`,
+          resource: stepResource(ARCHIVE_STEP),
+          actors: [PRIYA],
+        }
+      }
+      return {
+        scope: 'step.outcome:approve',
+        resource: stepResource(REGISTRAR_STEP),
+        actors: [LEE],
+      }
+    case CONNECTOR_CALLED:
+      return { actors: [SYSTEM] }
+    case EVENT_UNDONE:
+      return { actors: [LEE, PRIYA] }
+    default:
+      throw new Error(`S16: step ${index + 1} has no requirement (${step.type})`)
+  }
 }

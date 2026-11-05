@@ -4,6 +4,7 @@ import { apply, emptyState, type State } from '../../engine/apply.js'
 import { createFlow, publish, publishedFlow, push } from '../../engine/flow.js'
 import { addGrant } from '../../engine/grants.js'
 import {
+  flowState,
   INSTANCE_ID,
   resolve,
   SLUG,
@@ -32,12 +33,15 @@ afterAll(async () => {
   )
 })
 
+// A resolved configuration operation that the harness appends as it is: a
+// team change is a client intent since #256 and resolves through the engine,
+// so the idempotent append is proved with the title change instead.
 const op = (id: string) => ({
   id,
-  type: 'config.team.changed@1',
+  type: 'config.flow.title@1',
   at: 1,
   actor: 'user-1',
-  payload: { name: 'registrar-office' },
+  payload: { flow: 'course-overload', title: 'Course overload' },
 })
 
 test('#24 the api-mode server serves the /api/v1 contract', async () => {
@@ -220,45 +224,49 @@ async function withApi(
 }
 
 test('#184 a posted intent resolves to the engine operation and keeps the client id and time', async () => {
-  await withApi(intentState(), { resolve }, async (base, api) => {
-    const intent = {
-      id: 'intent-1',
-      type: 'instance.started@1',
-      at: 5,
-      actor: 'user:sam',
-      payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
+  await withApi(
+    intentState(),
+    { resolve, membership: { 'user:sam': ['All-Students'] } },
+    async (base, api) => {
+      const intent = {
+        id: 'intent-1',
+        type: 'instance.started@1',
+        at: 5,
+        actor: 'user:sam',
+        payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
+      }
+      const before = api.state().log.length
+      const response = await fetch(`${base}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(intent),
+      })
+      expect(response.status).toBe(201)
+      const event = (await response.json()) as {
+        operationId: string
+        type: string
+        at: number
+        actor: string
+        payload: Record<string, unknown>
+      }
+      expect(event.operationId).toBe('intent-1')
+      expect(event.at).toBe(5)
+      expect(event.type).toBe('instance.started@1')
+      expect(event.actor).toBe('user:sam')
+      expect(event.payload).toEqual({
+        instanceId: INSTANCE_ID,
+        flow: SLUG,
+        definitionVersion: versionV1.contentHash,
+        currentStep: 'request',
+        assignees: [{ step: 'request', target: { starter: 'starter' }, members: ['user:sam'] }],
+        starter: 'user:sam',
+        values: { urgent: false },
+        skipped: [],
+      })
+      expect(api.state().log).toHaveLength(before + 1)
+      expect(api.state().log.at(-1)?.operationId).toBe('intent-1')
     }
-    const before = api.state().log.length
-    const response = await fetch(`${base}/api/v1/operations`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(intent),
-    })
-    expect(response.status).toBe(201)
-    const event = (await response.json()) as {
-      operationId: string
-      type: string
-      at: number
-      actor: string
-      payload: Record<string, unknown>
-    }
-    expect(event.operationId).toBe('intent-1')
-    expect(event.at).toBe(5)
-    expect(event.type).toBe('instance.started@1')
-    expect(event.actor).toBe('user:sam')
-    expect(event.payload).toEqual({
-      instanceId: INSTANCE_ID,
-      flow: SLUG,
-      definitionVersion: versionV1.contentHash,
-      currentStep: 'advisor',
-      assignees: [{ step: 'advisor', target: { user: 'user:okafor' }, members: ['user:okafor'] }],
-      starter: 'user:sam',
-      values: { urgent: false },
-      skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
-    })
-    expect(api.state().log).toHaveLength(before + 1)
-    expect(api.state().log.at(-1)?.operationId).toBe('intent-1')
-  })
+  )
 })
 
 test('#184 an unresolvable intent is refused with a named error and appends nothing', async () => {
@@ -286,26 +294,30 @@ test('#184 an unresolvable intent is refused with a named error and appends noth
 // it already does for the id, the time, the actor and the values.
 
 test('#187 an intent without an instance id is refused with a named error and appends nothing', async () => {
-  await withApi(intentState(), { resolve }, async (base, api) => {
-    const intent = {
-      id: 'intent-3',
-      type: 'instance.started@1',
-      at: 7,
-      actor: 'user:sam',
-      payload: { flow: SLUG, values: { urgent: false } },
+  await withApi(
+    intentState(),
+    { resolve, membership: { 'user:sam': ['All-Students'] } },
+    async (base, api) => {
+      const intent = {
+        id: 'intent-3',
+        type: 'instance.started@1',
+        at: 7,
+        actor: 'user:sam',
+        payload: { flow: SLUG, values: { urgent: false } },
+      }
+      const before = api.state().log.length
+      const response = await fetch(`${base}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(intent),
+      })
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { error: string }).error).toMatch(
+        /instanceId must be a string/
+      )
+      expect(api.state().log).toHaveLength(before)
     }
-    const before = api.state().log.length
-    const response = await fetch(`${base}/api/v1/operations`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(intent),
-    })
-    expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: string }).error).toMatch(
-      /instanceId must be a string/
-    )
-    expect(api.state().log).toHaveLength(before)
-  })
+  )
 })
 
 // Issue #76, FM-3, FM-7, VT-4, DX-1, I8: the HTTP API reads one instance as a
@@ -315,67 +327,129 @@ test('#187 an intent without an instance id is refused with a named error and ap
 // does not hold answers 404.
 
 test('#76 the api-mode server reads one instance and refuses the rest (I8)', async () => {
-  await withApi(intentState(), { resolve }, async (base) => {
-    // Start the S06 instance through a posted intent (ADR 0010).
-    const start = await fetch(`${base}/api/v1/operations`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        id: 'read-start',
-        type: 'instance.started@1',
-        at: 10,
-        actor: 'user:sam',
-        payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
-      }),
-    })
-    expect(start.status).toBe(201)
+  await withApi(
+    intentState(),
+    { resolve, membership: { 'user:sam': ['All-Students'] } },
+    async (base) => {
+      // Start the S06 instance through a posted intent (ADR 0010).
+      const start = await fetch(`${base}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'read-start',
+          type: 'instance.started@1',
+          at: 10,
+          actor: 'user:sam',
+          payload: { flow: SLUG, instanceId: INSTANCE_ID, values: { urgent: false } },
+        }),
+      })
+      expect(start.status).toBe(201)
 
-    // Sam started the instance, so he reads it (AC-5). The S06 start routes to
-    // `advisor`, which declares no fields, so nothing is visible and the values
-    // are absent from the response (FM-3).
-    const read = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:sam`)
-    expect(read.status).toBe(200)
-    expect(await read.json()).toEqual({
-      instanceId: INSTANCE_ID,
-      version: 0,
-      status: {
-        step: 2,
-        totalSteps: 3,
-        currentStep: 'advisor',
-        state: 'waiting',
-        skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
-      },
-      tracker: [
-        {
-          key: 'triage',
-          state: 'skipped',
-          condition: { '==': [{ var: 'urgent' }, false] },
+      // Sam started the instance, so he reads it (AC-5). The start is a draft
+      // on the request form (ADR 0014): its fields are visible and editable
+      // for the starter, the summary is required, and nothing is routed yet.
+      const read = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:sam`)
+      expect(read.status).toBe(200)
+      expect(await read.json()).toEqual({
+        instanceId: INSTANCE_ID,
+        version: 0,
+        status: {
+          step: 1,
+          totalSteps: 4,
+          currentStep: 'request',
+          state: 'draft',
+          skipped: [],
         },
-        { key: 'advisor', state: 'unopened', startAt: 10 },
-        { key: 'registrar', state: 'not-reached' },
-      ],
-      visible: [],
-      editable: [],
-      required: [],
-      collapsed: [],
-      values: {},
-      fields: [],
-      outcomes: ['approve', 'send_back'],
-      previousSteps: ['triage'],
-      notes: [],
-      canWithdraw: true,
-      canCancel: false,
-      canTakeOver: false,
-    })
+        tracker: [
+          { key: 'request', state: 'unopened', startAt: 10 },
+          { key: 'triage', state: 'not-reached' },
+          { key: 'advisor', state: 'not-reached' },
+          { key: 'registrar', state: 'not-reached' },
+        ],
+        visible: ['summary', 'overload_credits', 'urgent', 'details'],
+        editable: ['summary', 'overload_credits', 'urgent', 'details'],
+        required: ['summary'],
+        collapsed: [],
+        values: { urgent: false },
+        fields: [
+          { key: 'summary', control: 'text' },
+          { key: 'overload_credits', control: 'number' },
+          { key: 'urgent', control: 'checkbox' },
+          { key: 'details', control: 'long-text' },
+        ],
+        outcomes: [],
+        previousSteps: [],
+        notes: [],
+        canWithdraw: true,
+        canCancel: false,
+        canTakeOver: false,
+      })
 
-    // An actor that may not read the instance is refused (I8).
-    const forbidden = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:outsider`)
-    expect(forbidden.status).toBe(403)
-    expect(await forbidden.json()).toEqual({ error: 'not readable' })
+      // An actor that may not read the instance is refused (I8).
+      const forbidden = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:outsider`)
+      expect(forbidden.status).toBe(403)
+      expect(await forbidden.json()).toEqual({ error: 'not readable' })
 
-    // An instance the log does not hold is not found.
-    const missing = await fetch(`${base}/api/v1/instances/missing?actor=user:sam`)
-    expect(missing.status).toBe(404)
-    expect(await missing.json()).toEqual({ error: 'not found' })
+      // An instance the log does not hold is not found.
+      const missing = await fetch(`${base}/api/v1/instances/missing?actor=user:sam`)
+      expect(missing.status).toBe(404)
+      expect(await missing.json()).toEqual({ error: 'not found' })
+    }
+  )
+})
+
+test('#256 I1 a retry of an applied intent answers the applied event and resolves nothing again', async () => {
+  // A client whose first answer was lost sends the same intent again (I1).
+  // The second delivery is the same change: the server answers the event
+  // the log holds, with the same seq, and the log does not grow. A claim
+  // resolved a second time would be refused as already held, so the server
+  // must not resolve it again.
+  const api = startApi(flowState(), {
+    resolve,
+    bootstrap: samGrants,
+    membership: { 'user:sam': ['All-Students'] },
   })
+  const server = api.server
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const base = `http://127.0.0.1:${api.port()}`
+    const post = (body: unknown) =>
+      fetch(`${base}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    const start = {
+      id: 'start-1',
+      type: 'instance.started@1',
+      at: 1,
+      actor: 'user:sam',
+      payload: { flow: SLUG, instanceId: INSTANCE_ID, values: {} },
+    }
+    const started = await post(start)
+    expect(started.status, await started.clone().text()).toBe(201)
+    const submit = {
+      id: 'submit-1',
+      type: 'instance.submitted@1',
+      at: 2,
+      actor: 'user:sam',
+      payload: {
+        instanceId: INSTANCE_ID,
+        version: 0,
+        values: { summary: 'hello', urgent: false },
+      },
+    }
+    const first = await post(submit)
+    expect(first.status, await first.clone().text()).toBe(201)
+    const event = (await first.json()) as { seq: number }
+    const before = api.state().log.length
+    const again = await post(submit)
+    expect(again.status, await again.clone().text()).toBe(201)
+    expect(((await again.json()) as { seq: number }).seq).toBe(event.seq)
+    expect(api.state().log).toHaveLength(before)
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve()))
+    )
+  }
 })

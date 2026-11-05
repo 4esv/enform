@@ -48,7 +48,12 @@ const definition = parse(`{
 /** The form fields of the flow's steps, in step order (FM-1). */
 const fields: readonly Field[] = definition.steps.flatMap((step) => step.fields ?? [])
 
-/** The golden path: a definition change, then the submission that carries the form data (FM-4). */
+/**
+ * The golden path: a definition change, then the submission that carries the
+ * form data (FM-4). The submit is declared resolved, with the request form it
+ * completed (ADR 0014), so the harness appends it as it stands and the
+ * operator models the FM-4 boundary with the engine's validator.
+ */
 const golden = scenario({
   slug: 'data-flow',
   steps: [
@@ -57,7 +62,11 @@ const golden = scenario({
       type: 'config.definition.changed@1',
       payload: { flow: 'data-flow', definition },
     },
-    { actor: 'sam', type: 'instance.submitted@1', payload: { data: {} } },
+    {
+      actor: 'sam',
+      type: 'instance.submitted@1',
+      payload: { step: 'request', submitted: true, data: {} },
+    },
   ],
 })
 

@@ -23,7 +23,12 @@ const definition: FlowDefinition = parse(`{
   "steps": [
     {
       "key": "request",
-      "targets": [{ "starter": "starter" }]
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text" },
+        { "key": "urgent", "control": "checkbox" },
+        { "key": "detail", "control": "text" }
+      ]
     }
   ]
 }
@@ -72,10 +77,19 @@ test('#177 FM-7 a start and a submit carry the values that the form holds', () =
     { step: 'request', target: { starter: 'starter' }, members: [SAM] },
   ])
 
-  // A step completion records the values that the step captured (FM-7): the
-  // submit payload carries them merged over what the instance already held,
-  // and the returned instance holds the merge.
-  const submitted = submitInstance(started.instance, SAM, deps(), captured)
+  // The submit records the values that the request form captured (FM-7,
+  // ADR 0014): the payload carries them merged over what the draft already
+  // held, and the returned instance holds the merge.
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    captured,
+    0,
+    { flow: SLUG, definition, resolve, grants },
+    deps()
+  )
+  expect(submitted.accepted).toBe(true)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
   expect(submitted.instance.values).toEqual({
     summary: 'hello',
     urgent: false,

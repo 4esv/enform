@@ -281,25 +281,20 @@ test('#246 S15 VT-5 the timeline is the instance own events in log order', async
     token,
     `/api/v1/instances/${advisor.id}/timeline`
   )
-  // The second demo instance was started, claimed, completed at `request` and
-  // submitted, in that order (I4). The skip of the chair step rides on the
-  // start event, and the tracker reports it with its condition.
-  expect(entries.map((entry) => entry.type)).toEqual([
-    'instance.started@1',
-    'step.claimed@1',
-    'step.completed@1',
-    'instance.submitted@1',
-  ])
+  // The second demo instance was started as a draft and submitted, in that
+  // order (I4, ADR 0014): the submit completed the request form and entered
+  // the advisor step.
+  expect(entries.map((entry) => entry.type)).toEqual(['instance.started@1', 'instance.submitted@1'])
   expect(entries.map((entry) => entry.seq)).toEqual(
     log.filter((event) => event.payload.instanceId === advisor.id).map((event) => event.seq)
   )
-  expect(entries.map((entry) => entry.actor)).toEqual([sam.id, sam.id, sam.id, sam.id])
+  expect(entries.map((entry) => entry.actor)).toEqual([sam.id, sam.id])
   for (let index = 1; index < entries.length; index += 1) {
     expect(entries[index].at).toBeGreaterThanOrEqual(entries[index - 1].at)
   }
 
   // Another instance's events never reach this timeline (I4): the request
-  // instance above has only its start, while the advisor instance has four.
+  // draft above has only its start, while the advisor instance has two.
   const firstEntries = await getJsonAs<readonly TimelineEntry[]>(
     token,
     `/api/v1/instances/${request.id}/timeline`
@@ -313,19 +308,24 @@ test('#246 S15 VT-5 the timeline is the instance own events in log order', async
   // event for the step (VT-2).
   const view = await readAs(token, advisor.id)
   const started = eventOf(log, 'instance.started@1', advisor.id)
-  const completed = eventOf(log, 'step.completed@1', advisor.id)
+  const submitted = eventOf(log, 'instance.submitted@1', advisor.id)
   expect(trackerStep(view, 'request')).toEqual({
     key: 'request',
     state: 'completed',
     startAt: started.at,
-    lastActivityAt: completed.at,
+    lastActivityAt: submitted.at,
   })
   expect(trackerStep(view, 'advisor')).toEqual({
     key: 'advisor',
     state: 'unopened',
-    startAt: completed.at,
+    startAt: submitted.at,
   })
-  expect(view.tracker.find((step) => step.key === 'chair')).toEqual({
+  // The chair step follows the advisor and is skipped by the advisor's
+  // completion (S05): the registrar instance reports it with its condition.
+  expect(trackerStep(view, 'chair')).toEqual({ key: 'chair', state: 'not-reached' })
+  const registrar = demoInstance((instance) => instance.step === 'registrar')
+  const routed = await readAs(token, registrar.id)
+  expect(trackerStep(routed, 'chair')).toEqual({
     key: 'chair',
     state: 'skipped',
     condition: CHAIR_CONDITION,
@@ -337,6 +337,7 @@ test('#246 I8 the configuration changes need instance.timeline on the flow', asy
   const sam = castMember('starter')
   const priya = castMember('reader')
   const request = demoInstance((instance) => instance.step === 'request')
+  const advisor = demoInstance((instance) => instance.step === 'advisor')
   const samToken = await passwordToken(config, sam.email, sam.password)
   const priyaToken = await passwordToken(config, priya.email, priya.password)
 
@@ -352,9 +353,14 @@ test('#246 I8 the configuration changes need instance.timeline on the flow', asy
   const refused = await getAs(samToken, `/api/v1/instances/${request.id}/timeline?includeChanges=1`)
   expect(refused.status, 'Sam lacks instance.timeline on the flow').toBe(403)
 
+  // A draft is private to its starter (ADR 0014, D1): Priya reads nothing of
+  // the request draft, and reads the submitted advisor instance with the
+  // flow's changes.
+  const draft = await getAs(priyaToken, `/api/v1/instances/${request.id}/timeline`)
+  expect(draft.status, 'Priya may not read a draft').toBe(403)
   const withChanges = await getJsonAs<readonly TimelineEntry[]>(
     priyaToken,
-    `/api/v1/instances/${request.id}/timeline?includeChanges=1`
+    `/api/v1/instances/${advisor.id}/timeline?includeChanges=1`
   )
   const publication = withChanges.find((entry) => entry.type === PUBLISHED)
   expect(publication, 'Priya holds instance.timeline and reads the publication').toBeDefined()
@@ -435,7 +441,9 @@ test('#246 S15 WF-3 a send back enters the timeline and moves the tracker times'
   expect(entries[entries.length - 1]?.seq, 'the send back is the newest entry').toBe(sentBack?.seq)
 
   const log = await readLogAs(samToken)
-  const completed = eventOf(log, 'step.completed@1', advisor.id)
+  const submitted = eventOf(log, 'instance.submitted@1', advisor.id)
+  // The send back to the request form made the instance a draft again (ADR
+  // 0014); its starter reads the tracker.
   const view = await readAs(samToken, advisor.id)
   expect(trackerStep(view, 'request')).toEqual({
     key: 'request',
@@ -447,7 +455,7 @@ test('#246 S15 WF-3 a send back enters the timeline and moves the tracker times'
   expect(trackerStep(view, 'advisor')).toEqual({
     key: 'advisor',
     state: 'opened',
-    startAt: completed.at,
+    startAt: submitted.at,
     lastActivityAt: sentBack?.at,
   })
 
@@ -464,23 +472,30 @@ test('#246 S15 WF-3 a send back enters the timeline and moves the tracker times'
 test('#246 S15 VT-5 Chromium shows the timeline, the tracker times and the toggle', async () => {
   const { browser, publicUrl, config } = requireSetup()
   const priya = castMember('reader')
-  const request = demoInstance((instance) => instance.step === 'request')
+  // Priya reads a submitted instance (ADR 0014): the registrar instance,
+  // which no earlier test moved.
+  const instance = demoInstance((entry) => entry.step === 'registrar')
   const sam = castMember('starter')
   const token = await passwordToken(config, sam.email, sam.password)
   const log = await readLogAs(token)
-  const startedAt = eventOf(log, 'instance.started@1', request.id).at
+  const startedAt = eventOf(log, 'instance.started@1', instance.id).at
+  const ownEvents = log.filter((event) => event.payload.instanceId === instance.id).length
   const context = await browser.newContext()
   try {
     const page = await context.newPage()
     await signIn(page, publicUrl, priya.email, priya.password)
     await page.goto(
-      `${publicUrl}/?flow=${encodeURIComponent(flowSlug())}&instance=${encodeURIComponent(request.id)}`
+      `${publicUrl}/?flow=${encodeURIComponent(flowSlug())}&instance=${encodeURIComponent(instance.id)}`
     )
     await page.locator('[data-timeline]').waitFor({ timeout: 30_000 })
-    await expect.poll(async () => page.locator('[data-timeline-seq]').count()).toBe(1)
+    await expect.poll(async () => page.locator('[data-timeline-seq]').count()).toBe(ownEvents)
     expect(
       await page.locator('[data-timeline-type="instance.started@1"]').count(),
-      'the start is the only instance event'
+      'the start is one instance event'
+    ).toBe(1)
+    expect(
+      await page.locator('[data-timeline-type="instance.submitted@1"]').count(),
+      'the submit is one instance event'
     ).toBe(1)
 
     const startTime = await page
@@ -493,7 +508,9 @@ test('#246 S15 VT-5 Chromium shows the timeline, the tracker times and the toggl
     await page.locator('[data-timeline-changes]').check()
     await page.locator(`[data-timeline-type="${PUBLISHED}"]`).waitFor({ timeout: 30_000 })
     expect(await page.locator('[data-timeline-type="instance.started@1"]').count()).toBe(1)
-    await expect.poll(async () => page.locator('[data-timeline-seq]').count()).toBeGreaterThan(1)
+    await expect
+      .poll(async () => page.locator('[data-timeline-seq]').count())
+      .toBeGreaterThan(ownEvents)
   } finally {
     await context.close()
   }

@@ -2,35 +2,67 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://enform.dev/schemas/events/instance.submitted@1.json",
   "title": "enform instance.submitted@1 event payload",
-  "description": "The payload of an instance.submitted@1 event (#43, #177, #76, S06, FM-7, I2, SE-1). A submit names the instance it acts on (DX-1, #187), exactly as the start does, marks the instance submitted, records the values that the step captured merged over what the instance already held (FM-7), and carries the assignment email outbox entry in the same operation (I2, SE-1).",
+  "description": "The payload of an instance.submitted@1 event (#43, #177, #76, #256, S06, ADR 0014, FM-4, FM-7, WF-1, S05, I2, I13, SE-2). A submit is the starter's completion of the request form, the first step of the definition. It names the instance it acts on (DX-1, #187), the request step it completed, marks the instance submitted, records the merged values (FM-7), the steps its route skipped with the condition that skipped each (S05), the next step it entered with the resolved assignees (WF-1, I13) or `done` when the request form was the last step, the Unroutable queue when every target resolved to nobody (I10), and carries the task-assigned emails and the owner alert in the same operation (I2, SE-2).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["instanceId", "currentStep", "submitted", "values", "outbox"],
+  "required": ["instanceId", "step", "submitted", "values", "skipped"],
   "properties": {
     "instanceId": {
       "description": "The id of the instance that the submit acts on (DX-1, #187, #76).",
       "type": "string"
     },
-    "currentStep": {
-      "description": "The key of the step that the submit closed (S06, WF-1).",
+    "step": {
+      "description": "The key of the request form, the first step, that the submit completed (ADR 0014).",
       "type": "string"
+    },
+    "currentStep": {
+      "description": "The key of the step the submit routed the instance to (WF-1); absent when the request form was the last step.",
+      "type": "string"
+    },
+    "done": {
+      "description": "True when the request form was the last step, so the submit finished the instance (WF-1).",
+      "const": true
     },
     "submitted": {
       "description": "True after a submit (S06).",
       "const": true
     },
-    "values": { "$ref": "#/$defs/values" },
-    "outbox": {
-      "description": "The side effects that the submit causes, committed with the state change (I2, SE-1).",
+    "values": {
+      "$ref": "#/$defs/values"
+    },
+    "skipped": {
+      "description": "The steps that the submit's route skipped, in definition order, with the condition that skipped each (#192, WF-1, S05).",
       "type": "array",
-      "items": { "$ref": "#/$defs/outboxEntry" }
+      "items": {
+        "$ref": "#/$defs/skippedStep"
+      }
+    },
+    "assignees": {
+      "description": "The resolved assignees of the step the submit entered, with their membership snapshots (I13, AS-4).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/assignee"
+      }
+    },
+    "queue": {
+      "description": "The Unroutable queue when every target of the entered step resolved to nobody (I10, AS-5).",
+      "type": "string"
+    },
+    "outbox": {
+      "description": "The side effects that the submit causes, committed with the state change (I2, SE-1, SE-2): one task-assigned email per assignee, and the owner alert of an unroutable step.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/outboxEntry"
+      }
     }
   },
   "$defs": {
     "values": {
       "description": "The values that the form holds: one field key to one JSON value (FM-7).",
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonValue"
+      }
     },
     "jsonValue": {
       "description": "One JSON value: a string, number, boolean, null, array or object (FM-7, DF-1).",
@@ -42,9 +74,76 @@
       "additionalProperties": false,
       "required": ["operation", "target", "payload"],
       "properties": {
-        "operation": { "type": "string" },
-        "target": { "type": "string" },
-        "payload": { "type": "object" }
+        "operation": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "skippedStep": {
+      "description": "One step that the route skipped, and the condition that skipped it (S05, #192).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "condition"],
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "assignee": {
+      "description": "One resolved assignee of a step, with the membership snapshot that resolution produced (I13, AS-4).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "target", "members"],
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "target": {
+      "description": "A task recipient: exactly one kind, per AS-1. Dynamic targets are starter, field and manager-of.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "user": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "starter": {
+          "type": "string"
+        },
+        "manager-of": {
+          "type": "string"
+        }
       }
     }
   }

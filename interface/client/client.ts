@@ -50,6 +50,111 @@ export interface StartIntent {
 }
 
 /**
+ * A submit intent (ADR 0010, ADR 0014, FM-4, FM-7, SE-2): the parts the starter can honestly
+ * send to submit a draft. It carries the operation ID it chose (I1), the event type
+ * `instance.submitted@1`, the actor, the draft it acts on (DX-1), the version the starter read
+ * (I5) and the values the request form captured. The server validates the request form's fields
+ * and rules, routes the instance to the next step whose skip condition is false, records the
+ * assignees and the task-assigned emails through the engine, and refuses a submit that is not
+ * the starter's, that is stale, or whose values fail (409 with every error by path). It is told
+ * apart from a resolved `instance.submitted@1` by the payload: an intent names no `step`.
+ */
+export interface SubmitIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A draft edit (ADR 0014, RT-3, I1): the starter changed the values a draft holds. One
+ * operation per edit, with the ID the client chose, so a retry appends nothing. The values
+ * merge over what the draft holds; the submit validates them (FM-4). A principal that is not
+ * the starter answers 403, and an instance that is no longer a draft answers 409.
+ */
+export interface DraftEditIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * An undo of an action (S16, S10, WF-5, D6, A2): the parts a client can honestly send to undo
+ * the latest claim, release, takeover, reassign, outcome or send back on an instance. It
+ * carries the operation ID it chose (I1), the event type `event.undone@1`, the actor, the
+ * instance, the seq of the event it undoes (from the timeline), the reason and the version it
+ * read (I5). The engine appends a compensating event and never rewrites the undone one; a side
+ * effect that already occurred is marked Already sent and not reversed, and its recipients are
+ * notified. A principal who neither made the action nor owns the flow answers 403; a stale
+ * view, an event that is not the latest action, an undo after the flow's period or past its
+ * final step answers 409 with the reason.
+ */
+export interface UndoActionIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * One team and the members it holds now (AS-6, AS-4, ID-4).
+ */
+export interface Team {
+  readonly name: string
+  readonly members: readonly string[]
+}
+
+/**
+ * A team change (AS-6, I14): the parts a client sends to create a team, add a member or remove
+ * one. It carries the operation ID (I1), the type `config.team.changed@1`, the actor, the team
+ * name, the change and, for a membership change, the member. The engine authorizes `org.teams`
+ * on `org` (403 otherwise), refuses a team that already exists or does not exist (409) and a
+ * malformed change (400).
+ */
+export interface TeamIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A release (WF-5, AS-2, I5): the holder returns the task of the current step to the pool, or a
+ * flow owner with `task.reassign` on the flow returns anyone's with a reason. It carries the
+ * operation ID (I1), the type `task.released@1`, the actor, the instance and the version read.
+ * A principal who neither holds the task nor owns the flow answers 403; a task nobody holds or
+ * a stale view answers 409.
+ */
+export interface ReleaseIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
+ * A reassign (WF-5, MVP.md 5.6, I2, I5): a flow owner with `task.reassign` on the flow gives
+ * the task of the current step to a principal, with a reason. The principal becomes the holder
+ * and an assignee of the step and is told in the same operation (SE-2). It carries the
+ * operation ID (I1), the type `task.reassigned@1`, the actor, the instance, the version read,
+ * the principal and the reason. A principal without `task.reassign` answers 403; a stale view
+ * answers 409; a missing reason or principal answers 400.
+ */
+export interface ReassignIntent {
+  readonly id: OperationId
+  readonly type: string
+  readonly at: number
+  readonly actor: ActorId
+  readonly payload: Record<string, unknown>
+}
+
+/**
  * A completion intent (ADR 0010, FM-3, FM-4): the parts a client can honestly send when the
  * holder completes the current step. It carries the operation ID it chose (I1), the event type
  * `step.completed@1`, the actor, the instance it acts on (DX-1), the version of the instance it
@@ -270,6 +375,7 @@ export interface InstanceView {
   readonly canCancel: boolean
   readonly canTakeOver: boolean
   readonly takeoverAvailableAt?: number
+  readonly rebound?: Record<string, unknown>
 }
 
 /**
@@ -455,6 +561,9 @@ export interface DraftFlow {
 export interface DefinitionChange {
   readonly class: string
   readonly message: string
+  readonly path: string
+  readonly before?: Record<string, unknown>
+  readonly after?: Record<string, unknown>
 }
 
 /**
@@ -654,6 +763,16 @@ export async function listGroups(): Promise<readonly DirectoryGroup[]> {
   return (await response.json()) as readonly DirectoryGroup[]
 }
 
+export async function listTeams(): Promise<readonly Team[]> {
+  const url = `${configured().baseUrl}/api/v1/teams`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (!response.ok) throw await refusal(response)
+  return (await response.json()) as readonly Team[]
+}
+
 export async function listUnroutable(): Promise<readonly UnroutableItem[]> {
   const url = `${configured().baseUrl}/api/v1/unroutable`
   const response = await fetch(url, {
@@ -778,8 +897,12 @@ export async function readInstanceTimeline(
   return (await response.json()) as readonly TimelineEntry[]
 }
 
-export async function readLog(): Promise<Log> {
-  const url = `${configured().baseUrl}/api/v1/log`
+export async function readLog(instance?: string, limit?: number): Promise<Log> {
+  const query = new URLSearchParams()
+  if (instance !== undefined) query.set('instance', String(instance))
+  if (limit !== undefined) query.set('limit', String(limit))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/log${search}`
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
