@@ -64,7 +64,11 @@ const definition = {
       editable: ['summary', 'overload_credits'],
       outcomes: ['submit'],
       rules: [
-        { when: { '>': [{ var: 'overload_credits' }, 6] }, effect: 'require', targets: ['advisor'] },
+        {
+          when: { '>': [{ var: 'overload_credits' }, 6] },
+          effect: 'require',
+          targets: ['advisor'],
+        },
       ],
     },
     {
@@ -81,7 +85,7 @@ const definition = {
   ],
 }
 
-test.fails('#264the builder model reads a definition and writes it back unchanged (DF-4)', () => {
+test('#264the builder model reads a definition and writes it back unchanged (DF-4)', () => {
   const model = readModel(definition)
   expect(model.anonymous).toBe(true)
   expect(model.undoHours).toBe('48')
@@ -111,7 +115,7 @@ test.fails('#264the builder model reads a definition and writes it back unchange
   expect(writeDefinition(model)).toEqual(definition)
 })
 
-test.fails('#264the builder writes flat fields when a step has no section and the FM-3 lists it has', () => {
+test('#264the builder writes flat fields when a step has no section and the FM-3 lists it has', () => {
   const model = readModel({
     schemaVersion: 2,
     steps: [
@@ -173,7 +177,7 @@ test.fails('#264the builder writes flat fields when a step has no section and th
 // visual forms; a tree the builder cannot express is kept as JSON text and
 // written back as it was, so a rule written by hand is never lost (DF-4).
 
-test.fails('#264the condition builder round-trips JSON Logic trees and shows them in words (FM-5)', () => {
+test('#264the condition builder round-trips JSON Logic trees and shows them in words (FM-5)', () => {
   const labels = new Map([
     ['overload_credits', 'Overload credits'],
     ['advisor', 'Advisor'],
@@ -209,16 +213,19 @@ test.fails('#264the condition builder round-trips JSON Logic trees and shows the
 // `flow.build`. The check is a presentation convenience; the server refuses
 // the change again (AC-1, I8).
 
-test.fails('#264the builder knows who may make a structural change (DF-5)', () => {
+test('#264the builder knows who may make a structural change (DF-5)', () => {
   const slug = 'course-overload'
-  expect(canBuild([{ principal: 'priya', scopes: ['flow.edit'], resource: `flow:${slug}` }], slug))
-    .toBe(false)
-  expect(canBuild([{ principal: 'dana', scopes: ['flow.build'], resource: `flow:${slug}` }], slug))
-    .toBe(true)
+  expect(
+    canBuild([{ principal: 'priya', scopes: ['flow.edit'], resource: `flow:${slug}` }], slug)
+  ).toBe(false)
+  expect(
+    canBuild([{ principal: 'dana', scopes: ['flow.build'], resource: `flow:${slug}` }], slug)
+  ).toBe(true)
   expect(canBuild([{ principal: 'dana', scopes: ['flow.build'], resource: 'flow:*' }], slug)).toBe(
     true
   )
-  expect(canBuild([{ principal: 'dana', scopes: ['flow.build'], resource: 'flow:other' }], slug))
-    .toBe(false)
+  expect(
+    canBuild([{ principal: 'dana', scopes: ['flow.build'], resource: 'flow:other' }], slug)
+  ).toBe(false)
   expect(canBuild([], slug)).toBe(false)
 })
