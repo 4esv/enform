@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enform.dev/schemas/events/draft.edited@1.json",
+  "title": "enform draft.edited@1 event payload",
+  "description": "The payload of a draft.edited@1 event (#256, ADR 0014, RT-3, FM-7, I1, D1). The starter changed the values a draft holds: one operation per edit, with the id the client chose, so a retry appends nothing (I1). The values merge over what the draft holds; the submit validates them (FM-4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instanceId", "values"],
+  "properties": {
+    "instanceId": {
+      "description": "The id of the draft the edit acts on (DX-1).",
+      "type": "string"
+    },
+    "values": {
+      "description": "The field keys the edit changed, each with its new JSON value (FM-7).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonValue"
+      }
+    }
+  },
+  "$defs": {
+    "jsonValue": {
+      "description": "One JSON value: a string, number, boolean, null, array or object (FM-7, DF-1).",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
+  }
+}

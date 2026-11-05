@@ -25,7 +25,15 @@ import { instanceOf } from '../engine/instances.js'
 import type { ActorId, Log, Operation } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK, sendBack } from '../engine/sendBack.js'
-import { INSTANCE_STARTED, resolveIntent } from '../engine/submission.js'
+import {
+  DRAFT_EDITED,
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  resolveDraftEditIntent,
+  resolveIntent,
+  resolveSubmitIntent,
+  SubmitRefused,
+} from '../engine/submission.js'
 import { STEP_TAKEN_OVER, takeover } from '../engine/takeover.js'
 import { teamsOf } from '../engine/teams.js'
 import {
@@ -85,6 +93,8 @@ export type IntentResult =
 /** The event types that `resolveClientOperation` serves as intents (ADR 0010). */
 export const INTENT_TYPES: readonly string[] = [
   INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  DRAFT_EDITED,
   STEP_COMPLETED,
   STEP_CLAIMED,
   GRANT_CHANGE_TYPE,
@@ -109,6 +119,8 @@ export function isClientIntent(body: Record<string, unknown>): boolean {
   if (typeof type !== 'string' || !INTENT_TYPES.includes(type)) return false
   const payload = isRecord(body.payload) ? body.payload : {}
   if (type === INSTANCE_STARTED) return !('definitionVersion' in payload)
+  if (type === INSTANCE_SUBMITTED) return !('step' in payload) && !('submitted' in payload)
+  if (type === DRAFT_EDITED) return true
   if (type === STEP_COMPLETED) return !('step' in payload)
   if (type === STEP_CLAIMED) return 'expectedVersion' in payload
   if (type === GRANT_CHANGE_TYPE) return true
@@ -154,6 +166,30 @@ export function resolveClientOperation(
       }
       return { operation }
     }
+    if (body.type === INSTANCE_SUBMITTED) {
+      // The submit routes the draft (ADR 0014): the resolver reads the draft's
+      // starter and values for the dynamic targets, and the flow owner gets
+      // the alert of an unroutable step (I10).
+      const payload = isRecord(body.payload) ? body.payload : {}
+      const instanceId = stringValue(payload.instanceId)
+      const instance = instanceId === undefined ? undefined : instanceOf(log, instanceId)
+      const values = { ...instance?.values, ...(isRecord(payload.values) ? payload.values : {}) }
+      const resolver = context.resolver(instance?.starter, values)
+      const owner = instance === undefined ? actor : (flowOwner(log, instance.flow) ?? actor)
+      const operation = resolveSubmitIntent(log, { ...body, actor }, resolver, grants, owner)
+      if (operation === undefined) {
+        return {
+          status: 400,
+          error: 'a raw instance.submitted@1 is refused; post the submit intent (ADR 0010)',
+        }
+      }
+      return { operation }
+    }
+    if (body.type === DRAFT_EDITED) {
+      const operation = resolveDraftEditIntent(log, { ...body, actor })
+      if (operation === undefined) return { status: 400, error: 'a draft edit needs values' }
+      return { operation }
+    }
     if (body.type === STEP_COMPLETED) {
       const payload = isRecord(body.payload) ? body.payload : {}
       const instanceId = stringValue(payload.instanceId)
@@ -194,6 +230,9 @@ export function resolveClientOperation(
   } catch (error) {
     if (error instanceof CompletionRefused) {
       return { status: 409, error: error.message, errors: error.errors }
+    }
+    if (error instanceof SubmitRefused) {
+      return { status: error.status, error: error.message, errors: error.errors }
     }
     return { status: 400, error: messageOf(error) }
   }

@@ -35,7 +35,7 @@ export const PRIYA = 'user:priya'
 /** The team that holds the registrar task (AS-1, AS-4). */
 export const REGISTRAR_TEAM = 'registrar-office'
 
-/** The four steps of the story: the conditional chair, then request, advisor, registrar (WF-1). */
+/** The four steps of the story: the request form, the conditional chair, then advisor and registrar (WF-1, ADR 0014). */
 export const CHAIR_STEP = 'chair'
 export const REQUEST_STEP = 'request'
 export const ADVISOR_STEP = 'advisor'
@@ -59,15 +59,15 @@ export const definition: FlowDefinition = parse(`{
   "schemaVersion": 1,
   "steps": [
     {
+      "key": "${REQUEST_STEP}",
+      "targets": [{ "starter": "starter" }],
+      "outcomes": ["submit"]
+    },
+    {
       "key": "${CHAIR_STEP}",
       "targets": [{ "group": "CS-Chairs" }],
       "outcomes": ["approve", "send_back"],
       "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
-    },
-    {
-      "key": "${REQUEST_STEP}",
-      "targets": [{ "starter": "starter" }],
-      "outcomes": ["submit"]
     },
     {
       "key": "${ADVISOR_STEP}",

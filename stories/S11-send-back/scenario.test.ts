@@ -12,7 +12,7 @@ import {
   STEP_SENT_BACK,
   sendBack,
 } from '../../engine/sendBack.js'
-import { EMAIL_CONNECTOR, startInstance } from '../../engine/submission.js'
+import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
 import {
   data,
   definition,
@@ -87,8 +87,8 @@ test('#48 a send back needs a comment and returns the instance to the named step
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 
-  // The start routes the request to the request step, whose starter target
-  // resolves to Sam (S06, WF-1, I13).
+  // The start creates Sam's draft on the request form, whose starter target
+  // resolves to him (S06, ADR 0014, I13).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   const startState = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
@@ -96,37 +96,31 @@ test('#48 a send back needs a comment and returns the instance to the named step
     { step: REQUEST_STEP, target: { starter: 'starter' }, members: [STARTER] },
   ])
 
-  // Sam submits: he claims the request step and completes it with submit, so
-  // the instance advances to the registrar step (S09, WF-1).
+  // Sam submits his draft, so the instance advances to the registrar step
+  // (S06, WF-1, ADR 0014).
   const opened = startState.log.length
-  const atRequest: Instance = { ...started.instance, version: opened }
-  const claimedRequest = claim(atRequest, STARTER, opened, sources)
-  expect(claimedRequest.accepted).toBe(true)
-  let state = applyAction(claimedRequest, startState)
-  const submitted = complete(
-    claimedRequest.instance,
+  const submitted = submitInstance(
+    started.instance,
     STARTER,
-    'submit',
     {},
-    claimedRequest.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
     sources
   )
   expect(submitted.accepted).toBe(true)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
   expect(submitted.instance.currentStep).toBe(REGISTRAR_STEP)
-  state = applyAction(submitted, state)
+  let state = apply(submitted.operation, startState)
+  const assignmentEmails = outboxOf(state.log)
 
-  // The engine records the assignees of a step when it starts it (S06, I13).
-  // The registrar step starts now, so the story resolves its team snapshot, so
-  // that Jordan can claim it.
+  // The engine records the assignees of a step when it starts it (S06, I13):
+  // the submit resolved the registrar team snapshot, so Jordan can claim it.
   const registrarAssignees = resolveAssignees(definition.steps[1], resolve)
   expect(registrarAssignees).toEqual([
     { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
   ])
-  const atRegistrar: Instance = {
-    ...submitted.instance,
-    assignees: [...submitted.instance.assignees, ...registrarAssignees],
-  }
+  expect(submitted.instance.assignees).toContainEqual(registrarAssignees[0])
+  const atRegistrar: Instance = submitted.instance
   const claimedRegistrar = claim(atRegistrar, JORDAN, atRegistrar.version ?? 0, sources)
   expect(claimedRegistrar.accepted).toBe(true)
   expect(claimedRegistrar.instance.holder).toBe(JORDAN)
@@ -208,7 +202,7 @@ test('#48 a send back needs a comment and returns the instance to the named step
   // One apply commits the state change and its note together (I2): the outbox
   // is the projection of that one event.
   const afterSent = applySendBack(sent, state)
-  expect(outboxOf(afterSent.log)).toEqual([sent.outbox])
+  expect(outboxOf(afterSent.log)).toEqual([...assignmentEmails, sent.outbox])
 
   // The timeline shows both revisions of the request step (WF-3): revision 1 is
   // the start that routed the instance to request, and revision 2 is the send

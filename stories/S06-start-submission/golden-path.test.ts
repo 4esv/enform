@@ -11,7 +11,16 @@ import {
 } from '../../engine/submission.js'
 import { runGolden } from '../../tools/harness/runner.js'
 import { goldenView, stepOperation } from '../../tools/harness/scenario.js'
-import { flow, golden, INSTANCE_ID, resolve, samData, samGrants } from './scenario.js'
+import {
+  definitionV1,
+  flow,
+  golden,
+  INSTANCE_ID,
+  resolve,
+  SLUG,
+  samData,
+  samGrants,
+} from './scenario.js'
 
 /** Sam, the signed-in principal who starts the submission (S06, ID-2). */
 const SAM = 'user:sam'
@@ -27,7 +36,15 @@ function depsFor(index: number): { clock: () => number; ids: () => string } {
 /** The golden path through S06 (start then submit), as the engine's own operations (I6). */
 function submissionOperations(): readonly Operation[] {
   const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
-  const submitted = submitInstance(started.instance, SAM, depsFor(1), samData)
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    samData,
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: samGrants },
+    depsFor(1)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
   return [started.operation, submitted.operation]
 }
 
@@ -55,5 +72,10 @@ test('#179 the golden path of S06 runs through the runner in api mode (S06)', as
     },
   ])
   expect(view.log[0].payload).toMatchObject({ values: samData })
-  expect(view.log[1].payload).toMatchObject({ values: samData, submitted: true })
+  expect(view.log[1].payload).toMatchObject({
+    values: samData,
+    submitted: true,
+    step: 'request',
+    currentStep: 'advisor',
+  })
 })

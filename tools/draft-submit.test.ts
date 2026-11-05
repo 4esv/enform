@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest'
 import { claim, complete } from '../engine/action.js'
-import { apply, emptyState } from '../engine/apply.js'
+import { apply, emptyState, type State } from '../engine/apply.js'
 import type { Grant } from '../engine/authorize.js'
 import { parse } from '../engine/definition.js'
+import { createFlow, publish, push } from '../engine/flow.js'
 import { contentHash, type Instance } from '../engine/instance.js'
 import { instanceOf, readInstance } from '../engine/instances.js'
 import type { Operation, OperationDeps } from '../engine/operation.js'
@@ -89,7 +90,14 @@ function deps(id: string, at = 1): OperationDeps {
   return { clock: () => at, ids: () => id }
 }
 
-test.fails('#256 a start is a private draft on the request form (ADR 0014, D1, VT-4)', () => {
+/** The log with the flow published, so the projection finds the pinned version (DF-2). */
+function published(definition: ReturnType<typeof parse>): State {
+  const pushed = push(createFlow(SLUG), definition, deps('push', 0), 'user:dana')
+  const released = publish(pushed.flow, deps('publish', 0), 'user:dana')
+  return apply(released.operation, apply(pushed.operation, emptyState))
+}
+
+test('#256 a start is a private draft on the request form (ADR 0014, D1, VT-4)', () => {
   const started = startInstance(
     flow,
     'inst-1',
@@ -107,7 +115,7 @@ test.fails('#256 a start is a private draft on the request form (ADR 0014, D1, V
   ])
   expect(started.operation.payload.skipped).toEqual([])
   expect(started.operation.payload.outbox).toBeUndefined()
-  const state = apply(started.operation, emptyState)
+  const state = apply(started.operation, published(definition))
   const projected = instanceOf(state.log, 'inst-1')
   if (projected === undefined) throw new Error('the draft is not on the log')
   const context = { flow: SLUG, definition, log: state.log, grants }
@@ -138,7 +146,7 @@ test.fails('#256 a start is a private draft on the request form (ADR 0014, D1, V
   expect(claimed.reason).toContain('draft')
 })
 
-test.fails('#256 the starter edits a draft and nobody else does (RT-3, D1)', async () => {
+test('#256 the starter edits a draft and nobody else does (RT-3, D1)', async () => {
   const { editDraft } = await draftModule()
   const started = startInstance(
     flow,
@@ -161,11 +169,14 @@ test.fails('#256 the starter edits a draft and nobody else does (RT-3, D1)', asy
   expect(other.accepted).toBe(false)
   expect(other.reason).toContain('starter')
   // The projection folds the edit (I4).
-  const state = apply(edited.operation ?? started.operation, apply(started.operation, emptyState))
+  const state = apply(
+    edited.operation ?? started.operation,
+    apply(started.operation, published(definition))
+  )
   expect(instanceOf(state.log, 'inst-1')?.values).toEqual({ summary: 'three', overload_credits: 3 })
 })
 
-test.fails('#256 a submit validates the request form, routes and notifies the assignees (FM-4, SE-2, I2)', async () => {
+test('#256 a submit validates the request form, routes and notifies the assignees (FM-4, SE-2, I2)', async () => {
   const { submitInstance } = await draftModule()
   const started = startInstance(flow, 'inst-1', {}, SAM, deps('op-1'), resolve, grants)
   const context = { flow: SLUG, definition, resolve, grants }
@@ -226,7 +237,7 @@ test.fails('#256 a submit validates the request form, routes and notifies the as
   expect(submitted.instance.submitted).toBe(true)
   expect(submitted.instance.currentStep).toBe('advisor')
   expect(submitted.instance.version).toBe(1)
-  const state = apply(operation, apply(started.operation, emptyState))
+  const state = apply(operation, apply(started.operation, published(definition)))
   // The task-assigned email rides in the same operation (I2, SE-2).
   expect(outboxOf(state.log)).toEqual([
     {
@@ -286,7 +297,7 @@ test.fails('#256 a submit validates the request form, routes and notifies the as
   ])
 })
 
-test.fails('#256 a submit of a one-step flow finishes the instance (WF-1)', async () => {
+test('#256 a submit of a one-step flow finishes the instance (WF-1)', async () => {
   const { submitInstance } = await draftModule()
   const single = parse(`{
   "schemaVersion": 2,

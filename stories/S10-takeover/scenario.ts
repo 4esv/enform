@@ -42,6 +42,10 @@ export const definition: FlowDefinition = parse(`{
   "schemaVersion": 1,
   "steps": [
     {
+      "key": "request",
+      "targets": [{ "starter": "starter" }]
+    },
+    {
       "key": "${REGISTRAR_STEP}",
       "targets": [{ "team": "${REGISTRAR_TEAM}" }],
       "outcomes": ["approve", "reject"]
@@ -65,6 +69,7 @@ export const data: ConditionData = {}
 
 /** The directory of the story (AS-1, I13): a team resolves to its members, and a user to itself. */
 export const resolve: TargetResolver = (target) => {
+  if ('starter' in target) return [STARTER]
   if ('team' in target) return REGISTRAR_MEMBERS
   if ('user' in target) return [target.user]
   return []

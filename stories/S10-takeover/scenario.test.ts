@@ -4,17 +4,19 @@ import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Instance } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
-import { startInstance } from '../../engine/submission.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
 import { STEP_TAKEN_OVER, type TakeoverResult, takeover } from '../../engine/takeover.js'
 import {
   ANA,
   data,
+  definition,
   flow,
   LEE,
   REGISTRAR_MEMBERS,
   REGISTRAR_STEP,
   REGISTRAR_TEAM,
   resolve,
+  SLUG,
   STARTER,
   starterGrants,
 } from './scenario.js'
@@ -67,20 +69,34 @@ test('#47 a peer takes over a claimed task after the idle period, with a reason 
   let now = CLAIM_AT
   const deps = sources(() => now)
 
-  // The start routes the request to the registrar step, whose team target
-  // resolves to Lee, Ana and Jordan (S06, I10, I13).
+  // Sam starts and submits the request (S06, ADR 0014): the submit routes it
+  // to the registrar step, whose team target resolves to Lee, Ana and Jordan
+  // (I10, I13), and notifies them (SE-2).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
-  const state = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
-  expect(started.instance.assignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
+  const submitted = submitInstance(
+    started.instance,
+    STARTER,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
+    deps
+  )
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  const state = apply(submitted.operation, apply(started.operation, emptyState))
+  expect(submitted.instance.currentStep).toBe(REGISTRAR_STEP)
+  expect(submitted.instance.assignees).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: REGISTRAR_MEMBERS,
+  })
+  const assignmentEmails = outboxOf(state.log)
+  expect(assignmentEmails.map((entry) => entry.payload.to)).toEqual(REGISTRAR_MEMBERS)
 
   // Lee claims the task at the claim time (S09, AS-2): the instance records
   // the holder, and the log records the claim with the time that the idle
   // period counts from.
-  const opened = state.log.length
-  const view: Instance = { ...started.instance, version: opened }
+  const opened = submitted.instance.version ?? 0
+  const view: Instance = submitted.instance
   const lee = claim(view, LEE, opened, deps)
   expect(lee.accepted).toBe(true)
   expect(lee.instance.holder).toBe(LEE)
@@ -117,7 +133,7 @@ test('#47 a peer takes over a claimed task after the idle period, with a reason 
     payload: { to: LEE, step: REGISTRAR_STEP, actor: ANA, reason: REASON },
   })
   const afterTakeover = applyAction(taken, afterClaim)
-  expect(outboxOf(afterTakeover.log)).toEqual([taken.outbox])
+  expect(outboxOf(afterTakeover.log)).toEqual([...assignmentEmails, taken.outbox])
 
   // The timeline records the takeover (I14): one attributed event, with the
   // reassign from Lee to Ana.

@@ -1,5 +1,4 @@
 import { expect, test } from 'vitest'
-import { claim, complete, STEP_COMPLETED } from '../engine/action.js'
 import { apply, emptyState, type State } from '../engine/apply.js'
 import type { Grant } from '../engine/authorize.js'
 import { type FlowDefinition, parse } from '../engine/definition.js'
@@ -8,18 +7,20 @@ import { contentHash, type Instance } from '../engine/instance.js'
 import { instanceOf } from '../engine/instances.js'
 import type { OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
-import { startInstance } from '../engine/submission.js'
+import { INSTANCE_SUBMITTED, startInstance, submitInstance } from '../engine/submission.js'
 import { startApi } from './harness/server.js'
 
-// Issue #77, FM-4, FM-2, FM-7, FM-1, I1, I6, A9: the server re-runs every rule
-// and every validation at a submission. FM-4: the server runs all rules and
-// validation again at each submission and does not trust client state. A
-// completion runs the step's rules again over the state the submission creates,
-// validates every captured value against its control (validateField), and
-// refuses with every error named by field path. A skipped field drops out of
-// the capture (FM-2), a hidden field is neither required nor validated, and a
-// refusal appends nothing (I1). The engine path (`complete`) and the intent path
-// (through the server) give the same decision, so they cannot diverge (A9).
+// Issue #77, #256, FM-4, FM-2, FM-7, FM-1, I1, I6, A9, ADR 0014: the server
+// re-runs every rule and every validation at a submission. FM-4: the server
+// runs all rules and validation again at each submission and does not trust
+// client state. The submit of the request form runs the step's rules again
+// over the state the submission creates, validates every captured value
+// against its control (validateField), and refuses with every error named by
+// field path; a completion of a later step shares the same rule
+// (`validateStep`). A skipped field drops out of the capture (FM-2), a hidden
+// field is neither required nor validated, and a refusal appends nothing (I1).
+// The engine path (`submitInstance`) and the intent path (through the server)
+// give the same decision, so they cannot diverge (A9).
 
 const SLUG = 'course-overload'
 const SAM = 'user:sam'
@@ -70,9 +71,9 @@ const resolve: TargetResolver = (target) => {
   return []
 }
 
-/** Sam's grants (AC-1, AC-4): he may start the flow and submit the request step. */
+/** Sam's grant (AC-1): he may start the flow, and the starter submits the request form (ADR 0014). */
 const grants: readonly Grant[] = [
-  { principal: SAM, scopes: ['instance.start', 'step.outcome:submit'], resource: `flow:${SLUG}` },
+  { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
 ]
 
 /** The injected sources of the test (I6): a fixed time and `op-N` IDs. */
@@ -109,42 +110,50 @@ function seeded(definition: FlowDefinition, sources: OperationDeps): State {
   return apply(published.operation, apply(pushed.operation, emptyState))
 }
 
-/** The claimed instance of the request step (S09, AS-2, I5): a start then a claim, so a completion has a holder. */
-function claimed(
+/** The draft on the request form (S06, ADR 0014): a start, so the starter has a form to submit. */
+function drafted(
   definition: FlowDefinition,
   sources: OperationDeps
 ): { readonly instance: Instance; readonly state: State } {
   const started = startInstance(flowOf(definition), INSTANCE_ID, {}, SAM, sources, resolve, grants)
-  const state = apply(started.operation, seeded(definition, sources))
-  const claimResult = claim(started.instance, SAM, started.instance.version ?? 0, sources)
-  if (!claimResult.accepted || claimResult.operation === undefined) {
-    throw new Error(`the claim was refused: ${claimResult.reason}`)
+  return {
+    instance: started.instance,
+    state: apply(started.operation, seeded(definition, sources)),
   }
-  return { instance: claimResult.instance, state: apply(claimResult.operation, state) }
 }
 
-/** The completion context of the test (S09): the flow, its definition and the actor's grants. */
-function completion(definition: FlowDefinition): {
+/** The submit context of the test (ADR 0014): the flow, its definition, the resolver and the grants. */
+function submission(definition: FlowDefinition): {
   readonly flow: string
   readonly definition: FlowDefinition
+  readonly resolve: TargetResolver
   readonly grants: readonly Grant[]
 } {
-  return { flow: SLUG, definition, grants }
+  return { flow: SLUG, definition, resolve, grants }
 }
 
-test('#77 FM-4 a completion refuses a captured value that fails its control, naming the field path', () => {
-  const sources = deps()
-  const definition = definitionWith('[]')
-  const { instance } = claimed(definition, sources)
-  const result = complete(
+/** Submit the draft with the captured values (FM-4): the engine path of the request form. */
+function submit(
+  instance: Instance,
+  definition: FlowDefinition,
+  values: Readonly<Record<string, import('../engine/definition.js').JsonValue>>,
+  sources: OperationDeps
+) {
+  return submitInstance(
     instance,
     SAM,
-    'submit',
-    { amount: 'lots' },
+    values,
     instance.version ?? 0,
-    completion(definition),
+    submission(definition),
     sources
   )
+}
+
+test('#77 FM-4 a submission refuses a captured value that fails its control, naming the field path', () => {
+  const sources = deps()
+  const definition = definitionWith('[]')
+  const { instance } = drafted(definition, sources)
+  const result = submit(instance, definition, { amount: 'lots' }, sources)
   expect(result.accepted).toBe(false)
   expect(result.operation).toBeUndefined()
   expect(result.errors).toEqual([{ path: 'amount', message: 'must be a number' }])
@@ -152,38 +161,22 @@ test('#77 FM-4 a completion refuses a captured value that fails its control, nam
   expect(result.instance).toBe(instance)
 })
 
-test('#77 FM-4 a completion refuses a required field the step will hold empty, naming the field', () => {
+test('#77 FM-4 a submission refuses a required field the step will hold empty, naming the field', () => {
   const sources = deps()
   const definition = definitionWith(
     `[{ "when": true, "effect": "require", "targets": ["summary"] }]`
   )
-  const { instance } = claimed(definition, sources)
-  const result = complete(
-    instance,
-    SAM,
-    'submit',
-    {},
-    instance.version ?? 0,
-    completion(definition),
-    sources
-  )
+  const { instance } = drafted(definition, sources)
+  const result = submit(instance, definition, {}, sources)
   expect(result.accepted).toBe(false)
   expect(result.errors).toEqual([{ path: 'summary', message: 'is required' }])
 })
 
-test('#77 FM-4 a completion reports every error by path, not one', () => {
+test('#77 FM-4 a submission reports every error by path, not one', () => {
   const sources = deps()
   const definition = definitionWith('[]')
-  const { instance } = claimed(definition, sources)
-  const result = complete(
-    instance,
-    SAM,
-    'submit',
-    { amount: 'lots', summary: 42 },
-    instance.version ?? 0,
-    completion(definition),
-    sources
-  )
+  const { instance } = drafted(definition, sources)
+  const result = submit(instance, definition, { amount: 'lots', summary: 42 }, sources)
   expect(result.accepted).toBe(false)
   // Both bad values are named, in definition order (FM-4).
   expect(result.errors?.map((error) => error.path)).toEqual(['amount', 'summary'])
@@ -195,19 +188,11 @@ test('#77 FM-4 a skipped field is dropped from the capture: not recorded, not va
     { "when": true, "effect": "require", "targets": ["note"] },
     { "when": true, "effect": "skip", "targets": ["note"] }
   ]`)
-  const { instance } = claimed(definition, sources)
+  const { instance } = drafted(definition, sources)
   // `note` would fail a validation and a require rule, but skip wins (FM-2,
   // Axel 2026-10-13): the value is not recorded, not validated and never
   // refused.
-  const result = complete(
-    instance,
-    SAM,
-    'submit',
-    { note: 42, summary: 'hello' },
-    instance.version ?? 0,
-    completion(definition),
-    sources
-  )
+  const result = submit(instance, definition, { note: 42, summary: 'hello' }, sources)
   expect(result.accepted).toBe(true)
   expect(result.errors).toBeUndefined()
   expect(result.operation?.payload.values).toEqual({ summary: 'hello' })
@@ -216,18 +201,10 @@ test('#77 FM-4 a skipped field is dropped from the capture: not recorded, not va
 test('#77 FM-4 a hidden required field does not block the submission', () => {
   const sources = deps()
   const definition = definitionWith('[]')
-  const { instance } = claimed(definition, sources)
+  const { instance } = drafted(definition, sources)
   // `hidden` says required in the definition, but the step does not make it
   // visible, so the rules make it not required (FM-2): nobody can fill it.
-  const result = complete(
-    instance,
-    SAM,
-    'submit',
-    { summary: 'hello' },
-    instance.version ?? 0,
-    completion(definition),
-    sources
-  )
+  const result = submit(instance, definition, { summary: 'hello' }, sources)
   expect(result.accepted).toBe(true)
   expect(result.errors).toBeUndefined()
 })
@@ -235,38 +212,22 @@ test('#77 FM-4 a hidden required field does not block the submission', () => {
 test('#77 FM-4 a valid submission succeeds and records exactly the values FM-7 expects', () => {
   const sources = deps()
   const definition = definitionWith('[]')
-  const { instance } = claimed(definition, sources)
-  const result = complete(
-    instance,
-    SAM,
-    'submit',
-    { amount: 3, summary: 'hello' },
-    instance.version ?? 0,
-    completion(definition),
-    sources
-  )
+  const { instance } = drafted(definition, sources)
+  const result = submit(instance, definition, { amount: 3, summary: 'hello' }, sources)
   expect(result.accepted).toBe(true)
   expect(result.operation?.payload.values).toEqual({ amount: 3, summary: 'hello' })
 })
 
-test('#77 FM-4 the engine path and the completion intent refuse the same submission with the same errors', async () => {
+test('#77 FM-4 the engine path and the submit intent refuse the same submission with the same errors', async () => {
   const sources = deps()
   const definition = definitionWith('[]')
-  const { state } = claimed(definition, sources)
+  const { state } = drafted(definition, sources)
   const projected = instanceOf(state.log, INSTANCE_ID)
   if (projected === undefined) throw new Error('the log holds no instance')
   const values = { amount: 'lots' }
 
-  // The engine path: `complete` called directly.
-  const direct = complete(
-    projected,
-    SAM,
-    'submit',
-    values,
-    projected.version ?? 0,
-    completion(definition),
-    sources
-  )
+  // The engine path: `submitInstance` called directly.
+  const direct = submit(projected, definition, values, sources)
   expect(direct.accepted).toBe(false)
 
   // The intent path: the same submission through the server (ADR 0010). Both
@@ -278,11 +239,11 @@ test('#77 FM-4 the engine path and the completion intent refuse the same submiss
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        id: 'complete-1',
-        type: STEP_COMPLETED,
+        id: 'submit-1',
+        type: INSTANCE_SUBMITTED,
         at: 9,
         actor: SAM,
-        payload: { instanceId: INSTANCE_ID, version: 1, outcome: 'submit', values },
+        payload: { instanceId: INSTANCE_ID, version: 0, values },
       }),
     })
     expect(response.status).toBe(409)

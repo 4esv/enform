@@ -161,7 +161,6 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     { principal: lin.id, resource: 'org', scopes: ['org.teams'] },
     { principal: lin.id, resource: flowResource, scopes: ['flow.build', 'flow.read'] },
     { principal: sam.id, resource: flowResource, scopes: ['instance.start'] },
-    { principal: sam.id, resource: stepResource('request'), scopes: ['step.outcome:submit'] },
     { principal: okafor.id, resource: flowResource, scopes: ['flow.read'] },
     {
       principal: okafor.id,
@@ -200,12 +199,6 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
     undoHours: 24,
     steps: [
       {
-        key: 'chair',
-        targets: [{ group: chairGroup.id }],
-        outcomes: ['approve'],
-        skipWhen: { '<=': [{ var: 'credits' }, 2] },
-      },
-      {
         key: 'request',
         targets: [{ starter: 'starter' }],
         fields: [
@@ -213,12 +206,17 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
           { key: 'credits', control: 'number', label: 'Overload credits', required: true },
         ],
         editable: ['summary', 'credits'],
-        outcomes: ['submit'],
       },
       {
         key: 'advisor',
         targets: [{ user: okafor.id }],
         outcomes: ['approve', 'send_back'],
+      },
+      {
+        key: 'chair',
+        targets: [{ group: chairGroup.id }],
+        outcomes: ['approve'],
+        skipWhen: { '<=': [{ var: 'credits' }, 2] },
       },
       {
         key: 'registrar',
@@ -327,7 +325,32 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
 
   const credits = { summary: 'Three extra credits for a graduating student', credits: 2 }
 
-  // One started and not yet opened at the request step.
+  // The submit validates the request form, routes the draft to the advisor
+  // (the chair step is skipped for two credits) and records the task-assigned
+  // email (ADR 0014, FM-4, SE-2).
+  const submit = (current: ReturnType<typeof start>['instance']) => {
+    const submitted = submitInstance(
+      current,
+      sam.id,
+      credits,
+      current.version ?? 0,
+      {
+        flow: slug,
+        definition: publishedDefinition,
+        resolve: resolveFor(sam.id),
+        grants: samGrants,
+        owner: lin.id,
+      },
+      deps
+    )
+    if (!submitted.accepted || submitted.operation === undefined) {
+      throw new Error(`seed: the submit of ${current.instanceId} was refused: ${submitted.reason}`)
+    }
+    operations.push(submitted.operation)
+    return submitted.instance
+  }
+
+  // One draft that Sam has not submitted, on the request form.
   const first = start(credits)
   instances.push({
     id: first.instanceId,
@@ -337,14 +360,12 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
 
   // One submitted by Sam, waiting for Okafor at the advisor step.
   const second = start(credits)
-  const submitted = take(second.instance, sam.id, samGrants, 'submit', credits)
-  const submit = submitInstance(submitted, sam.id, deps, credits)
-  operations.push(submit.operation)
+  const submitted = submit(second.instance)
   instances.push({ id: second.instanceId, step: submitted.currentStep ?? 'advisor', done: false })
 
   // One approved by Okafor, waiting for the registrar team.
   const third = start(credits)
-  const afterRequest = take(third.instance, sam.id, samGrants, 'submit', credits)
+  const afterRequest = submit(third.instance)
   const afterAdvisor = take(afterRequest, okafor.id, okaforGrants, 'approve', {})
   instances.push({
     id: third.instanceId,
@@ -354,7 +375,7 @@ export async function seedDemo(config: Config, pool: Pool): Promise<SeedDemoResu
 
   // One approved by the registrar and done.
   const fourth = start(credits)
-  const fourthRequest = take(fourth.instance, sam.id, samGrants, 'submit', credits)
+  const fourthRequest = submit(fourth.instance)
   const fourthAdvisor = take(fourthRequest, okafor.id, okaforGrants, 'approve', {})
   const fourthRegistrar = take(fourthAdvisor, ana.id, registrarGrants, 'approve', {})
   instances.push({

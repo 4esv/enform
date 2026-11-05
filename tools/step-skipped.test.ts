@@ -8,13 +8,14 @@ import { instanceOf, readInstance } from '../engine/instances.js'
 import { createOperation, type OperationDeps } from '../engine/operation.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { status } from '../engine/status.js'
-import { startInstance } from '../engine/submission.js'
+import { startInstance, submitInstance } from '../engine/submission.js'
 import { runFlow, STEP_SKIPPED } from '../engine/workflow.js'
 
 // Issue #192, WF-1, VT-2, S05, S14, I4, I6, I7: the instance path records the
-// steps that its route skipped. A start routes past a step whose skip condition
-// is true, and the instance.started@1 payload carries the skipped prefix with
-// the condition that skipped each step, attributed to the starter (WF-1, S05).
+// steps that its route skipped. A submit routes past a step whose skip
+// condition is true (ADR 0014), and the instance.submitted@1 payload carries
+// the skipped steps with the condition that skipped each, attributed to the
+// starter (WF-1, S05).
 // A status read then reads the skips of that instance's own events and nothing
 // else, so another instance's skip and a draft run's step.skipped@1 event (which
 // carries no instance id) are absent (I4, S14). The dry run over a draft keeps
@@ -28,7 +29,7 @@ const LIN = 'user:lin'
 const INSTANCE_ID = 'inst-1'
 const OTHER_ID = 'inst-2'
 
-/** The skip condition of the conditional first step (WF-1, S05): a small overload skips the chair. */
+/** The skip condition of the conditional second step (WF-1, S05): a small overload skips the chair. */
 const chairSkipWhen = { '<=': [{ var: 'overload_credits' }, 2] }
 
 /** The condition of the draft-run skip that carries no instance id (I4, S05). */
@@ -38,13 +39,17 @@ const definition: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
     {
+      "key": "request",
+      "targets": [{ "starter": "starter" }]
+    },
+    {
       "key": "chair",
       "targets": [{ "group": "CS-Chairs" }],
       "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
     },
     {
-      "key": "request",
-      "targets": [{ "starter": "starter" }]
+      "key": "advisor",
+      "targets": [{ "group": "CS-Chairs" }]
     }
   ]
 }
@@ -79,6 +84,39 @@ function deps(): OperationDeps {
   }
 }
 
+/** Start a draft with the overload credits and submit it (ADR 0014); the submit decides the route. */
+function startAndSubmit(
+  state: State,
+  instanceId: string,
+  credits: number,
+  sources: OperationDeps
+): { state: State; skipped: unknown; currentStep: string | undefined } {
+  const started = startInstance(
+    flow,
+    instanceId,
+    { overload_credits: credits },
+    SAM,
+    sources,
+    resolve,
+    samGrants
+  )
+  expect(started.operation.payload.skipped, 'a start skips nothing').toEqual([])
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  return {
+    state: apply(submitted.operation, apply(started.operation, state)),
+    skipped: submitted.operation.payload.skipped,
+    currentStep: submitted.instance.currentStep,
+  }
+}
+
 /** A log with the definition published (DF-2), so the projection can pin the instance to it. */
 function seeded(sources: OperationDeps): State {
   const pushed = push(createFlow(SLUG), definition, sources, 'user:dana')
@@ -86,24 +124,16 @@ function seeded(sources: OperationDeps): State {
   return apply(published.operation, apply(pushed.operation, emptyState))
 }
 
-test('#192 a start records the step its route skipped, and the read reports it (WF-1, S05, I4)', () => {
+test('#192 a submit records the step its route skipped, and the read reports it (WF-1, S05, I4)', () => {
   const sources = deps()
-  let state = seeded(sources)
 
-  // For two overload credits the chair step is skipped, so the start routes to
-  // the request step and records the skip on its own operation (WF-1, #192).
-  const started = startInstance(
-    flow,
-    INSTANCE_ID,
-    { overload_credits: 2 },
-    SAM,
-    sources,
-    resolve,
-    samGrants
-  )
-  state = apply(started.operation, state)
-  expect(started.instance.currentStep).toBe('request')
-  expect(started.operation.payload.skipped).toEqual([{ step: 'chair', condition: chairSkipWhen }])
+  // For two overload credits the chair step is skipped, so the submit routes
+  // to the advisor step and records the skip on its own operation (WF-1,
+  // #192, ADR 0014).
+  const submitted = startAndSubmit(seeded(sources), INSTANCE_ID, 2, sources)
+  const state = submitted.state
+  expect(submitted.currentStep).toBe('advisor')
+  expect(submitted.skipped).toEqual([{ step: 'chair', condition: chairSkipWhen }])
 
   // The read projects the instance from the log and reports the same skip,
   // attributed to this instance (I4, S14).
@@ -122,29 +152,13 @@ test('#192 a status read holds only its own instance skips (I4, S05)', () => {
   const sources = deps()
   let state = seeded(sources)
 
-  // Two starts on one log: the first skips the chair, the second does not.
-  const first = startInstance(
-    flow,
-    INSTANCE_ID,
-    { overload_credits: 2 },
-    SAM,
-    sources,
-    resolve,
-    samGrants
-  )
-  state = apply(first.operation, state)
-  const second = startInstance(
-    flow,
-    OTHER_ID,
-    { overload_credits: 4 },
-    SAM,
-    sources,
-    resolve,
-    samGrants
-  )
-  state = apply(second.operation, state)
-  expect(first.instance.currentStep).toBe('request')
-  expect(second.instance.currentStep).toBe('chair')
+  // Two submissions on one log: the first skips the chair, the second does not.
+  const first = startAndSubmit(state, INSTANCE_ID, 2, sources)
+  state = first.state
+  const second = startAndSubmit(state, OTHER_ID, 4, sources)
+  state = second.state
+  expect(first.currentStep).toBe('advisor')
+  expect(second.currentStep).toBe('chair')
 
   // A draft run records step.skipped@1 without an instance id (S05, I7). It
   // belongs to no instance, so neither read reports it.
@@ -172,7 +186,7 @@ test('#192 a dry run and a live run decide the same route, and only the live run
   const live = runFlow(definition, { overload_credits: 2 }, { ...deps(), sink: 'live' }, SAM)
   expect(dry.route).toEqual(live.route)
   expect(dry.route).toEqual({
-    active: ['request'],
+    active: ['request', 'advisor'],
     skipped: [{ step: 'chair', condition: chairSkipWhen }],
   })
 

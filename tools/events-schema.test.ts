@@ -41,7 +41,17 @@ const definition: FlowDefinition = parse(`{
   "steps": [
     {
       "key": "request",
-      "targets": [{ "starter": "starter" }]
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text" },
+        { "key": "urgent", "control": "checkbox" },
+        { "key": "detail", "control": "text" }
+      ]
+    },
+    {
+      "key": "review",
+      "targets": [{ "user": "user:okafor" }],
+      "outcomes": ["approve"]
     }
   ]
 }
@@ -52,7 +62,28 @@ const flow: Flow = {
   versions: [{ version: 1, contentHash: contentHash(definition), definition }],
 }
 
-const resolve: TargetResolver = (target) => ('starter' in target ? [SAM] : [])
+const resolve: TargetResolver = (target) =>
+  'starter' in target ? [SAM] : 'user' in target ? [target.user] : []
+
+/** Submit a draft through the engine with the test's seams (ADR 0014); throws on a refusal. */
+function submitted(
+  instance: ReturnType<typeof startInstance>['instance'],
+  values: ConditionData,
+  sources: OperationDeps,
+  resolver: TargetResolver = resolve,
+  owner?: string
+) {
+  const result = submitInstance(
+    instance,
+    SAM,
+    values,
+    instance.version ?? 0,
+    { flow: SLUG, definition, resolve: resolver, grants, owner },
+    sources
+  )
+  if (!result.accepted || result.operation === undefined) throw new Error(result.reason)
+  return { instance: result.instance, operation: result.operation }
+}
 
 const grants: readonly Grant[] = [
   { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
@@ -100,53 +131,46 @@ const validateTakenOver = ajv.compile(
 
 test('#177 FM-7 the published event schemas match the payloads the engine writes', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
-  const submitted = submitInstance(started.instance, SAM, deps(), captured)
+  const submit = submitted(started.instance, captured, deps())
 
   // The real payloads validate against the published schemas (MVP.md 9.1).
   expect(validateStarted(started.operation.payload), 'the start payload validates').toBe(true)
-  expect(validateSubmitted(submitted.operation.payload), 'the submit payload validates').toBe(true)
+  expect(validateSubmitted(submit.operation.payload), 'the submit payload validates').toBe(true)
 
   // A payload that breaks the shape is rejected: the start's values must be a
   // record of field keys to JSON values, and the submit must mark submitted
   // true.
   expect(validateStarted({ ...started.operation.payload, values: 'not a record' })).toBe(false)
-  expect(validateSubmitted({ ...submitted.operation.payload, submitted: false })).toBe(false)
+  expect(validateSubmitted({ ...submit.operation.payload, submitted: false })).toBe(false)
 })
 
-// Issue #252, S08, I10, AS-5, SE-2, I2: a start whose targets resolve to
-// nobody records the Unroutable queue on the instance and the event, and its
-// one operation carries the flow owner alert in the same commit. The published
-// schema carries the queue, so a reader builds the same payload (MVP.md 9.1).
+// Issue #252, S08, I10, AS-5, SE-2, I2: a submit whose next step's targets
+// resolve to nobody records the Unroutable queue on the instance and the
+// event, and its one operation carries the flow owner alert in the same
+// commit (ADR 0014). The published schema carries the queue, so a reader
+// builds the same payload (MVP.md 9.1).
 
-test('#252 I10 a start routes an empty resolution to Unroutable with the owner alert', () => {
+test('#252 I10 a submit routes an empty resolution to Unroutable with the owner alert', () => {
   const sources = deps()
-  const started = startInstance(
-    flow,
-    INSTANCE_ID,
-    startedValues,
-    SAM,
-    sources,
-    () => [],
-    grants,
-    'user:priya'
-  )
+  const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, sources, resolve, grants)
+  const submit = submitted(started.instance, {}, sources, () => [], 'user:priya')
 
-  expect(started.instance.queue, 'the instance records the queue').toBe(UNROUTABLE_QUEUE)
-  expect(started.operation.payload.queue, 'the event records the queue').toBe(UNROUTABLE_QUEUE)
-  expect(validateStarted(started.operation.payload), 'the unroutable start validates').toBe(true)
+  expect(submit.instance.queue, 'the instance records the queue').toBe(UNROUTABLE_QUEUE)
+  expect(submit.operation.payload.queue, 'the event records the queue').toBe(UNROUTABLE_QUEUE)
+  expect(validateSubmitted(submit.operation.payload), 'the unroutable submit validates').toBe(true)
   expect(
     outboxOfEvent({
       seq: 1,
-      operationId: started.operation.id,
-      type: started.operation.type,
-      at: started.operation.at,
-      payload: started.operation.payload,
+      operationId: submit.operation.id,
+      type: submit.operation.type,
+      at: submit.operation.at,
+      payload: submit.operation.payload,
     })
   ).toEqual([
     {
       operation: UNROUTABLE_ALERT,
       target: ALERT_CONNECTOR,
-      payload: { to: 'user:priya', step: 'request' },
+      payload: { to: 'user:priya', step: 'review' },
     },
   ])
 })
@@ -189,7 +213,7 @@ test('#222 the published start schema requires the flow slug (I4)', () => {
 
 test('#76 the published submit schema requires the instance id (DX-1)', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
-  const payload = submitInstance(started.instance, SAM, deps(), captured).operation.payload
+  const payload = submitted(started.instance, captured, deps()).operation.payload
   const { instanceId, ...withoutInstanceId } = payload
 
   expect(instanceId, 'the submit payload names the instance').toBe(INSTANCE_ID)
@@ -235,6 +259,7 @@ test('#242 S10 the published takeover schema matches the engine payload', () => 
   const teamDefinition: FlowDefinition = parse(`{
     "schemaVersion": 2,
     "steps": [
+      { "key": "request", "targets": [{ "starter": "starter" }] },
       { "key": "registrar", "targets": [{ "team": "registrar-office" }] }
     ]
   }`)
@@ -261,13 +286,17 @@ test('#242 S10 the published takeover schema matches the engine payload', () => 
     teamResolve,
     teamGrants
   )
-  const applied = apply(started.operation, emptyState)
-  const claimed = claim(
-    { ...started.instance, version: applied.log.length },
+  const routed = submitInstance(
+    started.instance,
     SAM,
-    applied.log.length,
+    {},
+    0,
+    { flow: teamFlow.slug, definition: teamDefinition, resolve: teamResolve, grants: teamGrants },
     sources
   )
+  if (!routed.accepted || routed.operation === undefined) throw new Error(routed.reason)
+  const applied = apply(routed.operation, apply(started.operation, emptyState))
+  const claimed = claim(routed.instance, SAM, routed.instance.version ?? 0, sources)
   if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
   const held = apply(claimed.operation, applied)
 
@@ -301,7 +330,9 @@ test('#242 S10 the published takeover schema matches the engine payload', () => 
 
 test('#238 S13 the published close and undo schemas match the engine payloads', () => {
   const started = startInstance(flow, INSTANCE_ID, startedValues, SAM, deps(), resolve, grants)
-  const claimed = claim(started.instance, SAM, started.instance.version ?? 0, deps())
+  // The review step names Sam here, so the starter also holds the task.
+  const routed = submitted(started.instance, {}, deps(), () => [SAM])
+  const claimed = claim(routed.instance, SAM, routed.instance.version ?? 0, deps())
   if (!claimed.accepted) throw new Error(claimed.reason)
   const held = claimed.instance
 
@@ -312,7 +343,7 @@ test('#238 S13 the published close and undo schemas match the engine payloads', 
     {
       operation: WITHDRAW_CANCEL_NOTIFICATION,
       target: EMAIL_CONNECTOR,
-      payload: { to: SAM, step: 'request', actor: SAM, reason: 'Dropped a class' },
+      payload: { to: SAM, step: 'review', actor: SAM, reason: 'Dropped a class' },
     },
   ])
   expect(validateWithdrawn(withdrawn.operation.payload), 'the withdraw payload validates').toBe(

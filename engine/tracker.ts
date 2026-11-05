@@ -21,7 +21,7 @@ import type { Instance } from './instance.js'
 import type { ActorId, Event, Log } from './operation.js'
 import { MINUTE_MS } from './reminders.js'
 import { STEP_SENT_BACK } from './sendBack.js'
-import { INSTANCE_STARTED } from './submission.js'
+import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { STEP_TAKEN_OVER } from './takeover.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 import { STEP_SKIPPED } from './workflow.js'
@@ -134,6 +134,24 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
         states.set(skipped.step, 'skipped')
         conditions.set(skipped.step, skipped.condition)
       }
+      continue
+    }
+    if (event.type === INSTANCE_SUBMITTED) {
+      // The submit completes the request form, the first step, skips the
+      // steps the data skips, and enters the next step (ADR 0014, WF-1, S05).
+      const step = stringField(event.payload, 'step')
+      if (step !== undefined) {
+        states.set(step, 'completed')
+        activities.set(step, event.at)
+      }
+      for (const skipped of readSkipped(event.payload.skipped)) {
+        states.set(skipped.step, 'skipped')
+        conditions.set(skipped.step, skipped.condition)
+      }
+      holder = undefined
+      currentStep = stringField(event.payload, 'currentStep')
+      if (currentStep !== undefined) starts.set(currentStep, event.at)
+      queue = stringField(event.payload, 'queue')
       continue
     }
     if (event.type === STEP_CLAIMED) {

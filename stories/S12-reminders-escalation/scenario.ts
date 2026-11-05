@@ -47,6 +47,10 @@ export const definition: FlowDefinition = parse(`{
   "schemaVersion": 1,
   "steps": [
     {
+      "key": "request",
+      "targets": [{ "starter": "starter" }]
+    },
+    {
       "key": "${ADVISOR_STEP}",
       "targets": [{ "field": "advisor" }],
       "outcomes": ["${APPROVE}"]

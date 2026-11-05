@@ -10,7 +10,7 @@ import {
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Instance } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
-import { startInstance } from '../../engine/submission.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
 import {
   ANA,
   ARCHIVE_STEP,
@@ -61,18 +61,31 @@ test('#46 exactly one claim succeeds and the holder completes with an authorized
   // repeated ID would be the same change and `apply` would ignore it.
   const sources = deps()
 
-  // The start routes the request to the registrar step, whose team target
-  // resolves to Lee, Ana and Jordan (S06, I10, I13).
+  // Sam starts a draft and submits it (S06, ADR 0014): the submit routes the
+  // request to the registrar step, whose team target resolves to Lee, Ana and
+  // Jordan (I10, I13).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
-  const state = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REGISTRAR_STEP)
-  expect(started.instance.assignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
-  // The view that Lee and Ana both hold: the instance at the log version that
-  // the start produced (I5). Nobody holds the task before a claim (AS-2).
-  const opened = state.log.length
-  const view: Instance = { ...started.instance, version: opened }
+  const submitted = submitInstance(
+    started.instance,
+    STARTER,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
+    sources
+  )
+  expect(submitted.accepted).toBe(true)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  const state = apply(submitted.operation, apply(started.operation, emptyState))
+  expect(submitted.instance.currentStep).toBe(REGISTRAR_STEP)
+  expect(submitted.instance.assignees).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: REGISTRAR_MEMBERS,
+  })
+  // The view that Lee and Ana both hold: the instance at the version that the
+  // submit produced (I5). Nobody holds the task before a claim (AS-2).
+  const opened = submitted.instance.version ?? 0
+  const view: Instance = submitted.instance
   expect(view.holder).toBeUndefined()
 
   // (a) AS-2, I5: Lee and Ana both select Claim on that view. Lee's claim is

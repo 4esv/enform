@@ -52,7 +52,7 @@ import {
   status,
   visibleNotes,
 } from './status.js'
-import { INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
+import { DRAFT_EDITED, INSTANCE_STARTED, INSTANCE_SUBMITTED } from './submission.js'
 import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
@@ -398,10 +398,36 @@ function fold(
 ): ProjectedInstance {
   switch (event.type) {
     case INSTANCE_SUBMITTED: {
+      // The submit completes the request form and routes the instance (ADR
+      // 0014, WF-1, I13): it enters the next step with the assignees the
+      // engine resolved, or is done, and the version advances as every
+      // accepted action does (I5). An older submit without a route only marks
+      // the instance submitted.
       const values = readValues(event.payload.values)
-      // A submit records a state change but keeps the version counter, because
-      // `submitInstance` does not advance it (FM-7, I5).
-      return { ...instance, submitted: true, ...(values === undefined ? {} : { values }) }
+      const routed = 'currentStep' in event.payload || event.payload.done === true
+      const marked: ProjectedInstance = {
+        ...instance,
+        submitted: true,
+        ...(values === undefined ? {} : { values }),
+      }
+      if (!routed) return marked
+      const entered = optionalAssignees(event.payload.assignees)
+      const moved: ProjectedInstance = advanced({
+        ...marked,
+        holder: undefined,
+        currentStep: optionalString(event.payload.currentStep),
+        done: event.payload.done === true,
+        queue: optionalString(event.payload.queue),
+      })
+      return entered === undefined ? moved : recordAssignees(moved, entered)
+    }
+    case DRAFT_EDITED: {
+      // The starter changed the values the draft holds (ADR 0014, RT-3); the
+      // version does not advance, so a stream of edits never conflicts.
+      const values = readValues(event.payload.values)
+      return values === undefined
+        ? instance
+        : { ...instance, values: { ...instance.values, ...values } }
     }
     case STEP_CLAIMED:
       return advanced({
@@ -424,7 +450,7 @@ function fold(
     case STEP_TAKEN_OVER:
       return advanced({ ...instance, holder: optionalString(event.payload.to), queue: undefined })
     case STEP_SENT_BACK:
-      return advanced(sentBack(instance, event))
+      return advanced(sentBack(instance, event, definition))
     case INSTANCE_WITHDRAWN:
       return advanced(closed(instance, event, 'withdrawn'))
     case INSTANCE_CANCELLED:
@@ -441,8 +467,7 @@ function fold(
 /**
  * The instance after one accepted action (I5, #191): the version counter
  * advances by one, exactly as every write-path action advances it (`version +
- * 1`). A submit is the one state change that does not advance it, so the
- * fold leaves it out.
+ * 1`). A draft edit is the one state change that does not advance it.
  */
 function advanced(instance: ProjectedInstance): ProjectedInstance {
   return { ...instance, version: (instance.version ?? 0) + 1 }
@@ -473,8 +498,17 @@ function escalated(instance: ProjectedInstance, event: Event, log: Log): Project
   }
 }
 
-/** Fold a send back: the instance revisits the target step, and it records the next revision (WF-3). */
-function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance {
+/**
+ * Fold a send back: the instance revisits the target step, and it records the
+ * next revision (WF-3). A send back to the request form, the first step,
+ * makes the instance a draft again (ADR 0014): the starter corrects it and
+ * submits it again, and the submit validates, routes and notifies as before.
+ */
+function sentBack(
+  instance: ProjectedInstance,
+  event: Event,
+  definition: FlowDefinition
+): ProjectedInstance {
   const to = stringField(event.payload, 'to')
   const revisions = { ...(instance.revisions ?? {}) }
   const revision = event.payload.revision
@@ -486,6 +520,7 @@ function sentBack(instance: ProjectedInstance, event: Event): ProjectedInstance 
     holder: undefined,
     queue: optionalString(event.payload.queue),
     revisions,
+    ...(definition.steps[0]?.key === to ? { submitted: false } : {}),
   }
   return entered === undefined ? moved : recordAssignees(moved, entered)
 }

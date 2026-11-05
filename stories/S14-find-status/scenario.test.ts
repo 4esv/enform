@@ -6,7 +6,7 @@ import type { OperationDeps } from '../../engine/operation.js'
 import { resolveAssignees } from '../../engine/routing.js'
 import { type SendBackResult, STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
 import { type StatusContext, status, visibleTo } from '../../engine/status.js'
-import { startInstance } from '../../engine/submission.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
 import { isStepSkipped } from '../../engine/workflow.js'
 import {
   ADVISOR_STEP,
@@ -79,48 +79,51 @@ test('#51 the status line shows the step, the holder and the wait state, and I8 
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 
-  // (a) S05, WF-1: for two overload credits the chair step is skipped, so the
-  // start routes past it to the request step (S06, I10).
-  expect(isStepSkipped(definition.steps[0], data)).toBe(true)
+  // (a) S06, ADR 0014: the start creates Sam's draft on the request form. Its
+  // status is step 1 of 4, a draft, and nothing is skipped yet: the submit
+  // decides the route (WF-1).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   let state = apply(started.operation, emptyState)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
+  const draft = status(started.instance, definition, state.log)
+  expect(draft.step).toBe(1)
+  expect(draft.totalSteps).toBe(4)
+  expect(draft.currentStep).toBe(REQUEST_STEP)
+  expect(draft.holder).toBeUndefined()
+  expect(draft.state).toBe('draft')
+  expect(draft.skipped).toEqual([])
 
-  // S05, I14, #192: the start records the routing skip on its own operation,
-  // attributed to the starter. The status reads it from the instance's events
-  // (I4).
-
-  // (b) VT-1, VT-2, I6: the status line is step 2 of 4, on the request step,
-  // with no holder, and it says "waiting to be opened". The skipped chair step
-  // carries the condition that skipped it (S05). The same inputs give the same
-  // status (I6).
-  const waiting = status(started.instance, definition, state.log)
-  expect(waiting.step).toBe(2)
-  expect(waiting.totalSteps).toBe(4)
-  expect(waiting.currentStep).toBe(REQUEST_STEP)
-  expect(waiting.holder).toBeUndefined()
-  expect(waiting.state).toBe('waiting')
-  expect(waiting.skipped).toEqual([{ step: CHAIR_STEP, condition: chairSkipWhen }])
-  expect(status(started.instance, definition, state.log)).toEqual(waiting)
-
-  // Sam submits his own request (S09, WF-1); the instance advances to the
-  // advisor step, whose field target resolves to Dr. Okafor (S06, I13).
-  const atRequest: Instance = { ...started.instance, version: state.log.length }
-  const claimedRequest = claim(atRequest, STARTER, atRequest.version ?? 0, sources)
-  expect(claimedRequest.accepted).toBe(true)
-  state = applyAction(claimedRequest, state)
-  const submitted = complete(
-    claimedRequest.instance,
+  // S05, WF-1: for two overload credits the chair step is skipped, so the
+  // submit routes past it to the advisor step, whose field target resolves to
+  // Dr. Okafor (S06, I10, I13). S05, I14, #192: the submit records the routing
+  // skip on its own operation, attributed to the starter, and the status reads
+  // it from the instance's events (I4).
+  expect(isStepSkipped(definition.steps[1], data)).toBe(true)
+  const submitted = submitInstance(
+    started.instance,
     STARTER,
-    'submit',
     {},
-    claimedRequest.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
     sources
   )
   expect(submitted.accepted).toBe(true)
-  state = applyAction(submitted, state)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  state = apply(submitted.operation, state)
   expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
+
+  // (b) VT-1, VT-2, I6: the status line is step 3 of 4, on the advisor step,
+  // with no holder, and it says "waiting to be opened". The skipped chair step
+  // carries the condition that skipped it (S05). The same inputs give the same
+  // status (I6).
+  const waiting = status(submitted.instance, definition, state.log)
+  expect(waiting.step).toBe(3)
+  expect(waiting.totalSteps).toBe(4)
+  expect(waiting.currentStep).toBe(ADVISOR_STEP)
+  expect(waiting.holder).toBeUndefined()
+  expect(waiting.state).toBe('waiting')
+  expect(waiting.skipped).toEqual([{ step: CHAIR_STEP, condition: chairSkipWhen }])
+  expect(status(submitted.instance, definition, state.log)).toEqual(waiting)
 
   const advisorAssignees = resolveAssignees(definition.steps[2], resolve)
   expect(advisorAssignees).toEqual([

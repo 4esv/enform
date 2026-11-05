@@ -29,7 +29,8 @@ export const PRIYA = 'user:priya'
 /** The team that holds the registrar task (AS-1, AS-4). */
 export const REGISTRAR_TEAM = 'registrar-office'
 
-/** The two steps of the story: the registrar task, then the archive task (WF-1). */
+/** The steps of the story: the request form, the registrar task, then the archive task (WF-1). */
+export const REQUEST_STEP = 'request'
 export const REGISTRAR_STEP = 'registrar'
 export const ARCHIVE_STEP = 'archive'
 
@@ -39,10 +40,14 @@ export const REGISTRAR_RESOURCE = `flow:${SLUG}/step:${REGISTRAR_STEP}`
 /** The members of the registrar team when the request starts (AS-1, I13). */
 export const REGISTRAR_MEMBERS: readonly string[] = [LEE, ANA, JORDAN]
 
-/** The definition of version 1: a registrar step, then an archive step (WF-1). */
+/** The definition of version 1: the request form, a registrar step, then an archive step (WF-1, ADR 0014). */
 export const definition: FlowDefinition = parse(`{
   "schemaVersion": 1,
   "steps": [
+    {
+      "key": "${REQUEST_STEP}",
+      "targets": [{ "starter": "starter" }]
+    },
     {
       "key": "${REGISTRAR_STEP}",
       "targets": [{ "team": "${REGISTRAR_TEAM}" }],
@@ -57,8 +62,11 @@ export const definition: FlowDefinition = parse(`{
 }
 `)
 
-/** The registrar step alone: the last step, so a completion marks the instance done (S09). */
-export const terminalDefinition: FlowDefinition = { ...definition, steps: [definition.steps[0]] }
+/** The request form and the registrar step alone: registrar is the last step, so a completion marks the instance done (S09). */
+export const terminalDefinition: FlowDefinition = {
+  ...definition,
+  steps: [definition.steps[0], definition.steps[1]],
+}
 
 /** The published version 1: a start needs a version with a content hash (DF-2). */
 export const versionV1: FlowVersion = {
@@ -70,11 +78,12 @@ export const versionV1: FlowVersion = {
 /** The flow of the story: version 1 published, ready for a start (DF-2). */
 export const flow: Flow = { slug: SLUG, versions: [versionV1] }
 
-/** The data of Sam's request: no step has a skip condition, so the registrar task is first (WF-1). */
+/** The data of Sam's request: no step has a skip condition, so the submit routes to the registrar task (WF-1). */
 export const data: ConditionData = {}
 
-/** The directory of the story (AS-1, I13): a team resolves to its members, and a user to itself. */
+/** The directory of the story (AS-1, I13): a team resolves to its members, a user to itself, and the starter to Sam. */
 export const resolve: TargetResolver = (target) => {
+  if ('starter' in target) return [STARTER]
   if ('team' in target) return REGISTRAR_MEMBERS
   if ('user' in target) return [target.user]
   return []

@@ -177,7 +177,7 @@ export const golden = scenario({
         { fill: { field: 'user', value: 'user:sam' } },
         { click: '[data-add-row="repeating"]' },
         { fill: { field: 'repeating', value: '{"key":"value"}' } },
-        { click: 'button[type="button"]' },
+        { click: '[data-start]' },
         { expect: 'Synced' },
       ],
     },

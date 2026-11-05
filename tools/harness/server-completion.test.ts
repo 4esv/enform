@@ -7,7 +7,7 @@ import { createFlow, publish, push } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
-import { startInstance } from '../../engine/submission.js'
+import { startInstance, submitInstance } from '../../engine/submission.js'
 import { startApi } from './server.js'
 
 // Issue #191, FM-3, FM-4, FM-7, AC-4, AS-2, ADR 0010, DX-1, I1, I6, I8, A9:
@@ -71,9 +71,9 @@ const samGrants: readonly Grant[] = [
   { principal: SAM, scopes: ['instance.start'], resource: `flow:${SLUG}` },
 ]
 
-/** Sam's outcome grant on the request step (AC-4): he may choose `submit` and no other outcome. */
-const submitGrants: readonly Grant[] = [
-  { principal: SAM, scopes: ['step.outcome:submit'], resource: `flow:${SLUG}` },
+/** Okafor's outcome grant on the review step (AC-4): he may choose `approve` and no other outcome. */
+const approveGrants: readonly Grant[] = [
+  { principal: OKAFOR, scopes: ['step.outcome:approve'], resource: `flow:${SLUG}` },
 ]
 
 /** The injected sources of the fixture (I6): a fixed time and `op-N` IDs. */
@@ -90,9 +90,9 @@ function deps(): OperationDeps {
 
 /**
  * The state the server serves: the definition published (DF-2), Sam's start
- * (S06) and his claim of the request step (S09, AS-2), so the instance has a
- * holder to complete. The client that posts the completion intent decides none
- * of it.
+ * and submit (S06, ADR 0014), which routes the instance to the review step,
+ * and Okafor's claim of that step (S09, AS-2), so the instance has a holder
+ * to complete. The client that posts the completion intent decides none of it.
  */
 function startedState(): State {
   const sources = deps()
@@ -109,7 +109,19 @@ function startedState(): State {
     samGrants
   )
   state = apply(started.operation, state)
-  const claimed = claim(started.instance, SAM, started.instance.version ?? 0, sources)
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  if (!submitted.accepted || submitted.operation === undefined) {
+    throw new Error(`the submit was refused: ${submitted.reason}`)
+  }
+  state = apply(submitted.operation, state)
+  const claimed = claim(submitted.instance, OKAFOR, submitted.instance.version ?? 0, sources)
   if (!claimed.accepted || claimed.operation === undefined) {
     throw new Error(`the claim was refused: ${claimed.reason}`)
   }
@@ -148,15 +160,15 @@ function completionIntent(values: Readonly<Record<string, unknown>>): Record<str
     id: 'complete-1',
     type: STEP_COMPLETED,
     at: 9,
-    actor: SAM,
-    payload: { instanceId: INSTANCE_ID, version: 1, outcome: 'submit', values },
+    actor: OKAFOR,
+    payload: { instanceId: INSTANCE_ID, version: 2, outcome: 'approve', values },
   }
 }
 
 test('#191 a completion intent resolves to the engine operation and keeps the client id and time', async () => {
-  await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
+  await withApi(startedState(), { resolve, grants: approveGrants }, async (base, api) => {
     const before = api.state().log.length
-    const response = await post(base, completionIntent({ summary: 'hello' }))
+    const response = await post(base, completionIntent({ decision: 'approve' }))
     expect(response.status).toBe(201)
     const event = (await response.json()) as {
       operationId: string
@@ -166,18 +178,17 @@ test('#191 a completion intent resolves to the engine operation and keeps the cl
       payload: Record<string, unknown>
     }
     // The client's ID and time survive (I1, I6), and the engine decided the
-    // step, the outcome's authorization and the next step's assignees
-    // (AC-4, AS-4, I13, A9).
+    // step, the outcome's authorization and the end of the flow (AC-4, WF-1,
+    // A9): the review step is the last, so no next step's assignees follow.
     expect(event.operationId).toBe('complete-1')
     expect(event.at).toBe(9)
     expect(event.type).toBe(STEP_COMPLETED)
-    expect(event.actor).toBe(SAM)
+    expect(event.actor).toBe(OKAFOR)
     expect(event.payload).toEqual({
       instanceId: INSTANCE_ID,
-      step: 'request',
-      outcome: 'submit',
-      values: { summary: 'hello' },
-      assignees: [{ step: 'review', target: { user: OKAFOR }, members: [OKAFOR] }],
+      step: 'review',
+      outcome: 'approve',
+      values: { decision: 'approve' },
     })
     expect(api.state().log).toHaveLength(before + 1)
     expect(api.state().log.at(-1)?.operationId).toBe('complete-1')
@@ -185,11 +196,10 @@ test('#191 a completion intent resolves to the engine operation and keeps the cl
 })
 
 test('#191 FM-3 the server refuses a completion that changes a field the step does not make editable, naming the field', async () => {
-  await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
+  await withApi(startedState(), { resolve, grants: approveGrants }, async (base, api) => {
     const before = api.state().log.length
-    // `detail` is a field of the request step that the step does not make
-    // editable, and `decision` belongs to the review step: neither is
-    // editable on the current step (FM-3).
+    // `detail` is a field of the request step, not of the review step the
+    // instance sits on, so it is not editable on the current step (FM-3).
     const response = await post(base, completionIntent({ detail: 'private' }))
     expect(response.status).toBe(409)
     const body = (await response.json()) as { error: string }
@@ -200,9 +210,9 @@ test('#191 FM-3 the server refuses a completion that changes a field the step do
 })
 
 test('#191 a completion intent without an instance id is refused with a named error and appends nothing', async () => {
-  await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
+  await withApi(startedState(), { resolve, grants: approveGrants }, async (base, api) => {
     const before = api.state().log.length
-    const intent = completionIntent({ summary: 'hello' })
+    const intent = completionIntent({ decision: 'approve' })
     const payload = { ...(intent.payload as Record<string, unknown>) }
     delete payload.instanceId
     const response = await post(base, { ...intent, payload })
@@ -215,9 +225,9 @@ test('#191 a completion intent without an instance id is refused with a named er
 })
 
 test('#191 a completion intent that names an unknown instance is refused with a named error and appends nothing', async () => {
-  await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
+  await withApi(startedState(), { resolve, grants: approveGrants }, async (base, api) => {
     const before = api.state().log.length
-    const intent = completionIntent({ summary: 'hello' })
+    const intent = completionIntent({ decision: 'approve' })
     const response = await post(base, {
       ...intent,
       payload: { ...(intent.payload as Record<string, unknown>), instanceId: 'missing' },
@@ -229,7 +239,7 @@ test('#191 a completion intent that names an unknown instance is refused with a 
 })
 
 test('#191 an already-resolved step.completed@1 operation keeps the low-level append path', async () => {
-  await withApi(startedState(), { resolve, grants: submitGrants }, async (base, api) => {
+  await withApi(startedState(), { resolve, grants: approveGrants }, async (base, api) => {
     const before = api.state().log.length
     // A resolved completion carries the `step` it acted on, so the server
     // appends it as it stands and resolves nothing (ADR 0010).
@@ -237,11 +247,11 @@ test('#191 an already-resolved step.completed@1 operation keeps the low-level ap
       id: 'resolved-1',
       type: STEP_COMPLETED,
       at: 11,
-      actor: SAM,
+      actor: OKAFOR,
       payload: {
         instanceId: INSTANCE_ID,
-        step: 'request',
-        outcome: 'submit',
+        step: 'review',
+        outcome: 'approve',
         values: {},
       },
     }

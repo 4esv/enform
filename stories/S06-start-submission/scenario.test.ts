@@ -45,42 +45,59 @@ function grantsFromLog(grants: readonly Grant[]): readonly Grant[] {
 }
 
 // Issue #43: Sam starts and submits a submission (S06). An authenticated start
-// creates a draft routed to the first step's assignees (ID-2, WF-1, I10). The
-// submit marks the instance submitted and, in the same operation, records the
-// assignment email to the first assignee (I2, SE-1). A start with no principal,
+// creates a private draft on the request form (ID-2, ADR 0014). The submit
+// routes it to the first later step whose skip condition is false (WF-1, I10)
+// and, in the same operation, records the assignment email to its assignee
+// (I2, SE-1). A start with no principal,
 // or without instance.start on the flow, is refused (ID-2, AC-1). The path is
 // deterministic (I6).
 
-test('#43 a start routes a draft and the submit records the assignment email (S06)', () => {
+test('#43 a start is a private draft and the submit routes it with the assignment email (S06)', () => {
   // (a) Sam holds instance.start on the flow, read back from the log (AC-1, I4).
   const grants = grantsFromLog(samGrants)
   const started = startInstance(flow, INSTANCE_ID, samData, SAM, deps(), resolve, grants)
   expect(started.operation.type).toBe(INSTANCE_STARTED)
   expect(started.operation.actor).toBe(SAM)
 
-  // The draft is stamped with version 1 and the assignees of the first step
-  // whose skip condition is false (DF-2, WF-1, I13): the triage step is
-  // skipped, so the current step is advisor and its target names Dr. Okafor
-  // (I10).
+  // The draft is stamped with version 1 and sits on the request form, the
+  // first step, with Sam as its only assignee (DF-2, ADR 0014, I13). It routes
+  // nothing yet: the submit decides the route from the values Sam submits.
   expect(started.instance.definitionVersion).toBe(versionV1.contentHash)
-  expect(started.instance.currentStep).toBe('advisor')
+  expect(started.instance.currentStep).toBe('request')
   expect(started.instance.submitted).toBe(false)
   expect(started.instance.values).toEqual(samData)
   expect(started.instance.assignees).toEqual([
-    { step: 'advisor', target: { user: OKAFOR }, members: [OKAFOR] },
+    { step: 'request', target: { starter: 'starter' }, members: [SAM] },
   ])
 
-  // (b) The submit marks the instance submitted and records the assignment
-  // email to the first assignee in one operation (S06, I2, SE-1).
-  const submitted = submitInstance(started.instance, SAM, deps(), samData)
-  expect(submitted.instance.submitted).toBe(true)
-  expect(submitted.instance.values).toEqual(samData)
-  expect(submitted.operation.type).toBe(INSTANCE_SUBMITTED)
-  expect(submitted.operation.actor).toBe(SAM)
+  // (b) The submit completes the request form, skips the triage step (the
+  // request is not urgent, WF-1, S05), routes to the advisor, whose target
+  // names Dr. Okafor (I10, I13), and records the assignment email in one
+  // operation (S06, I2, SE-1).
+  const result = submitInstance(
+    started.instance,
+    SAM,
+    samData,
+    0,
+    { flow: SLUG, definition: versionV1.definition, resolve, grants },
+    deps()
+  )
+  expect(result.accepted).toBe(true)
+  if (result.operation === undefined) throw new Error(result.reason)
+  expect(result.instance.submitted).toBe(true)
+  expect(result.instance.values).toEqual(samData)
+  expect(result.instance.currentStep).toBe('advisor')
+  expect(result.instance.assignees).toContainEqual({
+    step: 'advisor',
+    target: { user: OKAFOR },
+    members: [OKAFOR],
+  })
+  expect(result.operation.type).toBe(INSTANCE_SUBMITTED)
+  expect(result.operation.actor).toBe(SAM)
 
-  // One apply commits the mark and its side effect together (I2): the outbox
-  // is the projection of that one event, so the email arrived with the mark.
-  const state = apply(submitted.operation, emptyState)
+  // One apply commits the route and its side effect together (I2): the outbox
+  // is the projection of that one event, so the email arrived with the route.
+  const state = apply(result.operation, emptyState)
   expect(state.log).toHaveLength(1)
   expect(outboxOf(state.log)).toEqual([
     {
@@ -89,7 +106,12 @@ test('#43 a start routes a draft and the submit records the assignment email (S0
       payload: { to: OKAFOR, step: 'advisor' },
     },
   ])
-  expect(state.log[0].payload).toMatchObject({ currentStep: 'advisor', submitted: true })
+  expect(state.log[0].payload).toMatchObject({
+    step: 'request',
+    currentStep: 'advisor',
+    submitted: true,
+    skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
+  })
 
   // (c) The engine never creates an anonymous draft (ID-2): a start with no
   // principal is refused.
@@ -105,7 +127,7 @@ test('#43 a start routes a draft and the submit records the assignment email (S0
     /instance\.start/
   )
 
-  // (d) I6: the same inputs give the same draft and the same route.
+  // (d) I6: the same inputs give the same draft.
   const twice = startInstance(flow, INSTANCE_ID, samData, SAM, deps(), resolve, grants)
   expect(twice.instance).toEqual(started.instance)
 })

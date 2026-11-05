@@ -17,7 +17,7 @@ import {
 } from '../../engine/reminders.js'
 import { runSteps, type Step } from '../../engine/run.js'
 import { deliver, sideEffectIdentity, sideEffectKey } from '../../engine/sideEffects.js'
-import { EMAIL_CONNECTOR, startInstance } from '../../engine/submission.js'
+import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
 import {
   ADVISOR_STEP,
   APPROVE,
@@ -85,14 +85,24 @@ test('#49 a stuck task reminds at each interval, escalates at the deadline and c
   let now = NOW
   const deps = sources(() => now)
 
-  // Sam starts the request; the advisor target resolves to Okafor, so the
-  // draft routes to the advisor step (S06, WF-1, I13).
+  // Sam starts and submits the request; the advisor target resolves to
+  // Okafor, so the submit routes it to the advisor step (S06, WF-1, I13).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, deps, resolve, starterGrants)
-  expect(started.instance.currentStep).toBe(ADVISOR_STEP)
-  let state = apply(started.operation, emptyState)
+  const submitted = submitInstance(
+    started.instance,
+    STARTER,
+    {},
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
+    deps
+  )
+  if (!submitted.accepted || submitted.operation === undefined) throw new Error(submitted.reason)
+  expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
+  let state = apply(submitted.operation, apply(started.operation, emptyState))
+  const assignmentEmails = outboxOf(state.log)
 
   // Okafor claims the advisor task at NOW, so its idle time starts here (S09).
-  const view: Instance = { ...started.instance, version: state.log.length }
+  const view: Instance = submitted.instance
   const claimed = claim(view, OKAFOR, view.version ?? 0, deps)
   expect(claimed.accepted).toBe(true)
   if (claimed.operation === undefined) throw new Error(`the claim was refused: ${claimed.reason}`)
@@ -156,12 +166,17 @@ test('#49 a stuck task reminds at each interval, escalates at the deadline and c
   })
   expect(held.holder).toBe(OKAFOR)
   // A worker records the keys that it delivered, so a restart near the deadline
-  // delivers the escalation once and no reminder a second time (I3).
+  // delivers the escalation once and no reminder a second time (I3). The
+  // submit's task-assigned email sits on the same log (SE-2), so a worker that
+  // delivered nothing yet delivers it first.
   const fired = [...threeDays, escalation]
   const timerLog = fireTimers(state.log, fired)
-  expect(deliver(timerLog, new Set())).toEqual(fired)
-  expect(deliver(timerLog, new Set(fired.map(sideEffectKey)))).toEqual([])
-  expect(deliver(timerLog, new Set(keys))).toEqual([escalation])
+  expect(deliver(timerLog, new Set())).toEqual([...assignmentEmails, ...fired])
+  const delivered = new Set([...assignmentEmails, ...fired].map(sideEffectKey))
+  expect(deliver(timerLog, delivered)).toEqual([])
+  expect(deliver(timerLog, new Set([...assignmentEmails.map(sideEffectKey), ...keys]))).toEqual([
+    escalation,
+  ])
 
   // (c) SE-5, I2: the task completes before the deadline. The completion
   // cancels the pending timers in the same event, emits no reminder and no
@@ -182,10 +197,11 @@ test('#49 a stuck task reminds at each interval, escalates at the deadline and c
   // event (SE-5, I2).
   expect(done.cancelled).toEqual(fired)
   expect(done.operation.payload[CANCELLED_TIMERS]).toEqual(fired.map(sideEffectKey))
-  // It emits no timer side effect (SE-5).
+  // It emits no timer side effect (SE-5): the log carries only the submit's
+  // task-assigned email (SE-2).
   expect(done.operation.payload.outbox).toBeUndefined()
   const after = apply(done.operation, state)
-  expect(outboxOf(after.log)).toEqual([])
+  expect(outboxOf(after.log)).toEqual(assignmentEmails)
   // The task is no longer open, so none of its timers is due any more (SE-5).
   expect(done.instance.currentStep).toBeUndefined()
   expect(dueReminders(done.instance, timers, NOW + 3 * DAY)).toEqual([])

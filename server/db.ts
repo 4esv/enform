@@ -38,7 +38,12 @@ import {
 } from '../engine/reminders.js'
 import { UNROUTABLE_QUEUE } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
-import { EMAIL_CONNECTOR, INSTANCE_STARTED, INSTANCE_SUBMITTED } from '../engine/submission.js'
+import {
+  DRAFT_EDITED,
+  EMAIL_CONNECTOR,
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+} from '../engine/submission.js'
 import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
@@ -726,6 +731,9 @@ export async function readInboxRows(
   )`
   const open = `i.current_step is not null and i.done = false
     and i.status in ('waiting', 'in-progress')`
+  // A draft shows only to its starter, in Started by me (ADR 0014, VT-4).
+  const openOrDraft = `i.current_step is not null and i.done = false
+    and i.status in ('draft', 'waiting', 'in-progress')`
   let query: string
   let values: string[]
   // The due time of the current task, from the escalation timer that the step
@@ -761,7 +769,7 @@ export async function readInboxRows(
              from instances i
              left join tasks t on t.instance_id = i.id and t.step = i.current_step
              where i.starter = $1
-               and ${open}
+               and ${openOrDraft}
              order by last_activity_at desc, i.id asc`
     values = [actor]
   } else {
@@ -1217,10 +1225,13 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === INSTANCE_STARTED) {
     const start = readStart(event)
+    // A start is a private draft (ADR 0014): the row records the request form
+    // as the current step and the starter, with no task row and no timer,
+    // until the submit routes it.
     await client.query(
       `insert into instances
          (id, flow_slug, definition_version, current_step, status, starter, values, version, holder, submitted, done, queue, seq)
-       values ($1, $2, $3, $4, 'waiting', $5, $6::jsonb, 0, null, false, false, $7, $8)
+       values ($1, $2, $3, $4, 'draft', $5, $6::jsonb, 0, null, false, false, $7, $8)
        on conflict (id) do update
          set flow_slug = excluded.flow_slug,
              definition_version = excluded.definition_version,
@@ -1245,31 +1256,14 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         event.seq,
       ]
     )
-    if (start.currentStep !== undefined) {
-      await upsertTask(client, {
-        instanceId: start.instanceId,
-        step: start.currentStep,
-        assignees: start.assignees,
-        holder: null,
-        state: 'available',
-        queue: start.queue ?? null,
-        at: event.at,
-        seq: event.seq,
-      })
-      // The start's active step schedules its timers from its own settings and
-      // the time the task entered it (SE-3, SE-4, S12).
-      const step = await stepOfInstance(client, start.instanceId, start.currentStep)
-      if (step !== undefined) {
-        const to = timerRecipient(start.assignees, start.currentStep)
-        await scheduleStepTimers(client, {
-          instanceId: start.instanceId,
-          step,
-          since: event.at,
-          seq: event.seq,
-          ...(to === undefined ? {} : { to }),
-        })
-      }
-    }
+    return
+  }
+  if (event.type === DRAFT_EDITED) {
+    const edit = readDraftEdit(event)
+    await client.query(
+      `update instances set values = values || $2::jsonb, seq = $3 where id = $1`,
+      [edit.instanceId, JSON.stringify(edit.values), event.seq]
+    )
     return
   }
   if (event.type === STEP_CLAIMED) {
@@ -1361,28 +1355,87 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
   }
   if (event.type === INSTANCE_SUBMITTED) {
     const submitted = readSubmission(event)
+    // The submit completes the request form and routes the instance (ADR
+    // 0014): the row enters the next step, or is done, with the version
+    // advanced as the engine advanced it (I5), and the next step's task row
+    // and timers are created exactly as a completion creates them. An older
+    // submit without a route only marks the instance submitted.
+    if (!submitted.routed) {
+      await client.query(
+        `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
+        [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
+      )
+      return
+    }
     await client.query(
-      `update instances set submitted = true, values = $2::jsonb, seq = $3 where id = $1`,
-      [submitted.instanceId, JSON.stringify(submitted.values), event.seq]
+      `update instances
+       set submitted = true, values = $2::jsonb, current_step = $3, holder = null,
+           done = $4, status = $5, queue = $6, version = version + 1, seq = $7
+       where id = $1`,
+      [
+        submitted.instanceId,
+        JSON.stringify(submitted.values),
+        submitted.currentStep ?? null,
+        submitted.currentStep === undefined,
+        submitted.currentStep === undefined ? 'done' : 'waiting',
+        submitted.queue ?? null,
+        event.seq,
+      ]
     )
+    if (submitted.currentStep !== undefined) {
+      await upsertTask(client, {
+        instanceId: submitted.instanceId,
+        step: submitted.currentStep,
+        assignees: submitted.assignees,
+        holder: null,
+        state: 'available',
+        queue: submitted.queue ?? null,
+        at: event.at,
+        seq: event.seq,
+      })
+      const step = await stepOfInstance(client, submitted.instanceId, submitted.currentStep)
+      if (step !== undefined) {
+        const to = timerRecipient(submitted.assignees, submitted.currentStep)
+        await scheduleStepTimers(client, {
+          instanceId: submitted.instanceId,
+          step,
+          since: event.at,
+          seq: event.seq,
+          ...(to === undefined ? {} : { to }),
+        })
+      }
+    }
     return
   }
   if (event.type === STEP_SENT_BACK) {
     const sentBack = readSendBack(event)
     // The instance returns to the named step as the next revision (WF-3). The
-    // holder is cleared, so the target step's people claim it again.
+    // holder is cleared, so the target step's people claim it again. A send
+    // back to the request form, the first step, makes the instance a draft
+    // again (ADR 0014): the starter corrects it and submits it again, so no
+    // task row and no timer exist until that submit.
+    const draftAgain = (await firstStepOf(client, sentBack.instanceId))?.key === sentBack.to
     await client.query(
       `update instances
        set current_step = $2,
            holder = null,
            done = false,
-           status = 'waiting',
+           status = $6,
+           submitted = $7,
            queue = $4,
            version = version + 1,
            revisions = revisions || jsonb_build_object($2::text, $3::integer),
            seq = $5
        where id = $1`,
-      [sentBack.instanceId, sentBack.to, sentBack.revision, sentBack.queue ?? null, event.seq]
+      [
+        sentBack.instanceId,
+        sentBack.to,
+        sentBack.revision,
+        sentBack.queue ?? null,
+        event.seq,
+        draftAgain ? 'draft' : 'waiting',
+        !draftAgain,
+      ]
     )
     // The step that sent the task back keeps its history: its task is no
     // longer open, so it leaves the inbox without deleting a row (I4).
@@ -1400,6 +1453,7 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
       at: event.at,
       seq: event.seq,
     })
+    if (draftAgain) return
     // The target task is open again with the assignees the engine resolved for
     // that step (AS-4, I13). That is the row the inbox and the task read use.
     await upsertTask(client, {
@@ -1795,6 +1849,20 @@ async function nextStepOf(
 }
 
 /** One step of the definition that the instance pins, or undefined when it has none (DF-2, S12). */
+/** The request form of an instance's pinned definition: its first step (ADR 0014). */
+async function firstStepOf(client: PoolClient, instanceId: string): Promise<FlowStep | undefined> {
+  const result = await client.query<{ definition: unknown }>(
+    `select v.definition
+     from instances i
+     join flow_versions v on v.content_hash = i.definition_version
+     where i.id = $1`,
+    [instanceId]
+  )
+  const row = result.rows[0]
+  if (row === undefined) return undefined
+  return readStoredDefinition(row.definition, `instance ${instanceId}`).steps[0]
+}
+
 async function stepOfInstance(
   client: PoolClient,
   instanceId: string,
@@ -1938,11 +2006,34 @@ function readTimerFired(event: Event): {
   return { timerId, instanceId, step, kind }
 }
 
-/** Read a submit payload that the projection folds (I4, FM-7). */
-function readSubmission(event: Event): { instanceId: string; values: Record<string, unknown> } {
-  const { instanceId } = event.payload
+/** Read a submit payload that the projection folds (I4, FM-7, ADR 0014). */
+function readSubmission(event: Event): {
+  instanceId: string
+  values: Record<string, unknown>
+  routed: boolean
+  currentStep: string | undefined
+  assignees: readonly Assignee[]
+  queue: string | null
+} {
+  const { instanceId, currentStep, done, queue } = event.payload
   if (typeof instanceId !== 'string') {
     throw new Error(`events: malformed ${INSTANCE_SUBMITTED} payload at seq ${event.seq}`)
+  }
+  return {
+    instanceId,
+    values: readJsonRecord(event.payload.values),
+    routed: typeof currentStep === 'string' || done === true,
+    currentStep: typeof currentStep === 'string' ? currentStep : undefined,
+    assignees: readAssignees(event.payload.assignees),
+    queue: typeof queue === 'string' ? queue : null,
+  }
+}
+
+/** Read a draft edit payload that the projection folds (I4, ADR 0014). */
+function readDraftEdit(event: Event): { instanceId: string; values: Record<string, unknown> } {
+  const { instanceId } = event.payload
+  if (typeof instanceId !== 'string') {
+    throw new Error(`events: malformed ${DRAFT_EDITED} payload at seq ${event.seq}`)
   }
   return { instanceId, values: readJsonRecord(event.payload.values) }
 }

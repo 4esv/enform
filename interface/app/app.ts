@@ -62,6 +62,12 @@ import {
 /** The versioned event type of a start (S06, MVP.md 9.1). */
 const INSTANCE_STARTED = 'instance.started@1'
 
+/** The versioned event type of a submit (S06, ADR 0014). */
+const INSTANCE_SUBMITTED = 'instance.submitted@1'
+
+/** The versioned event type of a draft edit (ADR 0014, RT-3). */
+const DRAFT_EDITED = 'draft.edited@1'
+
 /** The versioned event type of a completion (S09, FM-4). */
 const STEP_COMPLETED = 'step.completed@1'
 
@@ -323,39 +329,146 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const form = buildForm(formModel(flow.definition, stepKey), () => true)
     const status = document.createElement('p')
     status.className = 'status'
-    const submit = document.createElement('button')
-    submit.type = 'button'
-    submit.textContent = 'Submit'
-    submit.dataset.start = ''
-    submit.addEventListener('click', () => {
+    // The start creates a private draft on the request form (ADR 0014, D1):
+    // Save draft posts the start intent alone, so the person can come back to
+    // the draft from Started by me. Submit posts the start and then the submit
+    // intent, two engine steps (ADR 0010), and the engine validates the form,
+    // routes the instance and notifies the assignees (FM-4, SE-2).
+    const instancePath = (instanceId: string): string =>
+      `/?flow=${encodeURIComponent(slug)}&instance=${encodeURIComponent(instanceId)}`
+    const startIntent = (instanceId: string): Operation => ({
+      id: ids(),
+      type: INSTANCE_STARTED,
+      at: clock(),
+      actor,
+      payload: { flow: slug, instanceId, values: readValues() },
+    })
+    const save = document.createElement('button')
+    save.type = 'button'
+    save.textContent = 'Save draft'
+    save.dataset.start = ''
+    save.addEventListener('click', () => {
       const instanceId = instanceIds()
-      const intent: Operation = {
-        id: ids(),
-        type: INSTANCE_STARTED,
-        at: clock(),
-        actor,
-        payload: { flow: slug, instanceId, values: readValues() },
-      }
-      void appendOperation(intent)
+      void appendOperation(startIntent(instanceId))
         .then(() => {
           clearErrors()
           status.textContent = 'Synced'
           // The start minted the instance; the person follows the link to the
-          // task page (S06, DX-1).
+          // draft (S06, DX-1).
           const link = document.createElement('p')
           link.className = 'instance-link'
           const anchor = document.createElement('a')
-          anchor.href = `/?flow=${encodeURIComponent(slug)}&instance=${encodeURIComponent(instanceId)}`
+          anchor.href = instancePath(instanceId)
           anchor.textContent = instanceId
-          link.append('Instance ', anchor)
+          link.append('Draft ', anchor)
           form.appendChild(link)
         })
         .catch((error: unknown) => {
           showRefusal(status, form, error)
         })
     })
-    form.appendChild(submit)
-    form.appendChild(status)
+    const submit = document.createElement('button')
+    submit.type = 'button'
+    submit.textContent = 'Submit'
+    submit.dataset.submit = ''
+    submit.addEventListener('click', () => {
+      const instanceId = instanceIds()
+      void appendOperation(startIntent(instanceId))
+        .then(() =>
+          appendOperation({
+            id: ids(),
+            type: INSTANCE_SUBMITTED,
+            at: clock(),
+            actor,
+            payload: { instanceId, version: 0, values: {} },
+          })
+        )
+        .then(() => {
+          clearErrors()
+          status.textContent = 'Submitted'
+          location.assign(instancePath(instanceId))
+        })
+        .catch((error: unknown) => {
+          // A refused submit leaves the draft on the server (RT-5): the
+          // person sees the reason at the field and the draft link, and
+          // corrects it on the draft page.
+          showRefusal(status, form, error)
+          const link = document.createElement('p')
+          link.className = 'instance-link'
+          const anchor = document.createElement('a')
+          anchor.href = instancePath(instanceId)
+          anchor.textContent = instanceId
+          link.append('Draft ', anchor)
+          form.appendChild(link)
+        })
+    })
+    form.append(save, submit, status)
+    main.appendChild(form)
+  }
+
+  /**
+   * Render the draft page for its starter (ADR 0014, RT-3, FM-4): the request
+   * form with every editable field, a Save control that posts the changed
+   * values as one `draft.edited@1` operation, and a Submit control that posts
+   * the submit intent with the version the page read (I5). The engine
+   * validates the form and routes the instance; the page shows a refusal at
+   * the field it names (FM-4, A9).
+   */
+  const renderDraft = (
+    slug: string,
+    instanceId: string,
+    view: InstanceView,
+    form: HTMLFormElement,
+    status: HTMLElement
+  ): void => {
+    const save = document.createElement('button')
+    save.type = 'button'
+    save.textContent = 'Save'
+    save.dataset.saveDraft = ''
+    save.addEventListener('click', () => {
+      const intent: Operation = {
+        id: ids(),
+        type: DRAFT_EDITED,
+        at: clock(),
+        actor,
+        payload: { instanceId, values: readValues() },
+      }
+      void appendOperation(intent)
+        .then(() => {
+          clearErrors()
+          status.textContent = 'Synced'
+        })
+        .catch((error: unknown) => {
+          showRefusal(status, form, error)
+        })
+    })
+    const submit = document.createElement('button')
+    submit.type = 'button'
+    submit.textContent = 'Submit'
+    submit.dataset.submit = ''
+    submit.addEventListener('click', () => {
+      const intent: Operation = {
+        id: ids(),
+        type: INSTANCE_SUBMITTED,
+        at: clock(),
+        actor,
+        payload: { instanceId, version: view.version, values: readValues() },
+      }
+      void appendOperation(intent)
+        .then(() => renderTask(slug, instanceId, 'Submitted'))
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof RequestRefused &&
+            error.status === 409 &&
+            error.errors.length === 0
+          ) {
+            await renderTask(slug, instanceId, error.error)
+            return
+          }
+          showRefusal(status, form, error)
+        })
+    })
+    form.append(save, submit, status)
     main.appendChild(form)
   }
 
@@ -424,6 +537,13 @@ export async function mountApp(options: AppOptions): Promise<void> {
     const form = buildForm(formModel(undefined, stepKey, values, view), (field) => field.editable)
     const status = document.createElement('p')
     status.className = 'status'
+
+    // A draft shows its starter the request form and the submit (ADR 0014);
+    // only the starter reads a draft, so the read already decided who is here.
+    if (view.status.state === 'draft') {
+      renderDraft(slug, instanceId, view, form, status)
+      return
+    }
 
     if (view.status.holder !== actor) {
       const claimControl = document.createElement('button')

@@ -6,7 +6,7 @@ import type { Instance } from '../../engine/instance.js'
 import { type ActorId, createOperation, type OperationDeps } from '../../engine/operation.js'
 import { createOutboxOperation, outboxOf } from '../../engine/outbox.js'
 import { resolveAssignees } from '../../engine/routing.js'
-import { EMAIL_CONNECTOR, startInstance } from '../../engine/submission.js'
+import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
 import { CONNECTOR_CALLED } from '../../engine/timeline.js'
 import {
   ALREADY_SENT,
@@ -37,9 +37,7 @@ import {
   resolve,
   SLUG,
   STARTER,
-  SUBMIT,
   SYSTEM,
-  samGrants,
   sentCalls,
   starterGrants,
 } from './scenario.js'
@@ -121,29 +119,25 @@ test('#53 an undo appends a compensating event and marks the side effects that a
   // One shared source, so every recorded operation gets a distinct ID (I1).
   const sources = deps()
 
-  // Sam starts the request: the start routes the draft to the request step,
-  // whose starter target resolves to him (S06, WF-1, I13).
+  // Sam starts the request: the start creates his draft on the request form,
+  // whose starter target resolves to him (S06, ADR 0014, I13).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   expect(started.instance.currentStep).toBe(REQUEST_STEP)
   let state = apply(started.operation, emptyState)
 
-  // Sam claims the request step and completes it with submit, so the instance
-  // advances to the advisor step (S09, WF-1).
-  const atRequest: Instance = { ...started.instance, version: state.log.length }
-  const claimedRequest = claim(atRequest, STARTER, atRequest.version ?? 0, sources)
-  expect(claimedRequest.accepted).toBe(true)
-  state = applyAction(claimedRequest, state)
-  const submitted = complete(
-    claimedRequest.instance,
+  // Sam submits his draft, so the instance advances to the advisor step (S06,
+  // WF-1, ADR 0014).
+  const submitted = submitInstance(
+    started.instance,
     STARTER,
-    SUBMIT,
     {},
-    claimedRequest.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
     sources
   )
   expect(submitted.accepted).toBe(true)
-  state = applyAction(submitted, state)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  state = apply(submitted.operation, state)
   expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
 
   // Dr. Okafor claims the advisor task and approves it, so the instance
@@ -204,9 +198,10 @@ test('#53 an undo appends a compensating event and marks the side effects that a
   expect(after.log).toHaveLength(log.length + 1)
   expect(after.log.slice(0, log.length)).toEqual(log)
   // The approval is the same object, so the undo rewrote or deleted nothing
-  // (I4), and the submit and both decisions of the flow stay in the log.
+  // (I4), and both decisions of the flow stay in the log (the submit is its
+  // own event, ADR 0014).
   expect(after.log[approvalSeq - 1]).toBe(log[approvalSeq - 1])
-  expect(after.log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(3)
+  expect(after.log.filter((event) => event.type === STEP_COMPLETED)).toHaveLength(2)
 
   // (b) A2, S16: the three side effects already occurred, so the undo does not
   // reverse them. It marks each "Already sent", and it notifies the people that

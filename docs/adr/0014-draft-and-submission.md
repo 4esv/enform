@@ -18,7 +18,7 @@ The request form is the first step of the definition. A start (`instance.started
 
 A submit (`instance.submitted@1`) is the starter's completion of the request form. The engine validates the values against the first step's fields and rules (FM-4), refuses with every error named by path, and otherwise records the first step as completed, routes to the next step whose skip condition is false (or the Unroutable queue), records the assignees, the skipped steps and the merged values, and carries the task-assigned email of each assignee in the same operation (I2, SE-2). A completion of a later step records the task-assigned email of the next step's assignees in the same way.
 
-An unsubmitted draft appears only in its starter's Started by me tab, as a draft. A draft that is withdrawn is discarded.
+An unsubmitted draft appears only in its starter's Started by me tab, as a draft. A draft that is withdrawn is discarded. A send back to the request form makes the instance a draft again: the starter corrects it and submits it again through the same submit, which records the next revision of the request form (WF-3).
 
 ## Alternatives
 

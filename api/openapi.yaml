@@ -24,7 +24,14 @@ paths:
         The engine applies the operation idempotently by its client-created
         ID (I1) and appends the event it records (I4). A client may post an
         intent instead of a resolved operation (ADR 0010). A start intent
-        (`StartIntent`) names the flow and the values it collected, and a
+        (`StartIntent`) names the flow and the values it collected and creates
+        a private draft on the request form (ADR 0014); a draft edit
+        (`DraftEditIntent`, `draft.edited@1`) names the draft and the values
+        the starter changed; a submit intent (`SubmitIntent`,
+        `instance.submitted@1`) names the draft, the version the starter read
+        and the values the request form captured, and the server validates
+        the request form, routes the instance and records the task-assigned
+        emails through the engine (FM-4, SE-2); a
         completion intent (`CompletionIntent`) names the instance, the
         version it read, the outcome it chose and the values it captured. A
         claim (`step.claimed@1`) names the instance and the version it read as
@@ -75,6 +82,7 @@ paths:
         '400':
           description: >-
             The operation is invalid, a raw `instance.started@1`,
+            `instance.submitted@1`,
             `step.completed@1`, `step.sent-back@1`, `instance.withdrawn@1`,
             `instance.cancelled@1`, `instance.undone@1` or
             `step.taken-over@1` was posted instead of its intent, an intent
@@ -97,9 +105,12 @@ paths:
             step (AS-3). Nothing is appended.
         '409':
           description: >-
-            The engine refused the completion, the claim, the send back, the
+            The engine refused the submit, the draft edit, the completion,
+            the claim, the send back, the
             withdraw, the cancel, the undo or the takeover and appended
-            nothing (I1, I5), because the version the client read is stale,
+            nothing (I1, I5), because the instance is not a draft or is a
+            draft that nobody but its starter may act on (ADR 0014), the
+            version the client read is stale,
             the actor does not hold the step (AS-2), does not hold the
             outcome's scope (AC-4), is not an assignee of the step (AS-3),
             the holder is not yet idle for the step's idle period (AS-3, the
@@ -1100,6 +1111,90 @@ components:
                 The values that the form holds: one field key to one JSON
                 value (FM-7).
               additionalProperties: true
+    SubmitIntent:
+      type: object
+      description: >-
+        A submit intent (ADR 0010, ADR 0014, FM-4, FM-7, SE-2): the parts the
+        starter can honestly send to submit a draft. It carries the operation
+        ID it chose (I1), the event type `instance.submitted@1`, the actor,
+        the draft it acts on (DX-1), the version the starter read (I5) and the
+        values the request form captured. The server validates the request
+        form's fields and rules, routes the instance to the next step whose
+        skip condition is false, records the assignees and the task-assigned
+        emails through the engine, and refuses a submit that is not the
+        starter's, that is stale, or whose values fail (409 with every error by
+        path). It is told apart from a resolved `instance.submitted@1` by the
+        payload: an intent names no `step`.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `instance.submitted@1`.
+          examples:
+            - instance.submitted@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The draft, the version the starter read and the captured values.
+          required: [instanceId, version]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the draft that is submitted (DX-1).
+            version:
+              type: integer
+              minimum: 0
+              description: >-
+                The instance version the starter read (I5). A stale version is
+                refused and appends nothing.
+            values:
+              type: object
+              description: >-
+                The values the request form captured, merged over what the
+                draft holds (FM-7). Absent means the draft's values as they are.
+              additionalProperties: true
+    DraftEditIntent:
+      type: object
+      description: >-
+        A draft edit (ADR 0014, RT-3, I1): the starter changed the values a
+        draft holds. One operation per edit, with the ID the client chose, so
+        a retry appends nothing. The values merge over what the draft holds;
+        the submit validates them (FM-4). A principal that is not the starter
+        answers 403, and an instance that is no longer a draft answers 409.
+      required: [id, type, at, actor, payload]
+      properties:
+        id:
+          $ref: '#/components/schemas/OperationId'
+        type:
+          type: string
+          description: The versioned event type, `draft.edited@1`.
+          examples:
+            - draft.edited@1
+        at:
+          type: number
+          description: >-
+            Milliseconds since the epoch, from the injected clock (I6).
+        actor:
+          $ref: '#/components/schemas/ActorId'
+        payload:
+          type: object
+          description: The draft and the values the edit changed.
+          required: [instanceId, values]
+          properties:
+            instanceId:
+              type: string
+              description: The ID of the draft the edit acts on (DX-1).
+            values:
+              type: object
+              description: The field keys the edit changed, each with its new value (FM-7).
+              additionalProperties: true
     CompletionIntent:
       type: object
       description: >-
@@ -1558,8 +1653,10 @@ components:
           $ref: '#/components/schemas/ActorId'
         state:
           type: string
-          description: The state in plain language (VT-2, S14).
-          enum: [waiting, in-progress, done, withdrawn, cancelled]
+          description: >-
+            The state in plain language (VT-2, S14). A draft is an instance
+            its starter has not submitted (ADR 0014).
+          enum: [draft, waiting, in-progress, done, withdrawn, cancelled]
         skipped:
           type: array
           description: >-
@@ -2300,10 +2397,11 @@ components:
         state:
           type: string
           description: >-
-            The state of the step for this instance (VT-2): not opened yet,
-            opened and in progress, completed, skipped by a condition, or sent
-            back for revision (VT-2, WF-3, AS-2).
-          enum: [unopened, opened, completed, skipped, sent-back]
+            The state of the step for this instance (VT-2): a draft the
+            starter has not submitted (ADR 0014), not opened yet, opened and
+            in progress, completed, skipped by a condition, or sent back for
+            revision (VT-2, WF-3, AS-2).
+          enum: [draft, unopened, opened, completed, skipped, sent-back]
         holder:
           $ref: '#/components/schemas/ActorId'
         dueAt:

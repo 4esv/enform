@@ -23,7 +23,7 @@ import { STEP_SENT_BACK } from './sendBack.js'
 import type { SkippedStep } from './workflow.js'
 
 /** The plain-language state of an instance (VT-2, S14). */
-export type StatusState = 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
+export type StatusState = 'draft' | 'waiting' | 'in-progress' | 'done' | 'withdrawn' | 'cancelled'
 
 /** The status line of an instance (VT-1, VT-2, S14). */
 export type Status = {
@@ -198,6 +198,9 @@ export function visibleTo(
  */
 export function mayRead(actor: ActorId, instance: Instance, context: StatusContext): boolean {
   if (actor === instance.starter) return true
+  // A draft is private until its submission (ADR 0014, D1, VT-4): nobody but
+  // the starter reads its contents, whatever scope they hold.
+  if (instance.submitted === false) return false
   if (instance.assignees.some((assignee) => assignee.members.includes(actor))) return true
   return authorize(context.grants, 'instance.read', `flow:${context.flow}`)
 }
@@ -207,6 +210,7 @@ function statusState(instance: Instance): StatusState {
   if (instance.withdrawal === 'withdrawn') return 'withdrawn'
   if (instance.withdrawal === 'cancelled') return 'cancelled'
   if (instance.done === true) return 'done'
+  if (instance.submitted === false) return 'draft'
   if (instance.holder !== undefined) return 'in-progress'
   return 'waiting'
 }

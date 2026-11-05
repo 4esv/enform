@@ -161,15 +161,28 @@ test('#76 FM-3 a step read hides a field it does not make visible (FM-3, I8)', (
     { key: 'review', state: 'not-reached' },
   ])
 
-  // A principal that may read the instance but is not an assignee of the step
-  // gets the visible fields and no editable field (FM-3, I8).
-  const reader = readInstance(PRISCILLA, instance, context(state, readerGrants))
-  expect(reader?.visible).toEqual(['summary'])
+  // A draft is private to its starter (ADR 0014, D1): a principal with
+  // instance.read reads nothing until the submit, and an outsider never does.
+  expect(readInstance(PRISCILLA, instance, context(state, readerGrants))).toBeUndefined()
+  expect(readInstance(OUTSIDER, instance, context(state, []))).toBeUndefined()
+
+  // Once submitted, a principal that may read the instance but is not an
+  // assignee of the step gets the visible fields and no editable field (FM-3,
+  // I8).
+  const sent = submitInstance(
+    instance,
+    SAM,
+    {},
+    instance.version ?? 0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  if (!sent.accepted || sent.operation === undefined) throw new Error(sent.reason)
+  state = apply(sent.operation, state)
+  const reader = readInstance(PRISCILLA, projected(state), context(state, readerGrants))
+  expect(reader?.visible).toEqual(['summary', 'decision'])
   expect(reader?.editable).toEqual([])
   expect(reader?.values).toEqual({ summary: 'hello' })
-
-  // A principal that may not read the instance reads nothing (I8).
-  expect(readInstance(OUTSIDER, instance, context(state, []))).toBeUndefined()
 })
 
 test('#76 FM-3 the read reflects the instance log, and another instance never leaks (I4, I6)', () => {
@@ -199,25 +212,19 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
   )
   state = apply(second.operation, state)
 
-  // The first instance advances: a claim and a completion move it to `review`
-  // (WF-1), and a submit records the values it captured (FM-7).
-  const claimed = claim(firstView, SAM, firstView.version ?? 0, sources)
-  expect(claimed.accepted).toBe(true)
-  if (claimed.operation === undefined) throw new Error(claimed.reason)
-  state = apply(claimed.operation, state)
-  const completed = complete(
-    claimed.instance,
+  // The first instance advances: the submit completes the request form and
+  // moves it to `review` (WF-1, ADR 0014), recording the values it captured
+  // merged over what the draft held (FM-7).
+  const submitted = submitInstance(
+    firstView,
     SAM,
-    'submit',
-    {},
-    claimed.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    { summary: 'first again' },
+    firstView.version ?? 0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
     sources
   )
-  expect(completed.accepted).toBe(true)
-  if (completed.operation === undefined) throw new Error(completed.reason)
-  state = apply(completed.operation, state)
-  const submitted = submitInstance(completed.instance, SAM, sources, { decision: 'approve' })
+  expect(submitted.accepted).toBe(true)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
   state = apply(submitted.operation, state)
 
   // The projection reflects all of it: `review` is the current step, the
@@ -226,7 +233,7 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
   const instance = projected(state)
   expect(instance.currentStep).toBe('review')
   expect(instance.submitted).toBe(true)
-  expect(instance.values).toEqual({ summary: 'first', decision: 'approve' })
+  expect(instance.values).toEqual({ summary: 'first again' })
 
   // `review` declares no `visible`, so every field of the step is visible. The
   // starter may read the instance but is not an assignee of `review`, so it
@@ -234,7 +241,7 @@ test('#76 FM-3 the read reflects the instance log, and another instance never le
   const view = readInstance(SAM, instance, context(state, samGrants))
   expect(view?.visible).toEqual(['summary', 'decision'])
   expect(view?.editable).toEqual([])
-  expect(view?.values).toEqual({ summary: 'first', decision: 'approve' })
+  expect(view?.values).toEqual({ summary: 'first again' })
   expect(view?.fields).toEqual([
     { key: 'summary', control: 'text', label: 'Summary' },
     { key: 'decision', control: 'select', label: 'Decision', options: ['approve', 'reject'] },
@@ -269,22 +276,17 @@ test('#228 a step assignee reads the fields and outcomes and completes with only
     samGrants
   )
   state = apply(started.operation, state)
-  const claimRequest = claim(started.instance, SAM, started.instance.version ?? 0, sources)
-  expect(claimRequest.accepted).toBe(true)
-  if (claimRequest.operation === undefined) throw new Error(claimRequest.reason)
-  state = apply(claimRequest.operation, state)
-  const completeRequest = complete(
-    claimRequest.instance,
+  const submitRequest = submitInstance(
+    started.instance,
     SAM,
-    'submit',
     {},
-    claimRequest.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants, resolve },
+    0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
     sources
   )
-  expect(completeRequest.accepted).toBe(true)
-  if (completeRequest.operation === undefined) throw new Error(completeRequest.reason)
-  state = apply(completeRequest.operation, state)
+  expect(submitRequest.accepted).toBe(true)
+  if (submitRequest.operation === undefined) throw new Error(submitRequest.reason)
+  state = apply(submitRequest.operation, state)
 
   // The approver's only grant names the review step's approve outcome. It holds
   // no flow.read, flow.edit, flow.build or instance.start on the flow.
@@ -359,6 +361,7 @@ const TAKEOVER_SLUG = 'takeover-flow'
 const TAKEOVER_DEFINITION: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
+    { "key": "request", "targets": [{ "starter": "starter" }] },
     {
       "key": "registrar",
       "targets": [{ "team": "registrar-office" }],
@@ -394,6 +397,21 @@ test('#242 S10 the read names when an assignee may take a claimed task over (AS-
     takeoverGrants
   )
   state = apply(started.operation, state)
+  const sent = submitInstance(
+    projected(state),
+    SAM,
+    {},
+    0,
+    {
+      flow: TAKEOVER_SLUG,
+      definition: TAKEOVER_DEFINITION,
+      resolve: teamResolve,
+      grants: takeoverGrants,
+    },
+    sources
+  )
+  if (!sent.accepted || sent.operation === undefined) throw new Error(sent.reason)
+  state = apply(sent.operation, state)
   const claimed = claim(projected(state), SAM, projected(state).version ?? 0, sources)
   if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
   state = apply(claimed.operation, state)
@@ -436,6 +454,21 @@ test('#242 S10 the idle period counts from the claim on this instance (AS-3, I4)
   const claimAt = (id: string): number => {
     const started = startInstance(takeoverFlow, id, {}, SAM, sources, teamResolve, takeoverGrants)
     state = apply(started.operation, state)
+    const sent = submitInstance(
+      projected(state, id),
+      SAM,
+      {},
+      0,
+      {
+        flow: TAKEOVER_SLUG,
+        definition: TAKEOVER_DEFINITION,
+        resolve: teamResolve,
+        grants: takeoverGrants,
+      },
+      sources
+    )
+    if (!sent.accepted || sent.operation === undefined) throw new Error(sent.reason)
+    state = apply(sent.operation, state)
     const instance = projected(state, id)
     const claimed = claim(instance, SAM, instance.version ?? 0, sources)
     if (!claimed.accepted || claimed.operation === undefined) throw new Error(claimed.reason)
@@ -488,30 +521,45 @@ test('#191 the projected version counts the accepted actions the write path kept
     samGrants
   )
   state = apply(started.operation, state)
-  // The write path: the start is version 0, so the claim is based on 0 and the
-  // completion on the version the claim returned.
-  const claimed = claim(started.instance, SAM, started.instance.version ?? 0, sources)
+  // The write path: the start is version 0, so the submit is based on 0, the
+  // claim on the version the submit returned, and the completion on the
+  // version the claim returned (ADR 0014, I5).
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    started.instance.version ?? 0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  expect(submitted.accepted).toBe(true)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  state = apply(submitted.operation, state)
+  const okaforGrants: readonly Grant[] = [
+    { principal: OKAFOR, scopes: ['step.outcome:approve'], resource: `flow:${SLUG}/step:review` },
+  ]
+  const claimed = claim(submitted.instance, OKAFOR, submitted.instance.version ?? 0, sources)
   expect(claimed.accepted).toBe(true)
   if (claimed.operation === undefined) throw new Error(claimed.reason)
   state = apply(claimed.operation, state)
   const completed = complete(
     claimed.instance,
-    SAM,
-    'submit',
+    OKAFOR,
+    'approve',
     {},
     claimed.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    { flow: SLUG, definition, grants: okaforGrants },
     sources
   )
   expect(completed.accepted).toBe(true)
   if (completed.operation === undefined) throw new Error(completed.reason)
   state = apply(completed.operation, state)
 
-  // The projection folds the same three events and reports the same counter,
+  // The projection folds the same four events and reports the same counter,
   // so a completion intent resolves with a meaningful version (I5).
   const projectedInstance = projected(state)
   expect(projectedInstance.version).toBe(completed.instance.version)
-  expect(projectedInstance.version).toBe(2)
+  expect(projectedInstance.version).toBe(3)
 })
 
 // Issue #48, S11, WF-3, VT-3, I4, I8: the instance read carries the steps a
@@ -538,20 +586,16 @@ test('#48 the read carries the previous steps and the visible send-back note (S1
     )
     const start = instanceOf(next.log, instanceId)
     if (start === undefined) throw new Error('the start did not project')
-    const claimed = claim(start, SAM, start.version ?? 0, sources)
-    if (claimed.operation === undefined) throw new Error(claimed.reason)
-    next = apply(claimed.operation, next)
-    const completed = complete(
-      claimed.instance,
+    const submitted = submitInstance(
+      start,
       SAM,
-      'submit',
       {},
-      claimed.instance.version ?? 0,
-      { flow: SLUG, definition, grants: samGrants, resolve },
+      start.version ?? 0,
+      { flow: SLUG, definition, resolve, grants: samGrants },
       sources
     )
-    if (completed.operation === undefined) throw new Error(completed.reason)
-    next = apply(completed.operation, next)
+    if (submitted.operation === undefined) throw new Error(submitted.reason)
+    next = apply(submitted.operation, next)
     const review = instanceOf(next.log, instanceId)
     if (review === undefined) throw new Error('the review step did not project')
     const held = claim(review, OKAFOR, review.version ?? 0, sources)
@@ -600,12 +644,27 @@ test('#48 the read carries the previous steps and the visible send-back note (S1
     { step: 'request', actor: OKAFOR, comment: 'Attach your degree audit' },
   ])
 
-  // Okafor wrote the note, so he reads it too (VT-3).
+  // The send back to the request form made the instance a draft again (ADR
+  // 0014, D1): until Sam submits it again, neither Okafor, who wrote the
+  // note, nor Priscilla, who may read the instance, reads its contents.
+  expect(readInstance(OKAFOR, projected(state), context(state, okaforGrants))).toBeUndefined()
+  expect(readInstance(PRISCILLA, projected(state), context(state, readerGrants))).toBeUndefined()
+
+  // Sam submits the revision; Okafor wrote the note, so he reads it too
+  // (VT-3), while Priscilla holds no outcome scope on `request` and reads no
+  // note (I8).
+  const revision = submitInstance(
+    projected(state),
+    SAM,
+    {},
+    projected(state).version ?? 0,
+    { flow: SLUG, definition, resolve, grants: samGrants },
+    sources
+  )
+  if (revision.operation === undefined) throw new Error(revision.reason)
+  state = apply(revision.operation, state)
   const okaforView = readInstance(OKAFOR, projected(state), context(state, okaforGrants))
   expect(okaforView?.notes).toEqual(samView?.notes)
-
-  // Priscilla may read the instance but holds no outcome scope on `request`,
-  // so the note is absent (I8).
   expect(readInstance(PRISCILLA, projected(state), context(state, readerGrants))?.notes).toEqual([])
 
   // The note of the other instance never reaches this instance's read (I4).

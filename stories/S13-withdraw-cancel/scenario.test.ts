@@ -1,11 +1,11 @@
 import { expect, test } from 'vitest'
-import { type ActionResult, claim, complete } from '../../engine/action.js'
+import { type ActionResult, claim } from '../../engine/action.js'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Instance } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import { resolveAssignees } from '../../engine/routing.js'
-import { EMAIL_CONNECTOR, startInstance } from '../../engine/submission.js'
+import { EMAIL_CONNECTOR, startInstance, submitInstance } from '../../engine/submission.js'
 import {
   type CloseContext,
   type CloseResult,
@@ -31,7 +31,6 @@ import {
   resolve,
   SLUG,
   STARTER,
-  samGrants,
   starterGrants,
 } from './scenario.js'
 
@@ -93,41 +92,35 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
   let now = CLOSED_AT
   const sources = deps(() => now)
 
-  // The start routes the request to the request step, whose starter target
-  // resolves to Sam, and records him as the starter (S06, WF-1, AC-5).
+  // The start creates Sam's draft on the request form and records him as the
+  // starter (S06, ADR 0014, AC-5).
   const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
   expect(started.instance.starter).toBe(STARTER)
   let state = apply(started.operation, emptyState)
 
-  // Sam submits his own request (S09, WF-1): he claims the request step and
-  // completes it with submit, so the instance advances to the registrar step.
-  const opened = state.log.length
-  const atRequest: Instance = { ...started.instance, version: opened }
-  const claimedRequest = claim(atRequest, STARTER, opened, sources)
-  expect(claimedRequest.accepted).toBe(true)
-  state = applyAction(claimedRequest, state)
-  const submitted = complete(
-    claimedRequest.instance,
+  // Sam submits his own request (S06, WF-1, ADR 0014), so the instance
+  // advances to the registrar step and the team is notified (SE-2).
+  const submitted = submitInstance(
+    started.instance,
     STARTER,
-    'submit',
     {},
-    claimedRequest.instance.version ?? 0,
-    { flow: SLUG, definition, grants: samGrants },
+    0,
+    { flow: SLUG, definition, resolve, grants: starterGrants },
     sources
   )
   expect(submitted.accepted).toBe(true)
-  state = applyAction(submitted, state)
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  state = apply(submitted.operation, state)
+  const assignmentEmails = outboxOf(state.log)
 
-  // The registrar task starts now, so the story resolves its team snapshot, so
-  // that Ana can claim it (S06, I13).
+  // The registrar task starts now with the team snapshot the submit resolved,
+  // so Ana can claim it (S06, I13).
   const registrarAssignees = resolveAssignees(definition.steps[1], resolve)
   expect(registrarAssignees).toEqual([
     { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
   ])
-  const atRegistrar: Instance = {
-    ...submitted.instance,
-    assignees: [...submitted.instance.assignees, ...registrarAssignees],
-  }
+  expect(submitted.instance.assignees).toContainEqual(registrarAssignees[0])
+  const atRegistrar: Instance = submitted.instance
   const claimedRegistrar = claim(atRegistrar, ANA, atRegistrar.version ?? 0, sources)
   expect(claimedRegistrar.accepted).toBe(true)
   expect(claimedRegistrar.instance.holder).toBe(ANA)
@@ -184,7 +177,7 @@ test('#50 a starter withdraws, an authorized principal cancels, and an undo rest
     outbox: [withdrawn.outbox],
   })
   state = applyClose(withdrawn, state)
-  expect(outboxOf(state.log)).toEqual([withdrawn.outbox])
+  expect(outboxOf(state.log)).toEqual([...assignmentEmails, withdrawn.outbox])
 
   // (d) WF-5, I4: an undo within the period restores the previous step and
   // holder as a compensating event. It appends a new event and never rewrites

@@ -253,11 +253,11 @@ test('#184 a posted intent resolves to the engine operation and keeps the client
         instanceId: INSTANCE_ID,
         flow: SLUG,
         definitionVersion: versionV1.contentHash,
-        currentStep: 'advisor',
-        assignees: [{ step: 'advisor', target: { user: 'user:okafor' }, members: ['user:okafor'] }],
+        currentStep: 'request',
+        assignees: [{ step: 'request', target: { starter: 'starter' }, members: ['user:sam'] }],
         starter: 'user:sam',
         values: { urgent: false },
-        skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
+        skipped: [],
       })
       expect(api.state().log).toHaveLength(before + 1)
       expect(api.state().log.at(-1)?.operationId).toBe('intent-1')
@@ -341,38 +341,40 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
       })
       expect(start.status).toBe(201)
 
-      // Sam started the instance, so he reads it (AC-5). The S06 start routes to
-      // `advisor`, which declares no fields, so nothing is visible and the values
-      // are absent from the response (FM-3).
+      // Sam started the instance, so he reads it (AC-5). The start is a draft
+      // on the request form (ADR 0014): its fields are visible and editable
+      // for the starter, the summary is required, and nothing is routed yet.
       const read = await fetch(`${base}/api/v1/instances/${INSTANCE_ID}?actor=user:sam`)
       expect(read.status).toBe(200)
       expect(await read.json()).toEqual({
         instanceId: INSTANCE_ID,
         version: 0,
         status: {
-          step: 2,
-          totalSteps: 3,
-          currentStep: 'advisor',
-          state: 'waiting',
-          skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
+          step: 1,
+          totalSteps: 4,
+          currentStep: 'request',
+          state: 'draft',
+          skipped: [],
         },
         tracker: [
-          {
-            key: 'triage',
-            state: 'skipped',
-            condition: { '==': [{ var: 'urgent' }, false] },
-          },
-          { key: 'advisor', state: 'unopened', startAt: 10 },
+          { key: 'request', state: 'unopened', startAt: 10 },
+          { key: 'triage', state: 'not-reached' },
+          { key: 'advisor', state: 'not-reached' },
           { key: 'registrar', state: 'not-reached' },
         ],
-        visible: [],
-        editable: [],
-        required: [],
+        visible: ['summary', 'overload_credits', 'urgent', 'details'],
+        editable: ['summary', 'overload_credits', 'urgent', 'details'],
+        required: ['summary'],
         collapsed: [],
-        values: {},
-        fields: [],
-        outcomes: ['approve', 'send_back'],
-        previousSteps: ['triage'],
+        values: { urgent: false },
+        fields: [
+          { key: 'summary', control: 'text' },
+          { key: 'overload_credits', control: 'number' },
+          { key: 'urgent', control: 'checkbox' },
+          { key: 'details', control: 'long-text' },
+        ],
+        outcomes: [],
+        previousSteps: [],
         notes: [],
         canWithdraw: true,
         canCancel: false,

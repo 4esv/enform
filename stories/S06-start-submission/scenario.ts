@@ -10,14 +10,15 @@ import type { TargetResolver } from '../../engine/routing.js'
 import { startInstance, submitInstance } from '../../engine/submission.js'
 import { type Step, scenario } from '../../tools/harness/scenario.js'
 
-// S06: Sam starts and submits a submission (STORIES.md). He opens the form
-// link, fills it in and submits it. The engine never creates an anonymous
-// draft (ID-2): the start needs a signed-in principal, here Sam, and the scope
-// instance.start on the flow (AC-1). The start routes the draft to the first
-// step whose skip condition is false (WF-1, I10): the fixture data is not
-// urgent, so the triage step is skipped and the draft routes to the advisor
-// step, whose user target resolves to Dr. Okafor. The submit records the
-// assignment email that he receives (I2, SE-1). The path is deterministic
+// S06: Sam starts and submits a submission (STORIES.md, ADR 0014). He opens
+// the form link, fills it in and submits it. The engine never creates an
+// anonymous draft (ID-2): the start needs a signed-in principal, here Sam, and
+// the scope instance.start on the flow (AC-1). The start is a private draft on
+// the request form; the submit routes it to the first later step whose skip
+// condition is false (WF-1, I10): the fixture data is not urgent, so the
+// triage step is skipped and the instance routes to the advisor step, whose
+// user target resolves to Dr. Okafor. The submit records the assignment email
+// that he receives (I2, SE-1). The path is deterministic
 // (I6): it reads no clock and no random source.
 
 /** The flow slug of the story (STORIES.md, the example flow). */
@@ -30,20 +31,30 @@ export const SLUG = 'course-overload'
  */
 export const INSTANCE_ID = 'inst-1'
 
-/** The definition of version 1, the version that a start pins the instance to (DF-1, DF-2). */
+/**
+ * The definition of version 1, the version that a start pins the instance to
+ * (DF-1, DF-2). The request form is the first step (ADR 0014), the triage step
+ * is skipped unless the request is urgent (WF-1, S05), and the advisor and the
+ * registrar follow.
+ */
 export const definitionV1: FlowDefinition = parse(`{
   "schemaVersion": 2,
   "steps": [
     {
-      "key": "triage",
-      "targets": [{ "group": "CS-Chairs" }],
+      "key": "request",
+      "targets": [{ "starter": "starter" }],
       "fields": [
         { "key": "summary", "control": "text", "required": true },
         { "key": "overload_credits", "control": "number" },
         { "key": "urgent", "control": "checkbox" },
         { "key": "details", "control": "long-text" }
       ],
-      "editable": ["summary", "overload_credits", "urgent", "details"],
+      "editable": ["summary", "overload_credits", "urgent", "details"]
+    },
+    {
+      "key": "triage",
+      "targets": [{ "group": "CS-Chairs" }],
+      "outcomes": ["approve"],
       "skipWhen": { "==": [{ "var": "urgent" }, false] }
     },
     {
@@ -124,10 +135,25 @@ function withoutOutbox(
   return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'outbox'))
 }
 
-/** The golden path of S06 (STORIES.md): Sam starts, then submits (ID-2, WF-1, I2, SE-1, FM-7). */
+/**
+ * The golden path of S06 (STORIES.md, ADR 0014): Sam starts a draft with the
+ * values he typed, then submits it; the submit routes past the triage step to
+ * the advisor and records the assignment email (ID-2, WF-1, I2, SE-1, FM-7).
+ */
 function submissionSteps(): readonly Step[] {
   const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
-  const submitted = submitInstance(started.instance, SAM, depsFor(1), samData)
+  const result = submitInstance(
+    started.instance,
+    SAM,
+    samData,
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: samGrants },
+    depsFor(1)
+  )
+  if (!result.accepted || result.operation === undefined) {
+    throw new Error(`S06: the golden submit was refused: ${result.reason}`)
+  }
+  const submitted = { instance: result.instance, operation: result.operation }
 
   return [
     {
@@ -155,7 +181,7 @@ export const golden = scenario({
         { fill: { field: 'overload_credits', value: 3 } },
         { fill: { field: 'urgent', value: false } },
         { fill: { field: 'details', value: 'I need three extra credits to graduate on time.' } },
-        { click: 'button[type="button"]' },
+        { click: '[data-start]' },
         { expect: 'Synced' },
       ],
     },
