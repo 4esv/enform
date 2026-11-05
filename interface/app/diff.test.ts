@@ -29,7 +29,7 @@ async function diff(): Promise<Diff> {
   return (await import(DIFF_MODULE)) as unknown as Diff
 }
 
-test.fails('#264 DF-6 the view lists the draft and every published version, newest first', async () => {
+test('#264 DF-6 the view lists the draft and every published version, newest first', async () => {
   const { pointsOf, pointLabel } = await diff()
   expect(pointsOf(3)).toEqual(['draft', '3', '2', '1'])
   expect(pointsOf(undefined)).toEqual(['draft'])
@@ -37,7 +37,7 @@ test.fails('#264 DF-6 the view lists the draft and every published version, newe
   expect(pointLabel('2')).toBe('Version 2')
 })
 
-test.fails('#264 S03 S04 a change reads as where, what, its class and its author', async () => {
+test('#264 S03 S04 a change reads as where, what, its class and its author', async () => {
   const { describeChange } = await diff()
   expect(
     describeChange({
