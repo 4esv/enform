@@ -33,7 +33,8 @@ import {
 import type { Pool } from 'pg'
 import { STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
-import { type FlowDefinition, parse } from '../engine/definition.js'
+import { type FlowDefinition, type JsonValue, parse } from '../engine/definition.js'
+import { dryRun } from '../engine/dryrun.js'
 import { classifyChange, type DefinitionChange } from '../engine/edit.js'
 import {
   changeTitle,
@@ -48,7 +49,12 @@ import {
 } from '../engine/flow.js'
 import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
 import { readableLog } from '../engine/logRead.js'
-import type { Log, Operation, OperationDeps } from '../engine/operation.js'
+import {
+  createOperation,
+  type Log,
+  type Operation,
+  type OperationDeps,
+} from '../engine/operation.js'
 import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
 import { STEP_SENT_BACK } from '../engine/sendBack.js'
@@ -582,6 +588,97 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
       definition: pushed.flow.draft ?? definition,
       changes,
     })
+  })
+
+  // Issue #264, DR-1, DR-3, DR-4, DR-5, DR-6, I7, I8: a dry run of a version
+  // or the draft. The engine routes, resolves and previews; the route reads
+  // the definition, the directory and the grants, writes nothing of the run,
+  // and records only an impersonated run (DR-5, I14).
+  app.post('/api/v1/flows/:slug/dry-run', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    if (!csrfOk(c, auth)) return csrfRefused(c)
+    const slug = c.req.param('slug')
+    const body = await readJsonObject(c)
+    if (body === undefined || !isRecord(body.data)) {
+      return c.json({ error: 'the body needs the data of the request form' }, 400)
+    }
+    const versionValue = body.version ?? 'draft'
+    if (
+      versionValue !== 'draft' &&
+      (typeof versionValue !== 'number' || !Number.isInteger(versionValue) || versionValue < 1)
+    ) {
+      return c.json({ error: 'version is a published version number or draft' }, 400)
+    }
+    const advance = body.advanceMinutes ?? 0
+    if (typeof advance !== 'number' || !Number.isInteger(advance) || advance < 0) {
+      return c.json({ error: 'advanceMinutes must be a non-negative integer' }, 400)
+    }
+    const grants = await grantsOfPrincipal(pool, auth.principal.id)
+    const resource = `flow:${slug}`
+    if (
+      !['flow.dryrun', 'flow.edit', 'flow.build'].some((scope) =>
+        authorize(grants, scope, resource)
+      )
+    ) {
+      return c.json(
+        { error: `a dry run requires flow.dryrun, flow.edit or flow.build on ${resource}` },
+        403
+      )
+    }
+    const as = nonEmpty(typeof body.as === 'string' ? body.as : undefined)
+    if (
+      as !== undefined &&
+      as !== auth.principal.id &&
+      !authorize(grants, 'org.impersonate', 'org')
+    ) {
+      return c.json(
+        { error: 'running as another person requires org.impersonate on org (DR-5)' },
+        403
+      )
+    }
+    let definition: FlowDefinition
+    if (versionValue === 'draft') {
+      const stored = await readFlowProjection(pool, slug)
+      if (stored === undefined || stored.flow.draft === undefined) {
+        return c.json({ error: `no flow with the slug ${slug} has a draft` }, 404)
+      }
+      definition = stored.flow.draft
+    } else {
+      const published = publishedVersion(await readLog(pool), slug, versionValue)
+      if (published === undefined) {
+        return c.json({ error: `the flow ${slug} has no published version ${versionValue}` }, 404)
+      }
+      definition = published.definition
+    }
+    const actor = as ?? auth.principal.id
+    const data = body.data as Record<string, JsonValue>
+    const log = await readLog(pool)
+    const teamMembers = await teamMembersFor(pool, log)
+    const groupMembers = await groupMembersFor(config)
+    const now = Date.now()
+    const result = dryRun({
+      definition,
+      data,
+      actor,
+      resolve: resolverFor(actor, data, teamMembers, groupMembers),
+      now,
+      advanceMs: advance * 60_000,
+    })
+    if (as !== undefined && as !== auth.principal.id) {
+      // The log records each impersonated run (DR-5, I14); nothing else of
+      // the run is stored (DR-6).
+      await appendOperation(
+        pool,
+        createOperation(
+          'dryrun.ran@1',
+          { flow: slug, version: versionValue, as },
+          operationDeps,
+          auth.principal.id
+        )
+      )
+    }
+    return c.json({ flow: slug, version: versionValue, actor, now, ...result })
   })
 
   app.post('/api/v1/flows/:slug/publish', async (c) => {

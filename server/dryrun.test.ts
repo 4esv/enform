@@ -130,7 +130,7 @@ async function run(pool: Pool, body: Record<string, unknown>): Promise<Response>
   })
 }
 
-test.fails('#264 DR-1 DR-3 DR-4 a dry run of a version or the draft answers the route, the assignees, the inbox and the timers, and writes nothing', async () => {
+test('#264 DR-1 DR-3 DR-4 a dry run of a version or the draft answers the route, the assignees, the inbox and the timers, and writes nothing', async () => {
   appended.length = 0
   const pool = sessionPool([dryrunGrant])
   const response = await run(pool, {
@@ -174,7 +174,7 @@ test.fails('#264 DR-1 DR-3 DR-4 a dry run of a version or the draft answers the 
   expect((await run(pool, { version: 1 })).status).toBe(400)
 })
 
-test.fails('#264 DR-5 I8 running as another person needs org.impersonate and the log records the use', async () => {
+test('#264 DR-5 I8 running as another person needs org.impersonate and the log records the use', async () => {
   appended.length = 0
   const refused = await run(sessionPool([dryrunGrant]), {
     version: 1,
