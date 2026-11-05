@@ -40,6 +40,7 @@ import {
   publish,
   publishedByHash,
   publishedFlow,
+  publishedVersion,
   push,
   STARTER_DEFINITION,
 } from '../engine/flow.js'
@@ -553,9 +554,26 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (!mayReadFlow(grants, slug)) {
       return c.json({ error: `reading the flow requires a scope on flow:${slug}` }, 403)
     }
-    const published = publishedFlow(await readLog(pool), slug)
+    // The newest publication, or the version the query names (DF-6, S15,
+    // #258), so a diff between two published versions reads both.
+    const requested = nonEmpty(c.req.query('version'))
+    const number = requested === undefined ? undefined : Number(requested)
+    if (number !== undefined && (!Number.isInteger(number) || number < 1)) {
+      return c.json({ error: 'version must be a positive integer' }, 400)
+    }
+    const log = await readLog(pool)
+    const published =
+      number === undefined ? publishedFlow(log, slug) : publishedVersion(log, slug, number)
     if (published === undefined || (await readFlowProjection(pool, slug)) === undefined) {
-      return c.json({ error: `no published flow has the slug ${slug}` }, 404)
+      return c.json(
+        {
+          error:
+            number === undefined
+              ? `no published flow has the slug ${slug}`
+              : `the flow ${slug} has no published version ${number}`,
+        },
+        404
+      )
     }
     return c.json({
       slug,

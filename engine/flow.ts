@@ -287,6 +287,27 @@ export function publishedFlow(log: Log, slug: string): FlowVersion | undefined {
 }
 
 /**
+ * Derive one published version of a flow by its number (DF-2, DF-6, S15,
+ * #258): the `config.definition.published@1` event whose slug and version
+ * match, so a diff between two published versions reads both from the log.
+ * A version is immutable, so the number names at most one publication. It
+ * is a pure function of the log (I6); an unknown version gives undefined.
+ */
+export function publishedVersion(log: Log, slug: string, version: number): FlowVersion | undefined {
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const event = log[i]
+    if (event.type !== DEFINITION_PUBLISHED) continue
+    if (event.payload.slug !== slug || event.payload.version !== version) continue
+    return {
+      version,
+      contentHash: event.payload.contentHash as string,
+      definition: event.payload.definition as FlowDefinition,
+    }
+  }
+  return undefined
+}
+
+/**
  * Derive the published version of a flow by its content hash (#76, I4, I6,
  * DF-2). An instance records the content hash of the definition that it
  * started on (DF-2), and this reads that exact version back: the

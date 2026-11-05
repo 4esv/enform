@@ -854,8 +854,11 @@ export async function readDraft(slug: string): Promise<DraftFlow> {
   return (await response.json()) as DraftFlow
 }
 
-export async function readFlow(slug: string): Promise<PublishedFlow> {
-  const url = `${configured().baseUrl}/api/v1/flows/${slug}`
+export async function readFlow(slug: string, version?: number): Promise<PublishedFlow> {
+  const query = new URLSearchParams()
+  if (version !== undefined) query.set('version', String(version))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/flows/${slug}${search}`
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(),
