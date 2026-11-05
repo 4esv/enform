@@ -21,6 +21,9 @@
 
 import {
   appendOperation,
+  type DryRunIntent,
+  type DryRunResult,
+  dryRunFlow,
   type Grant,
   listFlows,
   type Operation,
@@ -194,6 +197,25 @@ type BuilderState = {
    * label and an option list. The server refuses the rest anyway (I8).
    */
   build: boolean
+  /** The newest published version, so the dry-run panel offers each version (DR-1). */
+  publishedVersion: number | undefined
+  /** The dry-run panel between renders (DR-1, DR-3, DR-4, DR-5). */
+  readonly dry: DryRunPanel
+}
+
+/** What the dry-run panel holds between renders: its inputs, and the last answer or refusal. */
+type DryRunPanel = {
+  open: boolean
+  /** The request form's data as typed, by field key. */
+  readonly data: Map<string, string>
+  /** `draft` or a published version number as text. */
+  version: string
+  /** The person to run as; empty runs as the signed-in person (DR-5). */
+  as: string
+  /** How far the simulated clock moves forward, in minutes, as typed (DR-4). */
+  advance: string
+  result: DryRunResult | undefined
+  error: string | undefined
 }
 
 /**
@@ -231,6 +253,16 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
     starters: startersOf(grants, options.slug),
     grants: new Map(),
     build: session === undefined ? true : canBuild(session.grants, options.slug),
+    publishedVersion: summary?.publishedVersion,
+    dry: {
+      open: false,
+      data: new Map(),
+      version: 'draft',
+      as: '',
+      advance: '',
+      result: undefined,
+      error: undefined,
+    },
   }
   render(state)
 }
@@ -324,6 +356,16 @@ function render(state: BuilderState): void {
     void publishDraft(state)
   })
   controls.appendChild(publish)
+
+  const dryRun = document.createElement('button')
+  dryRun.type = 'button'
+  dryRun.textContent = state.dry.open ? 'Close dry run' : 'Dry run'
+  dryRun.dataset.dryRun = ''
+  dryRun.addEventListener('click', () => {
+    state.dry.open = !state.dry.open
+    render(state)
+  })
+  controls.appendChild(dryRun)
   root.appendChild(controls)
 
   const status = document.createElement('p')
@@ -336,6 +378,8 @@ function render(state: BuilderState): void {
   published.dataset.published = ''
   root.appendChild(published)
 
+  if (state.dry.open) root.appendChild(renderDryRun(state))
+
   root.appendChild(renderSettings(state))
   root.appendChild(renderStarters(state))
 
@@ -346,6 +390,274 @@ function render(state: BuilderState): void {
   })
   root.appendChild(steps)
   lockStructure(state)
+}
+
+/**
+ * Render the dry-run panel (DR-1, DR-3, DR-4, DR-5, S01, S05, S08, S12): the
+ * request form's data, the version to run (the saved draft or a published
+ * version), the person to run as, the simulated clock, and the last answer:
+ * the route with each skipped step in grey and its condition, who gets each
+ * step and through which target, the preview inbox, and the timers the
+ * clock fired. Nothing of a run is stored (DR-6); the server records only a
+ * run as another person (DR-5).
+ */
+function renderDryRun(state: BuilderState): HTMLElement {
+  const dry = state.dry
+  const box = document.createElement('section')
+  box.className = 'dry-run'
+  box.dataset.dryPanel = ''
+  const heading = document.createElement('h2')
+  heading.textContent = 'Dry run'
+  box.appendChild(heading)
+  const hint = document.createElement('p')
+  hint.className = 'hint'
+  hint.textContent =
+    'A dry run routes the data through the saved draft or a published version, sends nothing and stores nothing. Save the draft first to run unsaved edits.'
+  box.appendChild(hint)
+
+  const version = selectRow('Version')
+  version.input.dataset.dryVersion = ''
+  version.input.dataset.field = 'dry-run/version'
+  const draftOption = document.createElement('option')
+  draftOption.value = 'draft'
+  draftOption.textContent = 'draft'
+  version.input.appendChild(draftOption)
+  for (let number = state.publishedVersion ?? 0; number >= 1; number -= 1) {
+    const option = document.createElement('option')
+    option.value = String(number)
+    option.textContent = `version ${number}`
+    version.input.appendChild(option)
+  }
+  version.input.value = dry.version
+  version.input.addEventListener('change', () => {
+    dry.version = version.input.value
+  })
+  box.appendChild(version.row)
+
+  const data = document.createElement('div')
+  data.className = 'dry-data'
+  const dataHeading = document.createElement('h3')
+  dataHeading.textContent = 'Request form data'
+  data.appendChild(dataHeading)
+  const first = state.model.steps[0]
+  for (const field of first?.fields ?? []) {
+    if (field.key === '' || field.control === 'static') continue
+    const row = textRow(field.label.trim() === '' ? field.key : field.label)
+    row.input.value = dry.data.get(field.key) ?? ''
+    row.input.dataset.dryField = field.key
+    row.input.dataset.field = `dry-run/${field.key}`
+    if (field.control === 'number' || field.control === 'money') row.input.type = 'number'
+    if (field.control === 'yes-no' || field.control === 'checkbox') {
+      row.input.placeholder = 'true or false'
+    }
+    row.input.addEventListener('input', () => {
+      dry.data.set(field.key, row.input.value)
+    })
+    data.appendChild(row.row)
+  }
+  box.appendChild(data)
+
+  const as = textRow('Run as (a principal id; needs org.impersonate, and the log records it)')
+  as.input.value = dry.as
+  as.input.dataset.dryAs = ''
+  as.input.dataset.field = 'dry-run/as'
+  as.input.addEventListener('input', () => {
+    dry.as = as.input.value
+  })
+  box.appendChild(as.row)
+
+  const advance = minuteRow('Move the clock forward (minutes)', dry.advance, 'dryAdvance')
+  advance.input.min = '0'
+  advance.input.dataset.field = 'dry-run/advance'
+  advance.input.addEventListener('input', () => {
+    dry.advance = advance.input.value
+  })
+  box.appendChild(advance.row)
+
+  const run = document.createElement('button')
+  run.type = 'button'
+  run.textContent = 'Run'
+  run.dataset.dryGo = ''
+  run.addEventListener('click', () => {
+    void runDryRun(state)
+  })
+  box.appendChild(run)
+
+  const status = document.createElement('p')
+  status.className = 'status'
+  status.dataset.dryStatus = ''
+  status.textContent = dry.error ?? ''
+  box.appendChild(status)
+
+  if (dry.result !== undefined) box.appendChild(renderDryRunResult(state, dry.result))
+  return box
+}
+
+/** Post the dry run with the panel's inputs and keep the answer or the refusal (DR-1, DR-5). */
+async function runDryRun(state: BuilderState): Promise<void> {
+  const dry = state.dry
+  const first = state.model.steps[0]
+  const data: Record<string, unknown> = {}
+  for (const field of first?.fields ?? []) {
+    const text = dry.data.get(field.key)
+    if (text === undefined || text.trim() === '') continue
+    data[field.key] = dryValueOf(field, text)
+  }
+  const advance = /^(0|[1-9][0-9]*)$/.test(dry.advance.trim()) ? Number(dry.advance.trim()) : 0
+  try {
+    dry.result = await dryRunFlow(
+      {
+        version: dry.version,
+        data,
+        ...(dry.as.trim() === '' ? {} : { as: dry.as.trim() }),
+        ...(advance === 0 ? {} : { advanceMinutes: advance }),
+      },
+      state.slug
+    )
+    dry.error = undefined
+  } catch (error: unknown) {
+    dry.result = undefined
+    dry.error = messageOf(error)
+  }
+  render(state)
+}
+
+/** The value a dry-run input names, typed by its control (FM-1): a number, a boolean or the text. */
+function dryValueOf(field: BuilderField, text: string): unknown {
+  const trimmed = text.trim()
+  if (field.control === 'number' || field.control === 'money') {
+    return /^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(trimmed) ? Number(trimmed) : trimmed
+  }
+  if (field.control === 'yes-no' || field.control === 'checkbox') {
+    return trimmed === 'true' || trimmed === 'yes'
+  }
+  if (field.control === 'multi-select') return splitList(trimmed)
+  return trimmed
+}
+
+/** Render the answer of a dry run (DR-1, DR-3, DR-4, S05, S08, S12). */
+function renderDryRunResult(state: BuilderState, result: DryRunResult): HTMLElement {
+  const labels = fieldLabels(state.model)
+  const box = document.createElement('div')
+  box.className = 'dry-result'
+  box.dataset.dryResult = ''
+
+  const clock = document.createElement('p')
+  clock.dataset.dryClock = ''
+  const advance = /^(0|[1-9][0-9]*)$/.test(state.dry.advance.trim())
+    ? Number(state.dry.advance.trim())
+    : 0
+  clock.textContent = `Ran ${result.version === 'draft' ? 'the draft' : `version ${result.version}`} as ${result.actor}. Simulated clock: ${new Date(result.now).toISOString()}${advance === 0 ? '' : `, moved forward ${advance} minutes`}.`
+  box.appendChild(clock)
+
+  const routeHeading = document.createElement('h3')
+  routeHeading.textContent = 'Route'
+  box.appendChild(routeHeading)
+  const route = document.createElement('ol')
+  route.dataset.dryRoute = ''
+  const skipped = new Map(result.route.skipped.map((entry) => [entry.step, entry.condition]))
+  const firstKey = state.model.steps[0]?.key
+  for (const step of orderedSteps(state, result)) {
+    const item = document.createElement('li')
+    item.dataset.dryStep = step
+    const condition = skipped.get(step)
+    if (condition !== undefined) {
+      item.dataset.dryState = 'skipped'
+      item.className = 'skipped'
+      item.textContent = `${step}: skipped, ${conditionText(conditionOf(condition), labels)}`
+    } else {
+      item.dataset.dryState = 'active'
+      const assignees = result.assignees.filter((entry) => entry.step === step)
+      const who =
+        step === firstKey && assignees.length === 0
+          ? 'the request form'
+          : assignees
+              .map(
+                (entry) =>
+                  `${targetText(entry.target)} → ${entry.members.length === 0 ? 'nobody (unroutable)' : entry.members.join(', ')}`
+              )
+              .join('; ')
+      item.textContent = `${step}: ${who === '' ? 'no assignee' : who}`
+    }
+    route.appendChild(item)
+  }
+  box.appendChild(route)
+  const next = document.createElement('p')
+  next.dataset.dryNext = ''
+  next.textContent =
+    result.next === undefined
+      ? 'A submit completes the flow: no step follows the request form.'
+      : `A submit routes to ${result.next}.`
+  box.appendChild(next)
+
+  const inboxHeading = document.createElement('h3')
+  inboxHeading.textContent = 'Preview inbox'
+  box.appendChild(inboxHeading)
+  const inbox = document.createElement('ul')
+  inbox.dataset.dryInbox = ''
+  if (result.intents.length === 0) {
+    const none = document.createElement('li')
+    none.textContent = 'No email would be sent.'
+    inbox.appendChild(none)
+  }
+  for (const intent of result.intents) {
+    const item = document.createElement('li')
+    item.dataset.dryMail = intent.operation
+    item.textContent = mailText(intent)
+    inbox.appendChild(item)
+  }
+  box.appendChild(inbox)
+
+  const timersHeading = document.createElement('h3')
+  timersHeading.textContent = 'Timers'
+  box.appendChild(timersHeading)
+  const timers = document.createElement('ul')
+  timers.dataset.dryTimers = ''
+  if (result.timers.length === 0) {
+    const none = document.createElement('li')
+    none.textContent = 'The next step sets no reminder and no deadline.'
+    timers.appendChild(none)
+  }
+  for (const timer of result.timers) {
+    const item = document.createElement('li')
+    item.dataset.dryTimer = timer.kind
+    item.dataset.dryFired = String(timer.fired)
+    item.textContent = `${timer.kind} of ${timer.step} at ${new Date(timer.fireAt).toISOString()}: ${timer.fired ? 'fired' : 'pending'}`
+    timers.appendChild(item)
+  }
+  box.appendChild(timers)
+  return box
+}
+
+/** The steps of a dry run in definition order: the model's keys, then any the answer adds. */
+function orderedSteps(state: BuilderState, result: DryRunResult): string[] {
+  const answered = new Set([
+    ...result.route.active,
+    ...result.route.skipped.map((entry) => entry.step),
+  ])
+  const ordered = state.model.steps.map((step) => step.key).filter((key) => answered.has(key))
+  for (const key of answered) if (!ordered.includes(key)) ordered.push(key)
+  return ordered
+}
+
+/** One target as text (AS-1): its kind and value. */
+function targetText(target: Record<string, unknown>): string {
+  const [entry] = Object.entries(target)
+  return entry === undefined ? 'target' : `${entry[0]}:${String(entry[1])}`
+}
+
+/** One preview email in words (DR-3): what it is, to whom, and for which step. */
+function mailText(intent: DryRunIntent): string {
+  const payload = intent.payload
+  const to = typeof payload.to === 'string' ? payload.to : 'nobody'
+  const step = typeof payload.step === 'string' ? payload.step : ''
+  const kind: Record<string, string> = {
+    'send-assignment': 'Assignment',
+    'send-reminder': 'Reminder',
+    'send-escalation': 'Escalation',
+  }
+  const adds = Array.isArray(payload.adds) ? payload.adds.map(String) : []
+  return `${kind[intent.operation] ?? intent.operation} to ${to}${step === '' ? '' : ` for ${step}`}${adds.length === 0 ? '' : `, adds ${adds.join(', ')}`}`
 }
 
 /**
