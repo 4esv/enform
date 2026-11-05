@@ -428,6 +428,19 @@ export interface ApiError {
   readonly error: string
   readonly code?: string
   readonly errors?: readonly FieldError[]
+  readonly conflicts?: readonly MergeConflict[]
+}
+
+/**
+ * One place of a draft that two writes changed differently (DF-3, S03): its path, in the shape
+ * of a definition change, and the value the base, the write and the current draft hold there. A
+ * value is absent where that side has none.
+ */
+export interface MergeConflict {
+  readonly path: string
+  readonly base?: Record<string, unknown>
+  readonly ours?: Record<string, unknown>
+  readonly theirs?: Record<string, unknown>
 }
 
 /**
@@ -560,6 +573,7 @@ export interface FlowSummary {
 export interface DraftFlow {
   readonly slug: string
   readonly version: number
+  readonly draftHash?: string
   readonly definition?: Record<string, unknown>
   readonly changes?: readonly DefinitionChange[]
 }
@@ -657,6 +671,7 @@ export interface DryRunIntent {
  */
 export interface DraftWrite {
   readonly version: number
+  readonly baseHash?: string
   readonly definition: Record<string, unknown>
 }
 

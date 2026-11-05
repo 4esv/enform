@@ -38,6 +38,7 @@ const REPO = join(import.meta.dirname, '..')
 type DraftFlow = {
   readonly slug: string
   readonly version: number
+  readonly draftHash?: string
   readonly definition: FlowDefinition
 }
 
@@ -181,7 +182,13 @@ test('#220 an administrator creates a flow, lists it and reads the starter draft
   expect(typeof summary?.updatedAt, 'the list carries the newest event time').toBe('number')
 
   const draft = await adminJson<DraftFlow>(`/api/v1/flows/${SLUG}/draft`)
-  expect(draft).toEqual({ slug: SLUG, version: 1, definition: STARTER_DEFINITION })
+  // The read names the hash of the draft, so a write can name its base (DF-3, #264).
+  expect(draft).toEqual({
+    slug: SLUG,
+    version: 1,
+    draftHash: contentHash(STARTER_DEFINITION),
+    definition: STARTER_DEFINITION,
+  })
 })
 
 test('#220 a structural draft write records version 1 and returns the definition', async () => {
@@ -197,6 +204,7 @@ test('#220 a structural draft write records version 1 and returns the definition
   expect(written).toEqual({
     slug: SLUG,
     version: 1,
+    draftHash: contentHash(definition),
     definition,
     changes: [
       { class: 'structural', message: 'a step was removed: start', path: '/steps/start' },

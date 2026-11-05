@@ -152,7 +152,7 @@ async function write(pool: Pool, body: Record<string, unknown>): Promise<Respons
   })
 }
 
-test.fails('#264 S03 DF-3 a write based on an older draft merges with the draft, and only its own change is recorded', async () => {
+test('#264 S03 DF-3 a write based on an older draft merges with the draft, and only its own change is recorded', async () => {
   appended.length = 0
   const pool = sessionPool([editGrant])
   // The read names the hash of the draft a write is based on.
@@ -193,7 +193,7 @@ test.fails('#264 S03 DF-3 a write based on an older draft merges with the draft,
   ])
 })
 
-test.fails('#264 S03 a place both changed differently is a conflict: 409 with the paths, and nothing is appended', async () => {
+test('#264 S03 a place both changed differently is a conflict: 409 with the paths, and nothing is appended', async () => {
   appended.length = 0
   const pool = sessionPool([editGrant])
   const danaRenamedToo = sessionPoolWithDraft(pool, withLabel(danaAddsField, 'Request summary'))
