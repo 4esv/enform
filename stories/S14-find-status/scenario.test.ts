@@ -1,261 +1,166 @@
 import { expect, test } from 'vitest'
-import { type ActionResult, claim, complete } from '../../engine/action.js'
-import { apply, emptyState, type State } from '../../engine/apply.js'
-import type { Instance } from '../../engine/instance.js'
-import type { OperationDeps } from '../../engine/operation.js'
-import { resolveAssignees } from '../../engine/routing.js'
-import { type SendBackResult, STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
-import { type StatusContext, status, visibleTo } from '../../engine/status.js'
-import { startInstance, submitInstance } from '../../engine/submission.js'
-import { isStepSkipped } from '../../engine/workflow.js'
+import { instanceOf, readInstance } from '../../engine/instances.js'
+import { type GuardedValue, type StatusContext, status, visibleTo } from '../../engine/status.js'
+import { trackerOf } from '../../engine/tracker.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
   ADVISOR_STEP,
   ANA,
-  anaGrants,
   CHAIR_STEP,
-  chairSkipWhen,
-  data,
-  definition,
-  flow,
+  definitionV1,
+  FLOW,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
   LEE,
-  leeGrants,
   OKAFOR,
-  okaforGrants,
   PRIYA,
-  priyaGrants,
-  REGISTRAR_MEMBERS,
   REGISTRAR_STEP,
-  REGISTRAR_TEAM,
   REQUEST_STEP,
-  registrarNote,
-  resolve,
+  SAM,
   SLUG,
-  STARTER,
-  samGrants,
-  starterGrants,
-} from './scenario.js'
+  stateAfter,
+} from '../example-flow.js'
+import { golden, SEND_BACK_COMMENT, STEP } from './scenario.js'
 
-/** The comment that Ana records when she sends the registrar task back (WF-3, S11). */
-const SEND_BACK_COMMENT = 'The advisor signature is missing'
+// Issue #51: Sam reads the status of his own request. The status line is
+// step N of M, the current step and its holder, and the state tells
+// "waiting to be opened" from "opened, in progress" (VT-1, VT-2). The
+// tracker shows every step as not reached, unopened, opened, completed,
+// skipped with its reason or sent back with its note (VT-2, S14). Sam reads
+// the status but not the notes of the people who act on another step, and
+// not the values that a scope guards (VT-3, VT-4, I8). The path is
+// deterministic (I6).
 
-/** The time of every event (I6): the clock is injected and the path reads no random source. */
-const NOW = 1_700_000_000_000
+/** The skip condition of the chair step (S05, FM-5): the VT-2 reason the tracker shows. */
+const chairSkipWhen = definitionV1.steps.find((step) => step.key === CHAIR_STEP)?.skipWhen
 
-/** The instance id that the start mints (DX-1, #187): deterministic, like every injected source (I6). */
-const INSTANCE_ID = 'inst-1'
-
-/** The injected sources of the path (I6): the clock is a fixed time and the IDs are `op-N`. */
-function deps(): OperationDeps {
-  let next = 0
-  return {
-    clock: () => NOW,
-    ids: () => {
-      next += 1
-      return `op-${next}`
-    },
-  }
+/** One value that a scope guards (VT-4): the registrar's internal note, read with instance.timeline. */
+const guarded: GuardedValue = {
+  key: 'registrar_note',
+  value: 'hold until the audit arrives',
+  scope: 'instance.timeline',
+  resource: FLOW,
 }
 
-/** Apply the operation that an accepted action returned (I14); the test checks acceptance first. */
-function applyAction(result: ActionResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the action was refused: ${result.reason}`)
-  return apply(result.operation, state)
+/** The status read of one person over the golden end state (S14, I8). */
+function contextFor(person: string, log: StatusContext['log']): StatusContext {
+  return { flow: SLUG, definition: definitionV1, log, grants: grantsOfPerson(person) }
 }
 
-/** Apply the operation that an accepted send back returned (S11, I14). */
-function applySendBack(result: SendBackResult, state: State): State {
-  if (result.operation === undefined) throw new Error(`the send back was refused: ${result.reason}`)
-  return apply(result.operation, state)
+/** The tracker states of a prefix of the golden path, by step key (VT-2). */
+function trackerAfter(count: number): Record<string, string> {
+  const steps = golden.steps.slice(0, count)
+  const tracker = trackerOf(instanceAfter(steps), definitionV1, stateAfter(steps).log)
+  return Object.fromEntries(tracker.map((entry) => [entry.key, entry.state]))
 }
 
-// Issue #51: Sam reads the status of his own course-overload request. The
-// status line is step N of M, the current step and its holder, and the state
-// tells "waiting to be opened" from "opened, in progress" (VT-1, VT-2). The
-// chair step that a condition skipped shows its reason (S05). Sam reads the
-// status but not the notes of the people who act on another step, and not the
-// values that a scope guards (VT-3, VT-4, I8). The path is deterministic (I6).
+test('#51 the S14 golden path runs in api, cli and dry mode, and the status tells waiting from in progress (S14)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
+  const log = state.log
 
-test('#51 the status line shows the step, the holder and the wait state, and I8 hides notes and fields (S14)', () => {
-  // One shared source, so every recorded operation gets a distinct ID (I1).
-  const sources = deps()
-
-  // (a) S06, ADR 0014: the start creates Sam's draft on the request form. Its
-  // status is step 1 of 4, a draft, and nothing is skipped yet: the submit
-  // decides the route (WF-1).
-  const started = startInstance(flow, INSTANCE_ID, data, STARTER, sources, resolve, starterGrants)
-  let state = apply(started.operation, emptyState)
-  expect(started.instance.currentStep).toBe(REQUEST_STEP)
-  const draft = status(started.instance, definition, state.log)
-  expect(draft.step).toBe(1)
-  expect(draft.totalSteps).toBe(4)
-  expect(draft.currentStep).toBe(REQUEST_STEP)
-  expect(draft.holder).toBeUndefined()
-  expect(draft.state).toBe('draft')
-  expect(draft.skipped).toEqual([])
-
-  // S05, WF-1: for two overload credits the chair step is skipped, so the
-  // submit routes past it to the advisor step, whose field target resolves to
-  // Dr. Okafor (S06, I10, I13). S05, I14, #192: the submit records the routing
-  // skip on its own operation, attributed to the starter, and the status reads
-  // it from the instance's events (I4).
-  expect(isStepSkipped(definition.steps[1], data)).toBe(true)
-  const submitted = submitInstance(
-    started.instance,
-    STARTER,
-    {},
-    0,
-    { flow: SLUG, definition, resolve, grants: starterGrants },
-    sources
-  )
-  expect(submitted.accepted).toBe(true)
-  if (submitted.operation === undefined) throw new Error(submitted.reason)
-  state = apply(submitted.operation, state)
-  expect(submitted.instance.currentStep).toBe(ADVISOR_STEP)
-
-  // (b) VT-1, VT-2, I6: the status line is step 3 of 4, on the advisor step,
-  // with no holder, and it says "waiting to be opened". The skipped chair step
-  // carries the condition that skipped it (S05). The same inputs give the same
-  // status (I6).
-  const waiting = status(submitted.instance, definition, state.log)
-  expect(waiting.step).toBe(3)
-  expect(waiting.totalSteps).toBe(4)
-  expect(waiting.currentStep).toBe(ADVISOR_STEP)
+  // (a) VT-1, VT-2: after the submit the request is at step 2 of 4, the
+  // advisor, with no holder: "waiting to be opened". The tracker shows the
+  // request completed, the advisor unopened and the rest not reached.
+  const submitted = golden.steps.slice(0, STEP.submit + 1)
+  const waiting = status(instanceAfter(submitted), definitionV1, stateAfter(submitted).log)
+  expect(waiting).toMatchObject({
+    step: 2,
+    totalSteps: 4,
+    currentStep: ADVISOR_STEP,
+    state: 'waiting',
+  })
   expect(waiting.holder).toBeUndefined()
-  expect(waiting.state).toBe('waiting')
-  expect(waiting.skipped).toEqual([{ step: CHAIR_STEP, condition: chairSkipWhen }])
-  expect(status(submitted.instance, definition, state.log)).toEqual(waiting)
+  expect(trackerAfter(STEP.submit + 1)).toEqual({
+    [REQUEST_STEP]: 'completed',
+    [ADVISOR_STEP]: 'unopened',
+    [CHAIR_STEP]: 'not-reached',
+    [REGISTRAR_STEP]: 'not-reached',
+  })
 
-  const advisorAssignees = resolveAssignees(definition.steps[2], resolve)
-  expect(advisorAssignees).toEqual([
-    { step: ADVISOR_STEP, target: { field: 'advisor' }, members: [OKAFOR] },
+  // (b) S05, VT-2: Dr. Okafor's approval skipped the chair step for two
+  // credits, and the status names the condition that skipped it.
+  const routed = golden.steps.slice(0, STEP.okaforApprove + 1)
+  const atRegistrar = status(instanceAfter(routed), definitionV1, stateAfter(routed).log)
+  expect(atRegistrar).toMatchObject({ step: 4, currentStep: REGISTRAR_STEP, state: 'waiting' })
+  expect(atRegistrar.skipped).toEqual([{ step: CHAIR_STEP, condition: chairSkipWhen }])
+  expect(trackerAfter(STEP.okaforApprove + 1)).toEqual({
+    [REQUEST_STEP]: 'completed',
+    [ADVISOR_STEP]: 'completed',
+    [CHAIR_STEP]: 'skipped',
+    [REGISTRAR_STEP]: 'unopened',
+  })
+
+  // (c) VT-2: Ana's claim makes it "opened, in progress" with her as the
+  // holder; her release makes it "waiting to be opened" again.
+  const claimed = golden.steps.slice(0, STEP.anaClaim + 1)
+  const inProgress = status(instanceAfter(claimed), definitionV1, stateAfter(claimed).log)
+  expect(inProgress).toMatchObject({
+    currentStep: REGISTRAR_STEP,
+    holder: ANA,
+    state: 'in-progress',
+  })
+  expect(trackerAfter(STEP.anaClaim + 1)[REGISTRAR_STEP]).toBe('opened')
+  const released = golden.steps.slice(0, STEP.anaRelease + 1)
+  const pooled = status(instanceAfter(released), definitionV1, stateAfter(released).log)
+  expect(pooled).toMatchObject({ currentStep: REGISTRAR_STEP, state: 'waiting' })
+  expect(pooled.holder).toBeUndefined()
+  expect(trackerAfter(STEP.anaRelease + 1)[REGISTRAR_STEP]).toBe('unopened')
+
+  // (d) VT-2, WF-3: Jordan's send back returns the request to the advisor;
+  // the tracker shows the advisor sent back with the note and keeps the
+  // skipped chair with its reason.
+  const end = instanceOf(log, INSTANCE_ID)
+  if (end === undefined) throw new Error('the golden end state holds no instance')
+  expect(status(end, definitionV1, log)).toMatchObject({
+    step: 2,
+    currentStep: ADVISOR_STEP,
+    state: 'waiting',
+  })
+  const tracker = trackerOf(end, definitionV1, log)
+  expect(tracker.map((entry) => [entry.key, entry.state])).toEqual([
+    [REQUEST_STEP, 'completed'],
+    [ADVISOR_STEP, 'sent-back'],
+    [CHAIR_STEP, 'skipped'],
+    [REGISTRAR_STEP, 'opened'],
   ])
-  const atAdvisor: Instance = {
-    ...submitted.instance,
-    assignees: [...submitted.instance.assignees, ...advisorAssignees],
-    version: state.log.length,
-  }
-  const claimedAdvisor = claim(atAdvisor, OKAFOR, atAdvisor.version ?? 0, sources)
-  expect(claimedAdvisor.accepted).toBe(true)
-  state = applyAction(claimedAdvisor, state)
-  const approved = complete(
-    claimedAdvisor.instance,
-    OKAFOR,
-    'approve',
-    {},
-    claimedAdvisor.instance.version ?? 0,
-    { flow: SLUG, definition, grants: okaforGrants },
-    sources
-  )
-  expect(approved.accepted).toBe(true)
-  state = applyAction(approved, state)
-  expect(approved.instance.currentStep).toBe(REGISTRAR_STEP)
+  expect(tracker.find((entry) => entry.key === ADVISOR_STEP)?.comment).toBe(SEND_BACK_COMMENT)
+  expect(tracker.find((entry) => entry.key === CHAIR_STEP)?.condition).toEqual(chairSkipWhen)
 
-  // (c) VT-2, S14: the registrar task waits, then Ana claims it, and the
-  // status tells "waiting to be opened" from "opened, in progress".
-  const registrarAssignees = resolveAssignees(definition.steps[3], resolve)
-  expect(registrarAssignees).toEqual([
-    { step: REGISTRAR_STEP, target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
+  // (e) VT-3, VT-4, I8: Sam reads the status and the tracker of his own
+  // instance (AC-5), and not Jordan's note on the advisor step nor the
+  // guarded value; Dr. Okafor, who acts on the advisor step, reads the note;
+  // Priya, who holds instance.timeline, reads the guarded value; Lee reads
+  // the instance as an assignee and not the note; a stranger reads nothing.
+  const samRead = readInstance(SAM, end, contextFor(SAM, log))
+  expect(samRead?.status.state).toBe('waiting')
+  expect(samRead?.tracker.map((entry) => entry.state)).toEqual([
+    'completed',
+    'sent-back',
+    'skipped',
+    'opened',
   ])
-  const atRegistrar: Instance = {
-    ...approved.instance,
-    assignees: [...approved.instance.assignees, ...registrarAssignees],
-    version: state.log.length,
-  }
-  const unopened = status(atRegistrar, definition, state.log)
-  expect(unopened.step).toBe(4)
-  expect(unopened.currentStep).toBe(REGISTRAR_STEP)
-  expect(unopened.holder).toBeUndefined()
-  expect(unopened.state).toBe('waiting')
-
-  const claimedRegistrar = claim(atRegistrar, ANA, atRegistrar.version ?? 0, sources)
-  expect(claimedRegistrar.accepted).toBe(true)
-  state = applyAction(claimedRegistrar, state)
-  const held = claimedRegistrar.instance
-  const inProgress = status(held, definition, state.log)
-  expect(inProgress.step).toBe(4)
-  expect(inProgress.totalSteps).toBe(4)
-  expect(inProgress.currentStep).toBe(REGISTRAR_STEP)
-  expect(inProgress.holder).toBe(ANA)
-  expect(inProgress.state).toBe('in-progress')
-  expect(inProgress.skipped).toEqual([{ step: CHAIR_STEP, condition: chairSkipWhen }])
-
-  // (d) VT-3, I8: Ana sends the registrar task back to the advisor with a note
-  // (WF-3, S11). The note sits on the advisor step. Sam, who acts on the
-  // request step only, reads the status but not the note; Dr. Okafor, who acts
-  // on the advisor step, reads it.
-  const base: StatusContext = { flow: SLUG, definition, log: state.log, grants: anaGrants }
-  const sent = sendBack(
-    held,
-    ANA,
-    ADVISOR_STEP,
-    SEND_BACK_COMMENT,
-    held.version ?? 0,
-    { flow: SLUG, definition, grants: anaGrants },
-    sources
-  )
-  expect(sent.accepted).toBe(true)
-  const sentState = applySendBack(sent, state)
-  expect(sentState.log.filter((event) => event.type === STEP_SENT_BACK)).toHaveLength(1)
-
-  const sentContext: StatusContext = { ...base, log: sentState.log }
-
-  const samView = visibleTo(
-    STARTER,
-    sent.instance,
-    { ...base, log: sentState.log, grants: samGrants },
-    [registrarNote]
-  )
-  expect(samView.readable).toBe(true) // AC-5: a starter always reads their own instance
-  expect(samView.status?.step).toBe(3)
-  expect(samView.status?.currentStep).toBe(ADVISOR_STEP)
-  expect(samView.status?.state).toBe('waiting')
-  expect(samView.notes).toEqual([]) // I8: not the note of another person
-  expect(samView.values).toEqual([]) // VT-4: the guarded value is hidden
-
-  const okaforView = visibleTo(OKAFOR, sent.instance, { ...sentContext, grants: okaforGrants }, [
-    registrarNote,
+  const samView = visibleTo(SAM, end, contextFor(SAM, log), [guarded])
+  expect(samView.readable).toBe(true)
+  expect(samView.notes).toEqual([])
+  expect(samView.values).toEqual([])
+  const okaforView = visibleTo(OKAFOR, end, contextFor(OKAFOR, log), [guarded])
+  expect(okaforView.notes).toEqual([
+    { step: ADVISOR_STEP, actor: JORDAN, comment: SEND_BACK_COMMENT },
   ])
-  expect(okaforView.readable).toBe(true)
-  expect(okaforView.notes).toEqual([{ step: ADVISOR_STEP, actor: ANA, comment: SEND_BACK_COMMENT }])
-
-  // Lee acts on the registrar step, not on the advisor step, and did not write
-  // the note, so he reads the instance and not the note (I8, AC-4).
-  const leeView = visibleTo(LEE, sent.instance, { ...sentContext, grants: leeGrants }, [
-    registrarNote,
-  ])
+  expect(okaforView.values).toEqual([])
+  const priyaView = visibleTo(PRIYA, end, contextFor(PRIYA, log), [guarded])
+  expect(priyaView.readable).toBe(true)
+  expect(priyaView.values).toEqual([guarded])
+  const leeView = visibleTo(LEE, end, contextFor(LEE, log), [guarded])
   expect(leeView.readable).toBe(true)
   expect(leeView.notes).toEqual([])
+  const stranger = visibleTo('user:stranger', end, contextFor('user:stranger', log), [guarded])
+  expect(stranger).toEqual({ readable: false, notes: [], values: [] })
+  expect(readInstance('user:stranger', end, contextFor('user:stranger', log))).toBeUndefined()
 
-  // An actor that may not read the instance reads no status, no note and no
-  // value (I8).
-  const strangerView = visibleTo('user:stranger', sent.instance, { ...sentContext, grants: [] }, [
-    registrarNote,
-  ])
-  expect(strangerView.readable).toBe(false)
-  expect(strangerView.status).toBeUndefined()
-  expect(strangerView.notes).toEqual([])
-  expect(strangerView.values).toEqual([])
-
-  // (e) VT-4, I8: a principal that holds the guarded scope reads the value, and
-  // the starter does not. The read is authorized exactly as a write (AC-1).
-  const priyaView = visibleTo(PRIYA, sent.instance, { ...sentContext, grants: priyaGrants }, [
-    registrarNote,
-  ])
-  expect(priyaView.values).toEqual([registrarNote])
-
-  // (f) VT-2: an instance that completed its last step reads done, and a
-  // withdrawn or cancelled instance reads its close (WF-4, WF-5).
-  const closed: Instance = { ...held, currentStep: undefined, holder: undefined }
-  expect(status({ ...closed, done: true }, definition, state.log).state).toBe('done')
-  expect(status({ ...closed, withdrawal: 'withdrawn' }, definition, state.log).state).toBe(
-    'withdrawn'
-  )
-  expect(status({ ...closed, withdrawal: 'cancelled' }, definition, state.log).state).toBe(
-    'cancelled'
-  )
-
-  // (g) I6: the same inputs give the same view.
-  const viewOnce = (): unknown =>
-    visibleTo(STARTER, sent.instance, { ...sentContext, grants: samGrants }, [registrarNote])
-  expect(viewOnce()).toEqual(viewOnce())
-})
+  // (f) I6: the same inputs give the same view.
+  expect(visibleTo(SAM, end, contextFor(SAM, log), [guarded])).toEqual(samView)
+}, 60_000)

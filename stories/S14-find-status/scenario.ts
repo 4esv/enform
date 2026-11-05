@@ -1,169 +1,199 @@
-import type { Grant } from '../../engine/authorize.js'
-import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, type JsonValue, parse } from '../../engine/definition.js'
-import type { Flow, FlowVersion } from '../../engine/flow.js'
-import { contentHash } from '../../engine/instance.js'
-import type { TargetResolver } from '../../engine/routing.js'
+import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { DEFINITION_CHANGED } from '../../engine/definition.js'
+import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
+import { release } from '../../engine/reassign.js'
+import { STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
+import {
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import { TASK_RELEASED } from '../../engine/undo.js'
+import type { Requirements } from '../../tools/harness/operators.js'
+import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  ADVISOR_STEP,
+  ANA,
+  bootstrap,
+  declared,
+  definitionV1,
+  depsFor,
+  directory,
+  FLOW,
+  flow,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  JORDAN,
+  LEE,
+  membership,
+  OKAFOR,
+  PRIYA,
+  REGISTRAR_STEP,
+  SAM,
+  SLUG,
+  samValues,
+  setupSteps,
+  stepResource,
+} from '../example-flow.js'
 
-// S14: find the status of a submission (STORIES.md). Sam's course-overload
-// request is at the registrar step. He reads the status of his own instance:
-// the step line, the holder and the wait state, and the chair step that a
-// condition skipped at routing (S05). Sam reads the status but not the notes
-// of the people who act on the advisor step, and not the values that a scope
-// guards (VT-3, VT-4, I8). The path is deterministic (I6): it reads no clock
-// and no random source, and the directory is injected.
+// S14: find the status of a submission (STORIES.md). Sam's request is
+// routed to the registrar step after Dr. Okafor's approval, with the chair
+// step skipped for a two-credit overload (S05). Ana claims the registrar
+// task, so the status says "opened, in progress"; she releases it, so it
+// says "waiting to be opened" again (VT-1, VT-2). Jordan, the reviewer,
+// claims it and sends the request back to the advisor with a note (WF-3,
+// S11). Sam reads the status and the tracker of his own instance, and not the
+// note of the people who act on the advisor step, nor a value that a scope
+// guards (VT-3, VT-4, I8). Every step after the setup is a client intent that
+// the server resolves (ADR 0010). The path is deterministic (I6).
 
-/** The flow slug of the story (STORIES.md, the example flow). */
-export const SLUG = 'course-overload'
+/** Sam's request: a two-credit overload, so the chair step is skipped (S05, WF-1). */
+export const values = samValues(2)
 
-/** Sam, the student who starts the request (S06, AC-5). */
-export const STARTER = 'user:sam'
+/** The note that Jordan records when he sends the registrar task back (WF-3, S11). */
+export const SEND_BACK_COMMENT = 'The advisor signature is missing'
 
-/** Dr. Okafor, the advisor of Sam: he acts on the advisor step (S11). */
-export const OKAFOR = 'user:okafor'
+/** The golden path: the setup, the request to the registrar, a claim, a release, a claim and a send back. */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps()]
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
 
-/** Lee and Ana, registrar staff, peers in the registrar team (S10). */
-export const LEE = 'user:lee'
-export const ANA = 'user:ana'
+  // Sam starts and submits (S06, ADR 0014): the request reaches Dr. Okafor.
+  const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(6), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: sam, owner: SAM },
+    depsFor(7)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: {} }))
 
-/** Dr. Lin, the chair: a member of CS-Chairs, the group of the chair step (S05). */
-export const LIN = 'user:lin'
+  // Dr. Okafor claims and approves: the chair step is skipped and the
+  // registrar team gets the task (S05, WF-1, AS-4).
+  const okaforClaim = claim(instanceAfter(steps), OKAFOR, 1, depsFor(8))
+  if (okaforClaim.operation === undefined) throw new Error(okaforClaim.reason)
+  steps.push(declared(okaforClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 1 }))
+  const okaforApprove = complete(
+    instanceAfter(steps),
+    OKAFOR,
+    'approve',
+    {},
+    2,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    depsFor(9)
+  )
+  if (okaforApprove.operation === undefined) throw new Error(okaforApprove.reason)
+  steps.push(
+    declared(okaforApprove.operation, {
+      instanceId: INSTANCE_ID,
+      version: 2,
+      outcome: 'approve',
+      values: {},
+    })
+  )
 
-/** Priya, the department coordinator: she reads every instance and timeline (S02). */
-export const PRIYA = 'user:priya'
+  // Ana claims the registrar task, then releases it to the pool (AS-2, WF-5).
+  const anaClaim = claim(instanceAfter(steps), ANA, 3, depsFor(10))
+  if (anaClaim.operation === undefined) throw new Error(anaClaim.reason)
+  steps.push(declared(anaClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 3 }))
+  const released = release(
+    instanceAfter(steps),
+    ANA,
+    undefined,
+    4,
+    { flow: SLUG, grants: grantsOfPerson(ANA) },
+    depsFor(11)
+  )
+  if (released.operation === undefined) throw new Error(released.reason)
+  steps.push(declared(released.operation, { instanceId: INSTANCE_ID, version: 4 }))
 
-/** The team that holds the registrar task (AS-1, AS-4). */
-export const REGISTRAR_TEAM = 'registrar-office'
+  // Jordan, the reviewer, claims the task and sends the request back to the
+  // advisor with a note (WF-3, S11, AC-4).
+  const jordanClaim = claim(instanceAfter(steps), JORDAN, 5, depsFor(12))
+  if (jordanClaim.operation === undefined) throw new Error(jordanClaim.reason)
+  steps.push(declared(jordanClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 5 }))
+  const sent = sendBack(
+    instanceAfter(steps),
+    JORDAN,
+    ADVISOR_STEP,
+    SEND_BACK_COMMENT,
+    6,
+    { flow: SLUG, definition: definitionV1, grants: grantsOfPerson(JORDAN), resolve },
+    depsFor(13)
+  )
+  if (sent.operation === undefined) throw new Error(sent.reason)
+  steps.push(
+    declared(sent.operation, {
+      instanceId: INSTANCE_ID,
+      to: ADVISOR_STEP,
+      comment: SEND_BACK_COMMENT,
+      version: 6,
+    })
+  )
+  return steps
+}
 
-/** The four steps of the story: the request form, the conditional chair, then advisor and registrar (WF-1, ADR 0014). */
-export const CHAIR_STEP = 'chair'
-export const REQUEST_STEP = 'request'
-export const ADVISOR_STEP = 'advisor'
-export const REGISTRAR_STEP = 'registrar'
+export const golden = scenario({
+  slug: 'find-status',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
+})
 
-/** The resource of the registrar step (MVP.md 5.6): a step-scoped restricted value reads it. */
-export const REGISTRAR_RESOURCE = `flow:${SLUG}/step:${REGISTRAR_STEP}`
-
-/** The members of the registrar team when the request reaches it (AS-1, I13). */
-export const REGISTRAR_MEMBERS: readonly string[] = [LEE, ANA]
-
-/** The skip condition of the chair step (S05, FM-5): a small overload skips the chair. */
-export const chairSkipWhen: JsonValue = { '<=': [{ var: 'overload_credits' }, 2] }
+/** The indexes of the story's steps after the setup, for the requirements and the tests. */
+export const STEP = {
+  start: 6,
+  submit: 7,
+  okaforClaim: 8,
+  okaforApprove: 9,
+  anaClaim: 10,
+  anaRelease: 11,
+  jordanClaim: 12,
+  jordanSendBack: 13,
+} as const
 
 /**
- * The definition of version 1 (WF-1). The chair step is conditional, so a
- * small overload skips it at routing (S05, WF-1); the request, the advisor and
- * the registrar follow.
+ * What each step requires of its actor (I8), for the Actor operator: an
+ * assignee claims, the holder or a flow owner with task.reassign releases,
+ * and the holder with step.outcome:send_back sends back (AS-2, AC-4, WF-5).
  */
-export const definition: FlowDefinition = parse(`{
-  "schemaVersion": 1,
-  "steps": [
-    {
-      "key": "${REQUEST_STEP}",
-      "targets": [{ "starter": "starter" }],
-      "outcomes": ["submit"]
-    },
-    {
-      "key": "${CHAIR_STEP}",
-      "targets": [{ "group": "CS-Chairs" }],
-      "outcomes": ["approve", "send_back"],
-      "skipWhen": { "<=": [{ "var": "overload_credits" }, 2] }
-    },
-    {
-      "key": "${ADVISOR_STEP}",
-      "targets": [{ "field": "advisor" }],
-      "outcomes": ["approve", "send_back"]
-    },
-    {
-      "key": "${REGISTRAR_STEP}",
-      "targets": [{ "team": "${REGISTRAR_TEAM}" }],
-      "outcomes": ["approve", "reject", "send_back"]
-    }
-  ]
-}
-`)
-
-/** The published version 1: a start needs a version with a content hash (DF-2). */
-export const versionV1: FlowVersion = {
-  version: 1,
-  contentHash: contentHash(definition),
-  definition,
-}
-
-/** The flow of the story: version 1 published, ready for a start (DF-2). */
-export const flow: Flow = { slug: SLUG, versions: [versionV1] }
-
-/** The data of the story: two overload credits, so the chair step is skipped (S05). */
-export const data: ConditionData = { overload_credits: 2 }
-
-/** The directory of the story (AS-1, I13): a group, a field, a team and the starter resolve. */
-export const resolve: TargetResolver = (target) => {
-  if ('starter' in target) return [STARTER]
-  if ('field' in target) return [OKAFOR]
-  if ('group' in target) return [LIN]
-  if ('team' in target) return REGISTRAR_MEMBERS
-  return []
-}
-
-/** The grants that apply to Sam: the All-Students group may start the flow (S02, ID-4, AC-1). */
-export const starterGrants: readonly Grant[] = [
-  { principal: 'group:All-Students', scopes: ['instance.start'], resource: `flow:${SLUG}` },
-]
-
-/** The grants that apply to Sam on the request step: he submits his own request (S14, WF-1). */
-export const samGrants: readonly Grant[] = [
-  {
-    principal: STARTER,
-    scopes: ['step.outcome:submit'],
-    resource: `flow:${SLUG}/step:${REQUEST_STEP}`,
-  },
-]
-
-/** The grants that apply to Dr. Okafor on the advisor step (S11, AC-4). */
-export const okaforGrants: readonly Grant[] = [
-  {
-    principal: OKAFOR,
-    scopes: ['step.outcome:approve', 'step.outcome:send_back'],
-    resource: `flow:${SLUG}/step:${ADVISOR_STEP}`,
-  },
-]
-
-/** The grants that apply to Ana on the registrar step: she approves, rejects or sends back (S09). */
-export const anaGrants: readonly Grant[] = [
-  {
-    principal: ANA,
-    scopes: ['step.outcome:approve', 'step.outcome:reject', 'step.outcome:send_back'],
-    resource: REGISTRAR_RESOURCE,
-  },
-]
-
-/** The grants that apply to Lee on the registrar step: he approves or rejects (S09). */
-export const leeGrants: readonly Grant[] = [
-  {
-    principal: LEE,
-    scopes: ['step.outcome:approve', 'step.outcome:reject'],
-    resource: REGISTRAR_RESOURCE,
-  },
-]
-
-/** The grants that apply to Priya: she reads every instance and every timeline (S02, AC-1). */
-export const priyaGrants: readonly Grant[] = [
-  { principal: PRIYA, scopes: ['instance.read', 'instance.timeline'], resource: `flow:${SLUG}` },
-]
-
-/**
- * One restricted value on the registrar step (VT-4, FM-3, I8): the registrar
- * note that a scope guards. Only a principal that holds `instance.timeline`
- * reads it, so the starter does not. Form fields arrive with FM-1.
- */
-export const registrarNote: {
-  readonly key: string
-  readonly value: JsonValue
-  readonly scope: string
-  readonly resource: string
-} = {
-  key: 'registrar_note',
-  value: 'Duplicate of request #4411',
-  scope: 'instance.timeline',
-  resource: REGISTRAR_RESOURCE,
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [SAM] }
+    case STEP_CLAIMED:
+      return { actors: index === STEP.okaforClaim ? [OKAFOR] : [LEE, ANA, JORDAN] }
+    case STEP_COMPLETED:
+      return {
+        scope: 'step.outcome:approve',
+        resource: stepResource(ADVISOR_STEP),
+        actors: [OKAFOR],
+      }
+    case TASK_RELEASED:
+      return { actors: [ANA, PRIYA] }
+    case STEP_SENT_BACK:
+      return {
+        scope: 'step.outcome:send_back',
+        resource: stepResource(REGISTRAR_STEP),
+        actors: [JORDAN],
+      }
+    default:
+      throw new Error(`S14: step ${index + 1} has no requirement (${step.type})`)
+  }
 }
