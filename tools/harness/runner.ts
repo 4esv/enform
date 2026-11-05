@@ -113,13 +113,34 @@ function dryRun(scenario: Scenario): RunOutcome {
 async function cliRun(scenario: Scenario): Promise<RunOutcome> {
   let state = emptyState
   for (let i = 0; i < scenario.steps.length; i++) {
-    state = await cliApply(stepOperation(scenario.steps[i], i), state)
+    const step = scenario.steps[i]
+    const operation = stepOperation(step, i)
+    const posted = step.intent === undefined ? operation : { ...operation, payload: step.intent }
+    state = await cliApply(posted, state, scenario)
+    if (step.intent !== undefined) {
+      const event = state.log.find((entry) => entry.operationId === operation.id)
+      const actual =
+        event === undefined
+          ? undefined
+          : {
+              id: event.operationId,
+              type: event.type,
+              at: event.at,
+              actor: event.actor,
+              payload: event.payload,
+            }
+      if (!isDeepStrictEqual(actual, operation)) {
+        throw new Error(
+          `cli mode: step ${i + 1} resolved to an event that differs from the declared step`
+        )
+      }
+    }
   }
   return { state, intents: outboxOf(state.log) }
 }
 
 /** Apply one operation through the CLI process, and read the state it returns. */
-async function cliApply(operation: Operation, state: State): Promise<State> {
+async function cliApply(operation: Operation, state: State, scenario: Scenario): Promise<State> {
   const stdout = await runCli([
     '--import',
     TS_RESOLVE,
@@ -128,6 +149,10 @@ async function cliApply(operation: Operation, state: State): Promise<State> {
     JSON.stringify(operation),
     '--state',
     JSON.stringify(toView(state)),
+    '--bootstrap',
+    JSON.stringify(scenario.bootstrap ?? []),
+    '--membership',
+    JSON.stringify(scenario.membership ?? {}),
   ])
   let parsed: unknown
   try {
@@ -171,8 +196,10 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
     throw new Error('gui mode: the scenario declares no flowSlug')
   }
   const api = startApi(options.seed ?? emptyState, {
-    resolve: options.resolve,
+    resolve: options.resolve ?? scenario.resolve,
     grants: options.grants,
+    bootstrap: scenario.bootstrap,
+    membership: scenario.membership,
   })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -413,36 +440,87 @@ function replayPrefix(serverState: State, seedLength: number): State {
   return state
 }
 
+/**
+ * Post one step to the harness server, `times` times with the same id (I1),
+ * and check that a step with an intent resolved to the declared event (ADR
+ * 0010, #256). The caller owns the server; the Offline operator and api mode
+ * share this one path.
+ */
+export async function postStep(
+  api: Api,
+  step: Step,
+  index: number,
+  clock: StepClock,
+  times: number
+): Promise<void> {
+  const operation = stepOperation(step, index, clock)
+  const posted = step.intent === undefined ? operation : { ...operation, payload: step.intent }
+  for (let d = 0; d < times; d += 1) {
+    const response = await fetch(`http://127.0.0.1:${api.port()}/api/v1/operations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(posted),
+    })
+    if (response.status !== 201) {
+      throw new Error(
+        `step ${index + 1} delivery ${d + 1} failed: HTTP ${response.status} ${await response.text()}`
+      )
+    }
+  }
+  if (step.intent !== undefined) {
+    const event = api.state().log.find((entry) => entry.operationId === operation.id)
+    const actual =
+      event === undefined
+        ? undefined
+        : {
+            id: event.operationId,
+            type: event.type,
+            at: event.at,
+            actor: event.actor,
+            payload: event.payload,
+          }
+    if (!isDeepStrictEqual(actual, operation)) {
+      throw new Error(
+        `step ${index + 1}: the resolved event differs from the declared step\n${JSON.stringify(actual)}\n${JSON.stringify(operation)}`
+      )
+    }
+  }
+}
+
+/** Start the harness server for a scenario, run `body` against it, and close it. */
+export async function withScenarioApi<T>(
+  scenario: Scenario,
+  body: (api: Api) => Promise<T>
+): Promise<T> {
+  const api = startApi(emptyState, {
+    bootstrap: scenario.bootstrap,
+    membership: scenario.membership,
+    resolve: scenario.resolve,
+  })
+  const server = api.server
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    return await body(api)
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve()))
+    )
+  }
+}
+
 /** Run a scenario against the in-process server, delivering each step `deliveries(i)` times. */
 async function apiRun(
   scenario: Scenario,
   deliveries: Deliveries,
   clock: StepClock
 ): Promise<RunOutcome> {
-  const api = startApi(emptyState, { bootstrap: scenario.bootstrap })
-  const server = api.server
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  try {
+  return withScenarioApi(scenario, async (api) => {
     for (let i = 0; i < scenario.steps.length; i++) {
-      const operation = stepOperation(scenario.steps[i], i, clock)
-      for (let d = 0; d < deliveries(i); d += 1) {
-        const response = await fetch(`http://127.0.0.1:${api.port()}/api/v1/operations`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(operation),
-        })
-        if (response.status !== 201) {
-          throw new Error(`step ${i + 1} delivery ${d + 1} failed: HTTP ${response.status}`)
-        }
-      }
+      await postStep(api, scenario.steps[i], i, clock, deliveries(i))
     }
     const state = api.state()
     return { state, intents: outboxOf(state.log) }
-  } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve()))
-    )
-  }
+  })
 }
 
 export async function runGolden(scenario: Scenario): Promise<void> {

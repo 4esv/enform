@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { apply, emptyState, type State } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
 import type { Operation } from '../../engine/operation.js'
+import { grantsFor, isClientIntent, resolveClientOperation } from '../../server/intents.js'
 import { fromView, type StateView, toView } from './scenario.js'
 
 // Issue #25, STORIES.md Golden path: the harness CLI. One operation goes in
@@ -69,12 +71,61 @@ function parseState(text: string): State {
   return fromView(view as StateView)
 }
 
-/** Apply one operation, from `--json` or stdin, to the prior state, if any. */
+/**
+ * Apply one operation, from `--json` or stdin, to the prior state, if any. A
+ * client intent resolves through the same resolver as the release server
+ * (ADR 0010, #256), with the intent's own time as the clock, the grants the
+ * log and `--bootstrap` hold for its actor, and the groups `--membership`
+ * gives it; an operation that is no intent is appended as it is.
+ */
 function run(argv: readonly string[]): State {
   const json = argument(argv, '--json')
   const operation = parseOperation(json ?? readFileSync(0, 'utf8'))
   const state = argument(argv, '--state')
-  return apply(operation, state === undefined ? emptyState : parseState(state))
+  const prior = state === undefined ? emptyState : parseState(state)
+  const body = operation as unknown as Record<string, unknown>
+  if (!isClientIntent(body)) return apply(operation, prior)
+  const bootstrap = JSON.parse(argument(argv, '--bootstrap') ?? '[]') as readonly Grant[]
+  const membership = JSON.parse(argument(argv, '--membership') ?? '{}') as Readonly<
+    Record<string, readonly string[]>
+  >
+  const actor = operation.actor ?? ''
+  const groups = membership[actor] ?? []
+  const held = new Set([actor, ...groups, ...groups.map((group) => `group:${group}`)])
+  const resolved = resolveClientOperation(
+    {
+      log: prior.log,
+      principal: { id: actor, groups },
+      grants: [
+        ...bootstrap.filter((grant) => held.has(grant.principal)),
+        ...grantsFor(prior.log, { id: actor, groups }),
+      ],
+      resolver: () => harnessResolver(membership),
+      now: () => operation.at,
+    },
+    body
+  )
+  if ('error' in resolved) fail(`the intent was refused: HTTP ${resolved.status} ${resolved.error}`)
+  return apply(resolved.operation, prior)
+}
+
+/**
+ * The directory of the harness CLI (AS-1, AS-4): a user target names itself,
+ * a group or a team resolves to the principals whose membership names it, and
+ * a dynamic target resolves to nobody. The scenario's own resolver lives in
+ * the test process; this one is the same directory read from `--membership`.
+ */
+function harnessResolver(
+  membership: Readonly<Record<string, readonly string[]>>
+): (target: Record<string, string>) => readonly string[] {
+  return (target) => {
+    if ('user' in target) return [target.user]
+    const named = 'group' in target ? target.group : 'team' in target ? target.team : undefined
+    if (named === undefined) return []
+    return Object.entries(membership)
+      .filter(([, groups]) => groups.includes(named))
+      .map(([principal]) => principal)
+  }
 }
 
 try {

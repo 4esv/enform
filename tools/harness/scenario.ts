@@ -7,6 +7,7 @@ import {
   type Operation,
 } from '../../engine/operation.js'
 import { createOutboxOperation, type OutboxEntry } from '../../engine/outbox.js'
+import type { TargetResolver } from '../../engine/routing.js'
 
 // Issue #24, STORIES.md Test method: one executable scenario per story. Its
 // steps are "a person acts, then a condition must be true". The runner
@@ -19,10 +20,18 @@ export type Step = {
   readonly actor: ActorId
   /** The versioned event type of the operation the step appends. */
   readonly type: string
-  /** The payload of the operation the step appends. */
+  /** The payload of the operation the step appends: the resolved event (ADR 0010). */
   readonly payload: Readonly<Record<string, unknown>>
   /** The side effects that the step causes (I2); absent when it causes none. */
   readonly outbox?: readonly OutboxEntry[]
+  /**
+   * The intent a client posts for this step (ADR 0010, #256): the payload it
+   * honestly knows, which the server resolves through the engine into the
+   * declared `payload` and `outbox`. When present, api and cli mode post the
+   * intent and check that the resolved event equals the declared step; absent,
+   * they post the declared operation as it is.
+   */
+  readonly intent?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -71,6 +80,19 @@ export type Scenario = {
    * a scope declares it here rather than appending an unauthorized operation.
    */
   readonly bootstrap?: readonly Grant[]
+  /**
+   * The directory groups each principal of the cast holds (ID-4, ID-5, #256),
+   * keyed by principal id, so a grant to a group reaches its members as the
+   * session's groups do on a release server.
+   */
+  readonly membership?: Readonly<Record<string, readonly string[]>>
+  /**
+   * The directory resolver of the story (AS-1, AS-4, #256): what a group, a
+   * team or a dynamic target resolves to in the harness. A step's intent that
+   * routes a task resolves through it; absent, no target resolves to anyone
+   * (I10).
+   */
+  readonly resolve?: TargetResolver
   /**
    * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
    * the same steps in a browser). A gui step maps to the engine step at the

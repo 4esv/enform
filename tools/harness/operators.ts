@@ -8,15 +8,36 @@ import {
   type FlowDefinition,
   type JsonValue,
 } from '../../engine/definition.js'
+import {
+  type DraftSession,
+  emptySession as emptyDrafts,
+  saveDraft,
+  syncDraft,
+} from '../../engine/drafts.js'
 import { type FieldError, validateField } from '../../engine/fields.js'
 import { DEFINITION_PUBLISHED, type FlowVersion } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { contentHash, createInstance } from '../../engine/instance.js'
 import type { ActorId, Log, Operation } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
+import {
+  decryptDraft,
+  openSession,
+  type Session,
+  type SessionKey,
+  saveEncryptedDraft,
+  signOut,
+} from '../../engine/session.js'
 import { deliver, sideEffectKey } from '../../engine/sideEffects.js'
+import {
+  acknowledge,
+  applyOptimistic,
+  confirmedOnly,
+  emptyUpdates,
+  type UpdateLog,
+} from '../../engine/updates.js'
 import { oracles } from './oracles.js'
-import { type Deliveries, runSteps } from './runner.js'
+import { type Deliveries, postStep, runSteps, withScenarioApi } from './runner.js'
 import {
   goldenClock,
   goldenView,
@@ -67,10 +88,14 @@ type Requirement = {
 /** The requirement of a step of the scenario, in step order. */
 export type Requirements = (step: Step, stepIndex: number) => Requirement
 
-/** The cast of a log: the grants that each principal holds, read back from the log (I4, AC-1). */
-export function castOf(log: Log): Cast {
+/**
+ * The cast of a log: the grants that each principal holds, read back from the
+ * log (I4, AC-1), with the grants the installation held before the story
+ * (`bootstrap`, #256) first.
+ */
+export function castOf(log: Log, bootstrap: readonly Grant[] = []): Cast {
   const cast: Record<ActorId, Grant[]> = {}
-  for (const grant of grantsOf(log)) {
+  for (const grant of [...bootstrap, ...grantsOf(log)]) {
     const held = cast[grant.principal]
     if (held === undefined) cast[grant.principal] = [grant]
     else held.push(grant)
@@ -823,4 +848,108 @@ function invalidValue(field: Field): FormValue {
 /** A JSON object: not null and not an array. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// Issue #256, STORIES.md Fuzzy paths, S07, RT-3, RT-4, RT-5, I1, I11, I15,
+// I16: the Offline operator does the steps of a person without a connection,
+// refreshes during the steps, then reconnects. The connection drops before one
+// step: the steps from there on are saved on the device, as the local-first
+// draft model does (drafts.ts), encrypted under the session key (session.ts)
+// and shown as pending (updates.ts). A refresh rebuilds the local state from
+// the encrypted store alone (RT-4). On reconnect every saved operation is sent
+// again, twice, as a flaky reconnection does; the server applies each one
+// once (I1), each draft becomes synced and each update confirmed (I15, I16),
+// and the end state is the golden end state. A sign-out afterwards destroys
+// the local copy (I11). The runner generates one variant per step, so no fuzzy
+// test is written by hand and the run is deterministic (I6).
+
+/** One generated Offline variant: the step before which the connection drops. */
+export type OfflineVariant = {
+  readonly id: string
+  /** The index of the first step done offline. */
+  readonly from: number
+}
+
+/** Generate one Offline variant per step (STORIES.md, Fuzzy paths), in step order (I6). */
+export function offlineVariants(scenario: Scenario): readonly OfflineVariant[] {
+  return scenario.steps.map((_step, index) => ({
+    id: `offline:from-step${index + 1}`,
+    from: index,
+  }))
+}
+
+/** The session key of the offline device (I11): one key per run, held in sessionStorage. */
+const OFFLINE_KEY: SessionKey = { id: 'offline-device-key' }
+
+/**
+ * Run the Offline operator over a golden path: every variant runs, and the
+ * oracles check it with the device's drafts, updates and session (STORIES.md,
+ * Oracles). The variants are returned, so a test can count them.
+ */
+export async function runOfflineOperator(scenario: Scenario): Promise<readonly OfflineVariant[]> {
+  const variants = offlineVariants(scenario)
+  for (const variant of variants) await runOffline(scenario, variant)
+  return variants
+}
+
+/** Run one offline variant: online up to `from`, offline from there, then reconnect. */
+async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<void> {
+  await withScenarioApi(scenario, async (api) => {
+    for (let i = 0; i < variant.from; i += 1)
+      await postStep(api, scenario.steps[i], i, goldenClock, 1)
+
+    // The connection drops. Each later step is saved on the device (I15),
+    // encrypted (I11) and shown as pending (I16); nothing reaches the server.
+    let drafts: DraftSession = emptyDrafts
+    let updates: UpdateLog = emptyUpdates
+    let session: Session = openSession(OFFLINE_KEY)
+    const buffered: { readonly step: Step; readonly index: number }[] = []
+    for (let i = variant.from; i < scenario.steps.length; i += 1) {
+      const step = scenario.steps[i]
+      const operation = stepOperation(step, i)
+      const edit = { operation: operation as unknown as Record<string, unknown> }
+      drafts = saveDraft(drafts, operation.id, edit)
+      updates = applyOptimistic(updates, operation.id, edit)
+      session = saveEncryptedDraft(session, { id: operation.id, edit, state: 'saved' })
+      buffered.push({ step, index: i })
+    }
+    if (api.state().log.length !== variant.from) {
+      throw new Error(`${variant.id}: an offline step reached the server`)
+    }
+    if (confirmedOnly(updates).length !== 0) {
+      throw new Error(`${variant.id}: an offline step shows as confirmed (I16)`)
+    }
+
+    // A refresh while offline: the local state rebuilds from the encrypted
+    // store alone (RT-4), and every saved operation is still there (I15).
+    const recovered = session.drafts.map((stored) => {
+      const key = session.key
+      if (key === undefined) throw new Error(`${variant.id}: the session lost its key (I11)`)
+      return JSON.parse(decryptDraft(stored, key)) as { operation: Operation }
+    })
+    if (recovered.length !== buffered.length) {
+      throw new Error(`${variant.id}: the refresh lost an offline edit (I15, RT-4)`)
+    }
+
+    // The connection returns: every saved operation is sent again, twice, in
+    // order. The server applies each one once (I1); the drafts sync and the
+    // updates confirm (I15, I16).
+    for (const { step, index } of buffered) {
+      await postStep(api, step, index, goldenClock, 2)
+      const operation = stepOperation(step, index)
+      drafts = syncDraft(drafts, operation.id)
+      updates = acknowledge(updates, operation.id)
+    }
+    const state = api.state()
+    if (state.log.length !== scenario.steps.length) {
+      throw new Error(`${variant.id}: a resent operation was applied more than once (I1)`)
+    }
+    oracles(state, scenario, undefined, drafts, updates, session)
+
+    // Sign-out on the shared device destroys the local copy; the server copy
+    // stays (I11, S07).
+    if (signOut(session).drafts.length !== 0) {
+      throw new Error(`${variant.id}: the local drafts survived the sign-out (I11)`)
+    }
+  })
 }
