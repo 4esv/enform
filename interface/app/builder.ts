@@ -362,6 +362,11 @@ function lockStructure(state: BuilderState): void {
 /** Render the whole builder from its state. */
 function render(state: BuilderState): void {
   const root = state.root
+  // The status line and the publication line survive a re-render, so a
+  // refresh that follows the builder's own save or publication (the event
+  // reaches the page over the channel) keeps what it just said (A4).
+  const heldStatus = root.querySelector('[data-builder-status]')?.textContent ?? ''
+  const heldPublished = root.querySelector('[data-published]')?.textContent ?? ''
   root.replaceChildren()
 
   const heading = document.createElement('h1')
@@ -437,11 +442,13 @@ function render(state: BuilderState): void {
   const status = document.createElement('p')
   status.className = 'status builder-status'
   status.dataset.builderStatus = ''
+  status.textContent = heldStatus
   root.appendChild(status)
 
   const published = document.createElement('p')
   published.className = 'published'
   published.dataset.published = ''
+  published.textContent = heldPublished
   root.appendChild(published)
 
   if (state.dry.open) root.appendChild(renderDryRun(state))
