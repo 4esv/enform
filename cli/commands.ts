@@ -37,6 +37,18 @@ import { checkMail } from '../server/mail.js'
 import { clearDemo, seedDemo } from '../server/seed.js'
 import { versionLine } from '../server/version.js'
 import { startWorker } from '../server/worker.js'
+import { type Args, flag, has, parseArgs, report, required } from './args.js'
+import {
+  runGrantGroup,
+  runInstanceGroup,
+  runLog,
+  runLogin,
+  runLogout,
+  runRemoteFlow,
+  runTaskGroup,
+  runUndo,
+} from './groups.js'
+import { serverOf } from './remote.js'
 import { readFlow, writeFlow } from './store.js'
 
 /** The canonical extension of a flow definition file (DF-4). */
@@ -124,9 +136,19 @@ function run(argv: readonly string[], json: boolean, cwd: string): number | Prom
     return 0
   }
   if (group === 'flow') return runFlowGroup(action, name, args, json, cwd)
+  if (group === 'login') return runLogin(args, json, process.env)
+  if (group === 'logout') return runLogout(args, json, process.env)
+  if (group === 'grant') return runGrantGroup(action, args, json, process.env)
+  if (group === 'instance') return runInstanceGroup(action, name, args, json, process.env, cwd)
+  if (group === 'task') return runTaskGroup(action, name, args, json, process.env, cwd)
+  if (group === 'undo') return runUndo(action, args, json, process.env)
+  if (group === 'log') return runLog(args, json, process.env)
   if (SERVICE_COMMANDS.has(group)) return runServiceCommand(group, action, args, json)
   throw new Error(`unknown command group: ${group}`.trim())
 }
+
+/** The `flow` commands that a signed-in person runs against the server (#258). */
+const REMOTE_FLOW_COMMANDS = new Set(['pull', 'push', 'publish', 'diff'])
 
 /** The service commands that ADR 0011 gives the one `enform` binary. */
 const SERVICE_COMMANDS = new Set(['init', 'serve', 'migrate', 'worker', 'admin', 'seed', 'doctor'])
@@ -138,7 +160,14 @@ function runFlowGroup(
   args: Args,
   json: boolean,
   cwd: string
-): number {
+): number | Promise<number> {
+  // Once a server is configured (`--server`, ENFORM_SERVER or the last
+  // sign-in), the draft and the versions live there (#258, S01, DF-4);
+  // without one the local `.enform/` store serves an offline session.
+  if (action !== undefined && REMOTE_FLOW_COMMANDS.has(action)) {
+    const server = serverOf(args.flags, process.env)
+    if (server !== undefined) return runRemoteFlow(action, name, args, json, process.env, cwd)
+  }
   if (action === 'init') return flowInit(name, json, cwd)
   if (action === 'validate') return flowValidate(name, json, cwd)
   if (action === 'pull') return flowPull(name, json, cwd)
@@ -332,67 +361,6 @@ function slugOf(file: string): string {
   return base.slice(0, -FILE_SUFFIX.length)
 }
 
-/** The flags that take no value, so the next argument is a positional. */
-const BOOLEAN_FLAGS = new Set(['--no-open', '--no-serve', '--status', '--auto-migrate', '--yes'])
-
-/** One parsed command line: the positionals and the flag values, in order. */
-type Args = {
-  readonly positionals: readonly string[]
-  readonly flags: ReadonlyMap<string, readonly string[]>
-}
-
-/** Whether a value-less flag is present. */
-function has(args: Args, key: string): boolean {
-  return args.flags.has(key)
-}
-
-/** Split the command line into positionals and flags. `--json` is already removed. */
-function parseArgs(argv: readonly string[]): Args {
-  const positionals: string[] = []
-  const flags = new Map<string, string[]>()
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (!arg.startsWith('--')) {
-      positionals.push(arg)
-      continue
-    }
-    if (BOOLEAN_FLAGS.has(arg)) {
-      flags.set(arg, ['true'])
-      continue
-    }
-    const value = argv[index + 1]
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(`missing value for ${arg}`)
-    }
-    index += 1
-    const values = flags.get(arg) ?? []
-    values.push(value)
-    flags.set(arg, values)
-  }
-  return { positionals, flags }
-}
-
-/** The one value of a required flag, or an error that names the usage. */
-function flag(args: Args, key: string, usage: string): string {
-  const values = args.flags.get(key)
-  if (values === undefined || values.length === 0) {
-    throw new Error(`missing ${key}: usage is ${usage}`)
-  }
-  if (values.length > 1) throw new Error(`${key} is given more than once: usage is ${usage}`)
-  return values[0]
-}
-
-/** The value of a required positional, or an error that names the usage. */
-function required(value: string | undefined, usage: string): string {
-  if (value === undefined) throw new Error(`missing argument: usage is ${usage}`)
-  return value
-}
-
-/** Write the outcome: one JSON object with `--json`, a plain line otherwise. */
-function report(json: boolean, value: Record<string, unknown>, text: string): void {
-  process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${text}\n`)
-}
-
 /** The help text: every service command and the `flow` group (DE-2). */
 function printHelp(): void {
   process.stdout.write(
@@ -412,6 +380,16 @@ function printHelp(): void {
       '',
       'Flow commands:',
       '  flow init|validate|pull|push|publish|diff|dry-run',
+      '',
+      'Story commands (through the server; sign in first):',
+      '  login [--server <url>] [--username <name> --password <secret>], logout',
+      '  grant add|list|revoke',
+      '  instance start|edit|submit|show|timeline|withdraw|cancel|undo',
+      '  task list|show|claim|complete|takeover|release|reassign',
+      '  undo <event-seq> --instance <id> --reason <text>',
+      '  log [--instance <id>] [--limit <n>]',
+      '',
+      'Every command accepts --json. The server is --server, ENFORM_SERVER or the last sign-in.',
       '',
     ].join('\n')
   )

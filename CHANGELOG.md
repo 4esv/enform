@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Added
 
+- The `enform` CLI covers every story operation through the public HTTP API: `grant add|list|revoke`, `instance start|edit|submit|show|timeline|withdraw|cancel|undo`, `task list|show|claim|complete|takeover|release|reassign`, `undo` and `log`, with `--json` on each; `flow push|pull|publish|diff` go to the server once signed in. `GET /api/v1/flows/{slug}` reads a published version by number (#258, DX-3, DX-4, I12).
 - `enform login` signs in through the identity provider's device authorization flow, or with a username and a password of the local directory, and stores the credential per server with its refresh token (#258, DX-3, S01, ID-6).
 - Every story from S02 to S16 runs as a golden path of client intents on one shared example flow, in api, cli and dry mode, under all eight variation operators; the harness predicts each run through the shared resolver and holds a fuzzy path to the deviation the engine predicts (#256, STORIES.md Test method, I6, I8).
 - The repository layout of `MVP.md` section 9.1 and the five commands: `make setup`, `make check`, `make invariants`, `make stories` and `make stack` (#95).

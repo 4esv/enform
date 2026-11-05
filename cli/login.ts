@@ -68,7 +68,8 @@ function readFile(path: string): CredentialFile {
 
 /** The credential stored for one server, or undefined when the person has not signed in there. */
 export function readCredential(path: string, server: string): Credential | undefined {
-  return readFile(path)[normalizeServer(server)]
+  const entry = readFile(path)[normalizeServer(server)]
+  return entry !== undefined && typeof entry.accessToken === 'string' ? entry : undefined
 }
 
 /** Store the credential of one server; the file is readable by its owner only. */
@@ -84,6 +85,25 @@ export function removeCredential(path: string, server: string): void {
   delete file[normalizeServer(server)]
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 })
+}
+
+/** The entry of the credential file that remembers the server of the last sign-in. */
+const DEFAULT_SERVER_KEY = '$default'
+
+/** Remember the server of the last sign-in, so a later command needs no `--server`. */
+export function rememberServer(path: string, server: string): void {
+  const file = readFile(path)
+  const next = { ...file, [DEFAULT_SERVER_KEY]: { server: normalizeServer(server) } }
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 })
+}
+
+/** The server of the last sign-in, or undefined when nobody signed in on this machine. */
+export function rememberedServer(path: string): string | undefined {
+  const entry = readFile(path)[DEFAULT_SERVER_KEY] as unknown
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const server = (entry as { readonly server?: unknown }).server
+  return typeof server === 'string' && server !== '' ? server : undefined
 }
 
 /** A server URL without its trailing slash, so one server has one entry. */

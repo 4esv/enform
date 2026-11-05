@@ -170,7 +170,7 @@ function show(person: string, instanceId: string): InstanceOutput['instance'] {
 
 let instanceId = ''
 
-test.fails('#258 login stores a credential per server, and a bad password is refused', () => {
+test('#258 login stores a credential per server, and a bad password is refused', () => {
   const sam = demoUser('starter')
   signIn('sam', sam)
   const stored = JSON.parse(readFileSync(credentialsOf('sam'), 'utf8')) as Record<string, unknown>
@@ -184,7 +184,7 @@ test.fails('#258 login stores a credential per server, and a bad password is ref
   expect(JSON.parse(unsigned.stdout).error).toMatch(/enform login/)
 })
 
-test.fails('#258 S02 the administrator lists, adds and revokes grants', () => {
+test('#258 S02 the administrator lists, adds and revokes grants', () => {
   const priya = demoUser('reader')
   signIn('admin', { email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
   const resource = `flow:${flowSlug()}`
@@ -209,6 +209,9 @@ test.fails('#258 S02 the administrator lists, adds and revokes grants', () => {
   expect(
     revoked.some((grant) => grant.principal === priya.id && grant.scopes.includes('instance.start'))
   ).toBe(false)
+  // Priya keeps task.reassign on the flow (STORIES.md, Cast), so she may
+  // move a task between peers later (S10).
+  output(enform('admin', ['grant', 'add', priya.id, 'task.reassign', resource]))
   // A person without org.grants or flow.grant may not grant (403): exit 1 and the reason.
   signIn('priya', priya)
   const refused = enform('priya', ['grant', 'add', priya.id, 'instance.start', resource])
@@ -216,7 +219,7 @@ test.fails('#258 S02 the administrator lists, adds and revokes grants', () => {
   expect(JSON.parse(refused.stdout).error).toMatch(/org.grants|flow.grant/)
 })
 
-test.fails('#258 S06 S11 S09 Sam starts and submits, the advisor sends back and approves, the registrar finishes', () => {
+test('#258 S06 S11 S09 Sam starts and submits, the advisor sends back and approves, the registrar finishes', () => {
   const { dir } = requireSetup()
   const okafor = demoUser('advisor')
   const ana = demoUser('registrar', 0)
@@ -285,8 +288,9 @@ test.fails('#258 S06 S11 S09 Sam starts and submits, the advisor sends back and 
   expect(atRegistrar.status.currentStep).toBe('registrar')
   expect(atRegistrar.tracker.find((step) => step.key === 'chair')?.state).toBe('skipped')
 
-  // S09, S10: Ana claims and releases, Lee claims and reassigns to Ana, a
-  // takeover before the idle period is refused with the remaining time.
+  // S09, S10: Ana claims and releases, Lee claims, a takeover before the
+  // idle period is refused with the remaining time, and Priya, who holds
+  // task.reassign, moves the task to Ana; the holder alone may not (WF-5).
   output(enform('ana', ['task', 'claim', instanceId]))
   output(enform('ana', ['task', 'release', instanceId, '--reason', 'Not mine today']))
   expect(show('ana', instanceId).status.holder).toBeUndefined()
@@ -294,17 +298,19 @@ test.fails('#258 S06 S11 S09 Sam starts and submits, the advisor sends back and 
   const early = enform('ana', ['task', 'takeover', instanceId, '--reason', 'Lee is out'])
   expect(early.status).toBe(1)
   expect(JSON.parse(early.stdout).error).toMatch(/idle|remaining|minute/)
-  output(
-    enform('lee', [
-      'task',
-      'reassign',
-      instanceId,
-      '--to',
-      ana.id,
-      '--reason',
-      'Ana knows the case',
-    ])
-  )
+  const reassign = [
+    'task',
+    'reassign',
+    instanceId,
+    '--to',
+    ana.id,
+    '--reason',
+    'Ana knows the case',
+  ]
+  const holderReassign = enform('lee', reassign)
+  expect(holderReassign.status).toBe(1)
+  expect(JSON.parse(holderReassign.stdout).error).toMatch(/task.reassign/)
+  output(enform('priya', reassign))
   expect(show('ana', instanceId).status.holder).toBe(ana.id)
   const mine = output<{ items: { instanceId: string }[] }>(
     enform('ana', ['task', 'list', '--mine'])
@@ -314,7 +320,7 @@ test.fails('#258 S06 S11 S09 Sam starts and submits, the advisor sends back and 
   expect(show('ana', instanceId).status.state).toBe('done')
 })
 
-test.fails('#258 S16 S15 Ana undoes her approval, and the log and the timeline show the events', () => {
+test('#258 S16 S15 Ana undoes her approval, and the log and the timeline show the events', () => {
   const ana = demoUser('registrar', 0)
   const timeline = output<{ entries: { seq: number; type: string }[] }>(
     enform('ana', ['instance', 'timeline', instanceId])
@@ -350,7 +356,7 @@ test.fails('#258 S16 S15 Ana undoes her approval, and the log and the timeline s
   expect(withChanges.some((entry) => entry.type.startsWith('config.'))).toBe(true)
 })
 
-test.fails('#258 S13 Sam withdraws and undoes it, Priya cancels, and the starter alone may withdraw', () => {
+test('#258 S13 Sam withdraws and undoes it, Priya cancels, and the starter alone may withdraw', () => {
   const ana = demoUser('registrar', 0)
   const notStarter = enform('ana', ['instance', 'withdraw', instanceId, '--reason', 'no'])
   expect(notStarter.status).toBe(1)
@@ -365,7 +371,7 @@ test.fails('#258 S13 Sam withdraws and undoes it, Priya cancels, and the starter
   expect(show('sam', instanceId).status.state).toBe('cancelled')
 })
 
-test.fails('#258 S01 S03 the builder pulls, diffs, pushes and publishes the flow through the server', () => {
+test('#258 S01 S03 the builder pulls, diffs, pushes and publishes the flow through the server', () => {
   const { dir } = requireSetup()
   const lin = demoUser('chair')
   signIn('lin', lin)
