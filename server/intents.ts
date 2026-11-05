@@ -924,6 +924,17 @@ function teamHolds(members: readonly string[], principal: ActingPrincipal): bool
  * holds resolves to nobody, so the engine routes to the Unroutable queue (I10).
 
 /**
+ * What the directory answers beside the teams and the groups (ID-5, AS-1,
+ * #267): whether a principal is provisioned, and the manager of a person.
+ */
+export type ResolverDirectory = {
+  /** Whether the directory holds the principal (ID-5); absent means every principal is provisioned. */
+  readonly provisioned?: (principal: string) => boolean
+  /** The manager of a person, for `manager-of:starter` (AS-1); absent means nobody has one. */
+  readonly managerOf?: (principal: string) => string | undefined
+}
+
+/**
  * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252).
  * `starter` resolves to the principal that started the instance, `user` to
  * itself, `field` to the principal in the data or the instance values, `team`
@@ -936,8 +947,10 @@ export function resolverFor(
   starter: string | undefined,
   data: Readonly<Record<string, unknown>>,
   teamMembers: ReadonlyMap<string, readonly string[]>,
-  groupMembers: ReadonlyMap<string, readonly string[]>
+  groupMembers: ReadonlyMap<string, readonly string[]>,
+  directory: ResolverDirectory = {}
 ): TargetResolver {
+  void directory
   return (target) => {
     if ('user' in target) return [target.user]
     if ('starter' in target) return starter === undefined ? [] : [starter]

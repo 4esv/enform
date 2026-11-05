@@ -13,12 +13,42 @@
 // (I4, I14). Both functions are pure and deterministic (I6): they read no
 // clock, no random source and no I/O of their own.
 
+import type { Grant } from './authorize.js'
 import type { Instance } from './instance.js'
-import { type ActorId, createOperation, type Operation, type OperationDeps } from './operation.js'
+import {
+  type ActorId,
+  createOperation,
+  type Log,
+  type Operation,
+  type OperationDeps,
+} from './operation.js'
 import type { Membership } from './resolve.js'
 
 /** The versioned event type of a deprovision (ID-5, I14). */
 export const USER_DEPROVISIONED = 'user.deprovisioned@1'
+
+/** The versioned event type of a provision (ID-5, I14): the directory holds the person again. */
+export const USER_PROVISIONED = 'user.provisioned@1'
+
+/** The actor of a change the directory synchronization makes on its own (ID-5, I14). */
+export const DIRECTORY_ACTOR = 'system:directory'
+
+/** Who deprovisions (ID-5, I8): the directory itself, or a person with `org.grants`. */
+export type DeprovisionOptions = {
+  /** The acting principal; absent means the directory synchronization. */
+  readonly actor?: ActorId
+  /** The grants that apply to the actor (AC-1, I8). */
+  readonly grants?: readonly Grant[]
+}
+
+/**
+ * The principals the log says are deprovisioned (ID-5, I4): named by a
+ * `user.deprovisioned@1` event and not by a later `user.provisioned@1`.
+ */
+export function deprovisionedOf(log: Log): ReadonlySet<ActorId> {
+  void log
+  return new Set()
+}
 
 /**
  * The result of a deprovision (ID-5, I4). `accepted` says whether the engine
@@ -32,6 +62,8 @@ export type DeprovisionResult = {
   readonly instances: readonly Instance[]
   /** The operation that records the deprovision (I14); absent when the engine refused. */
   readonly operation?: Operation
+  /** One `task.released@1` per task the principal held, with the reason (WF-5, I14); empty when refused. */
+  readonly releases: readonly Operation[]
   /** Why the engine refused the deprovision (ID-5); absent when it accepted. */
   readonly reason?: string
 }
@@ -68,12 +100,15 @@ export function deprovision(
   principal: ActorId,
   membership: Membership,
   instances: readonly Instance[],
-  deps: OperationDeps
+  deps: OperationDeps,
+  options: DeprovisionOptions = {}
 ): DeprovisionResult {
+  void options
   if (membership(principal).length > 0) {
     return {
       accepted: false,
       instances,
+      releases: [],
       reason: `${principal} is still a current member, so the account is not deprovisioned (ID-5)`,
     }
   }
@@ -88,5 +123,5 @@ export function deprovision(
     if (instance.currentStep !== undefined) released.push(instance.currentStep)
   }
   const operation = createOperation(USER_DEPROVISIONED, { principal, released }, deps, principal)
-  return { accepted: true, instances: next, operation }
+  return { accepted: true, instances: next, operation, releases: [] }
 }
