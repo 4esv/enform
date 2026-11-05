@@ -18,9 +18,11 @@
 // actor.
 
 import { createHash } from 'node:crypto'
+import type { Server } from 'node:http'
 import { serve } from '@hono/node-server'
 import { type Context, Hono } from 'hono'
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { deleteCookie, setCookie } from 'hono/cookie'
+import { streamSSE } from 'hono/streaming'
 import {
   authorizationCodeGrant,
   buildAuthorizationUrl,
@@ -98,6 +100,7 @@ import {
   principalFromToken,
   tokenExpiry,
 } from './keycloak.js'
+import { attachRealtime, createHub, followLog, type Hub, type Scope } from './realtime.js'
 import { mountInterface } from './static.js'
 import { versionLine } from './version.js'
 
@@ -148,8 +151,82 @@ type Auth =
   | { readonly kind: 'cookie'; readonly principal: Principal; readonly session: SessionRow }
 
 /** Build the HTTP application for one configuration and one pool. */
-export function createApp(config: Config, pool: Pool): Hono {
+export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): Hono {
   const app = new Hono()
+
+  // Issue #260, RT-1, RT-2, I8: the realtime hub reads who a connection is
+  // and what it may read through the same authentication and reads as the
+  // routes, so no subscription bypasses `mayRead`.
+  hub.configure({
+    authenticate: async (headers) => {
+      const auth = await authenticateHeaders(headers, pool, config)
+      return auth === undefined ? undefined : auth.principal
+    },
+    authorize: async (principal, scope) => {
+      const log = await readLog(pool)
+      const grants = grantsFor(log, principal)
+      if ('flow' in scope) return mayReadFlow(grants, scope.flow) ? 'ok' : 'refused'
+      const instance = instanceOf(log, scope.instance)
+      if (instance === undefined) return 'missing'
+      const published = publishedByHash(log, instance.definitionVersion)
+      if (published === undefined) return 'missing'
+      const readable = mayRead(principal.id, instance, {
+        flow: instance.flow,
+        definition: published.definition,
+        log,
+        grants,
+      })
+      return readable ? 'ok' : 'refused'
+    },
+    head: async () => (await readLog(pool)).length,
+  })
+
+  // The Server-Sent Events fallback (RT-1, ADR 0006): one scope per stream,
+  // authorized when the stream opens (I8); `welcome`, then every change and
+  // presence of the scope, as the WebSocket channel sends them.
+  app.get('/api/v1/realtime/events', async (c) => {
+    const auth = await authenticate(c, pool, config)
+    if (auth === undefined) return unauthorized(c)
+    const instance = nonEmpty(c.req.query('instance'))
+    const flow = nonEmpty(c.req.query('flow'))
+    const scope: Scope | undefined =
+      instance !== undefined && flow === undefined
+        ? { instance }
+        : flow !== undefined && instance === undefined
+          ? { flow }
+          : undefined
+    if (scope === undefined) {
+      return c.json({ error: 'the stream names one instance or one flow' }, 400)
+    }
+    const decision = await hub.deps().authorize(auth.principal, scope)
+    if (decision === 'missing') return c.json({ error: 'not found' }, 404)
+    if (decision === 'refused') return c.json({ error: 'not readable' }, 403)
+    const head = await hub.deps().head()
+    return streamSSE(c, async (stream) => {
+      await stream.writeSSE({
+        event: 'welcome',
+        data: JSON.stringify({
+          type: 'welcome',
+          protocol: 1,
+          principal: auth.principal,
+          seq: head,
+        }),
+      })
+      const off = hub.subscribe(scope, (message) => {
+        void stream.writeSSE({ event: message.type, data: JSON.stringify(message) })
+      })
+      const keepAlive = setInterval(() => {
+        void stream.writeSSE({ event: 'ping', data: '{"type":"ping"}' })
+      }, 25_000)
+      await new Promise<void>((resolve) => {
+        stream.onAbort(() => {
+          clearInterval(keepAlive)
+          off()
+          resolve()
+        })
+      })
+    })
+  })
 
   app.get('/healthz', (c) => c.json({ status: 'ok' }))
 
@@ -630,17 +707,26 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
       return c.json({ error: 'limit must be a non-negative integer' }, 400)
     }
+    // The polling fallback reads the events after a position (#260, RT-1).
+    const afterQuery = nonEmpty(c.req.query('after'))
+    const after = afterQuery === undefined ? undefined : Number(afterQuery)
+    if (after !== undefined && (!Number.isInteger(after) || after < 0)) {
+      return c.json({ error: 'after must be a non-negative integer' }, 400)
+    }
     const teamMembers = await teamMembersFor(pool, log)
     const groupMembers = await groupMembersFor(config)
     const resolve = resolverFor(undefined, {}, teamMembers, groupMembers)
-    return c.json(
-      readableLog(log, auth.principal.id, {
+    const readable = readableLog(
+      after === undefined ? log : log.filter((event) => event.seq > after),
+      auth.principal.id,
+      {
         grants: grantsFor(log, auth.principal),
         resolve,
         ...(instanceId === undefined ? {} : { instanceId }),
         ...(limit === undefined ? {} : { limit }),
-      })
+      }
     )
+    return c.json(readable)
   })
 
   // The whole derived state is the organization's (I8): org.grants on org.
@@ -1103,9 +1189,14 @@ function inboxState(taskState: string | null, instanceStatus: string): string {
 /** Start the HTTP server on the configured address and return a drain handle. */
 export async function serveHttp(config: Config): Promise<ServedHttp> {
   const pool = createPool(config.databaseUrl)
-  const app = createApp(config, pool)
+  const hub = createHub()
+  const app = createApp(config, pool, hub)
   const { hostname, port } = listenAddress(config)
   const server = serve({ fetch: app.fetch, hostname, port })
+  // The WebSocket channel rides the same server (RT-1), and this process
+  // follows the log so a write by any process reaches its subscribers.
+  attachRealtime(server as Server, hub)
+  const stopFollowing = await followLog(hub, pool)
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve)
     server.once('error', reject)
@@ -1115,6 +1206,7 @@ export async function serveHttp(config: Config): Promise<ServedHttp> {
   return {
     port: boundPort,
     close: async () => {
+      await stopFollowing()
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await pool.end()
     },
@@ -1132,14 +1224,27 @@ export function issuerOf(config: Config): string {
  * expired idle timeout all answer undefined, which the route turns into 401.
  */
 async function authenticate(c: Context, pool: Pool, config: Config): Promise<Auth | undefined> {
-  const authorization = c.req.header('authorization')
+  return authenticateHeaders(c.req.raw.headers, pool, config)
+}
+
+/**
+ * Resolve the credential that a set of headers carries (ADR 0012, #260): the
+ * bearer token, else the session cookie. A request and a WebSocket upgrade
+ * authenticate the same way.
+ */
+async function authenticateHeaders(
+  headers: Headers,
+  pool: Pool,
+  config: Config
+): Promise<Auth | undefined> {
+  const authorization = headers.get('authorization') ?? undefined
   if (authorization?.toLowerCase().startsWith('bearer ') === true) {
     const token = authorization.slice('bearer '.length).trim()
     // #224: an empty bearer header is not a credential. The browser sends the
     // session cookie, and the generated client omits the header when it has no
     // token; a request that still carries an empty one falls through to the
     // cookie instead of failing before it reaches it.
-    if (token === '') return authenticateCookie(c, pool, config)
+    if (token === '') return authenticateCookie(headers, pool, config)
     let principal: Principal
     try {
       principal = await principalFromToken(config, token)
@@ -1162,16 +1267,16 @@ async function authenticate(c: Context, pool: Pool, config: Config): Promise<Aut
     return { kind: 'bearer', principal, session }
   }
 
-  return authenticateCookie(c, pool, config)
+  return authenticateCookie(headers, pool, config)
 }
 
 /** Resolve the session cookie to one principal and one session row (ADR 0012, #224). */
 async function authenticateCookie(
-  c: Context,
+  headers: Headers,
   pool: Pool,
   config: Config
 ): Promise<Auth | undefined> {
-  const sessionId = getCookie(c, config.session.cookieName)
+  const sessionId = cookieValue(headers.get('cookie'), config.session.cookieName)
   if (sessionId === undefined) return undefined
   const session = await sessionById(pool, sessionId)
   if (session === undefined || session.revokedAt !== null) return undefined
@@ -1182,6 +1287,16 @@ async function authenticateCookie(
   if (principal === undefined) return undefined
   await touchSession(pool, session.id, now)
   return { kind: 'cookie', principal, session: { ...session, lastSeenAt: now } }
+}
+
+/** The value of one cookie in a Cookie header, or undefined when it is absent. */
+function cookieValue(header: string | null, name: string): string | undefined {
+  if (header === null) return undefined
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name) return decodeURIComponent(rest.join('='))
+  }
+  return undefined
 }
 
 /** The callback URL: the configured public URL, never the request's Host. */

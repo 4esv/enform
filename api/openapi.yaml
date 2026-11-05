@@ -166,6 +166,15 @@ paths:
             type: integer
             minimum: 0
           description: Only the newest events, this many.
+        - name: after
+          in: query
+          required: false
+          description: >-
+            Only the events after this log position (#260, RT-1): the polling
+            fallback of the realtime channel reads what it missed.
+          schema:
+            type: integer
+            minimum: 0
       responses:
         '200':
           description: The ordered events of the log
@@ -173,6 +182,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Log'
+  /api/v1/realtime/events:
+    get:
+      operationId: streamEvents
+      summary: Stream the changes of one instance or one flow (Server-Sent Events)
+      description: >-
+        The Server-Sent Events fallback of the realtime channel (RT-1, DX-2,
+        ADR 0006). The stream names one instance or one flow, is authorized
+        when it opens (I8), and sends `welcome`, then every `changed` and
+        `presence` message of the scope as `schemas/realtime/v1.json`
+        describes them, with a `ping` every 25 seconds. A change carries no
+        payload: the client reads through the API. The WebSocket channel at
+        `/api/v1/realtime` is the primary transport and carries presence both
+        ways; it is not an HTTP operation and is described by the schema.
+      parameters:
+        - name: instance
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: flow
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: The stream names no scope, or two.
+        '401':
+          description: There is no session.
+        '403':
+          description: The person may not read the scope.
+        '404':
+          description: The log does not hold the instance.
   /api/v1/state:
     get:
       operationId: readState

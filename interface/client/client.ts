@@ -921,10 +921,11 @@ export async function readInstanceTimeline(
   return (await response.json()) as readonly TimelineEntry[]
 }
 
-export async function readLog(instance?: string, limit?: number): Promise<Log> {
+export async function readLog(instance?: string, limit?: number, after?: number): Promise<Log> {
   const query = new URLSearchParams()
   if (instance !== undefined) query.set('instance', String(instance))
   if (limit !== undefined) query.set('limit', String(limit))
+  if (after !== undefined) query.set('after', String(after))
   const search = query.size === 0 ? '' : `?${query}`
   const url = `${configured().baseUrl}/api/v1/log${search}`
   const response = await fetch(url, {
@@ -972,6 +973,19 @@ export async function readTimeline(
   })
   if (!response.ok) throw await refusal(response)
   return (await response.json()) as readonly TimelineEntry[]
+}
+
+export async function streamEvents(instance?: string, flow?: string): Promise<void> {
+  const query = new URLSearchParams()
+  if (instance !== undefined) query.set('instance', String(instance))
+  if (flow !== undefined) query.set('flow', String(flow))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/realtime/events${search}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers(),
+  })
+  if (![200].includes(response.status)) throw await refusal(response)
 }
 
 export async function writeDraft(draftWrite: DraftWrite, slug: string): Promise<DraftFlow> {

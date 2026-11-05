@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { Pool } from 'pg'
 import { afterAll, beforeAll, expect, test } from 'vitest'
+import WebSocket from 'ws'
 import { defaultConfig } from './config.js'
 
 // Issue #260, RT-1, RT-2, DX-2, I8, ADR 0006: the realtime channel of the
@@ -19,7 +20,7 @@ type Realtime = {
     publish: (event: { seq: number; type: string; payload: Record<string, unknown> }) => void
     connections: () => number
   }
-  attachRealtime: (server: Server, app: unknown, hub: unknown, config: unknown, pool: Pool) => void
+  attachRealtime: (server: Server, hub: unknown) => void
   createApp: (
     config: unknown,
     pool: Pool,
@@ -37,11 +38,24 @@ async function modules(): Promise<Realtime> {
   return { ...realtime, ...http } as unknown as Realtime
 }
 
-/** A pool that answers one valid cookie session, with the given grant rows (as http.test.ts does). */
+/**
+ * A pool that answers one valid cookie session (as http.test.ts does) and a
+ * log that holds one grant event per given grant, because the reads
+ * authorize against the grants the log records (I4, I8).
+ */
 function sessionPool(grants: readonly Record<string, unknown>[] = []): Pool {
   const now = Date.now()
+  const events = grants.map((grant, index) => ({
+    seq: String(index + 1),
+    operation_id: `grant-${index + 1}`,
+    type: 'config.grant.changed@1',
+    at: String(index + 1),
+    actor: 'user:dana',
+    payload: grant,
+  }))
   return {
     query: (text: string) => {
+      if (text.includes('from events')) return Promise.resolve({ rows: events })
       if (text.includes('from sessions')) {
         return Promise.resolve({
           rows: [
@@ -125,7 +139,7 @@ async function start(): Promise<void> {
     })
   })
   const listening = server
-  attachRealtime(listening, app, hub, defaultConfig, pool)
+  attachRealtime(listening, hub)
   await new Promise<void>((resolve) => listening.listen(0, '127.0.0.1', resolve))
   base = `127.0.0.1:${(listening.address() as { port: number }).port}`
 }
@@ -139,16 +153,16 @@ afterAll(async () => {
 /** A WebSocket client with the session cookie, and a queue of the messages it received. */
 function connect(): Promise<{ ws: WebSocket; next: () => Promise<Record<string, unknown>> }> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${base}/api/v1/realtime`, { headers: { cookie } } as never)
+    const ws = new WebSocket(`ws://${base}/api/v1/realtime`, { headers: { cookie } })
     const queue: Record<string, unknown>[] = []
     const waiting: ((message: Record<string, unknown>) => void)[] = []
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as Record<string, unknown>
+    ws.on('message', (data) => {
+      const message = JSON.parse(String(data)) as Record<string, unknown>
       const waiter = waiting.shift()
       if (waiter === undefined) queue.push(message)
       else waiter(message)
     })
-    ws.addEventListener('open', () =>
+    ws.on('open', () =>
       resolve({
         ws,
         next: () =>
@@ -159,7 +173,7 @@ function connect(): Promise<{ ws: WebSocket; next: () => Promise<Record<string, 
           }),
       })
     )
-    ws.addEventListener('error', () => reject(new Error('the socket did not open')))
+    ws.on('error', (error) => reject(new Error(`the socket did not open: ${error.message}`)))
   })
 }
 
@@ -167,7 +181,7 @@ function send(ws: WebSocket, message: Record<string, unknown>): void {
   ws.send(JSON.stringify(message))
 }
 
-test.fails('#260 DX-2 the handshake answers welcome for a supported version and reload for another', async () => {
+test('#260 DX-2 the handshake answers welcome for a supported version and reload for another', async () => {
   requireHub()
   const { ws, next } = await connect()
   send(ws, { type: 'hello', protocol: 1 })
@@ -175,17 +189,17 @@ test.fails('#260 DX-2 the handshake answers welcome for a supported version and 
     type: 'welcome',
     protocol: 1,
     principal: { id: 'user-1', displayName: 'Ana' },
-    seq: 0,
+    seq: 1,
   })
   ws.close()
 
   const old = await connect()
   send(old.ws, { type: 'hello', protocol: 99 })
   expect(await old.next()).toMatchObject({ type: 'reload', supported: [1] })
-  await new Promise<void>((resolve) => old.ws.addEventListener('close', () => resolve()))
+  await new Promise<void>((resolve) => old.ws.on('close', () => resolve()))
 })
 
-test.fails('#260 I8 a subscription is authorized when it is opened, a change arrives without a payload, and presence names who is where', async () => {
+test('#260 I8 a subscription is authorized when it is opened, a change arrives without a payload, and presence names who is where', async () => {
   const hub = requireHub()
   const ana = await connect()
   send(ana.ws, { type: 'hello', protocol: 1 })
@@ -196,7 +210,7 @@ test.fails('#260 I8 a subscription is authorized when it is opened, a change arr
   // Ana holds flow.read on course-overload: subscribed, and her presence is
   // broadcast to the flow's subscribers, herself included.
   send(ana.ws, { type: 'subscribe', flow: 'course-overload' })
-  expect(await ana.next()).toEqual({ type: 'subscribed', flow: 'course-overload', seq: 0 })
+  expect(await ana.next()).toEqual({ type: 'subscribed', flow: 'course-overload', seq: 1 })
   send(ana.ws, { type: 'presence', flow: 'course-overload', where: '/steps/request' })
   expect(await ana.next()).toEqual({
     type: 'presence',
@@ -246,7 +260,7 @@ test.fails('#260 I8 a subscription is authorized when it is opened, a change arr
   ping.ws.close()
 })
 
-test.fails('#260 RT-1 the Server-Sent Events fallback sends welcome and the changes of one scope', async () => {
+test('#260 RT-1 the Server-Sent Events fallback sends welcome and the changes of one scope', async () => {
   const hub = requireHub()
   const response = await fetch(`http://${base}/api/v1/realtime/events?flow=course-overload`, {
     headers: { cookie },
