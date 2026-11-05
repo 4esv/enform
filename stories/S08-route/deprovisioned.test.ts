@@ -35,7 +35,7 @@ const versioning = {
   started: managerDefinition,
 }
 
-test.fails("#267 S08 AS-1 manager-of:starter resolves to the starter's manager at the submit, and the manager claims", async () => {
+test("#267 S08 AS-1 manager-of:starter resolves to the starter's manager at the submit, and the manager claims", async () => {
   await runGolden(managerGolden)
   const { state } = await runModes(managerGolden)
   const instance = instanceOf(state.log, INSTANCE_ID)
@@ -98,7 +98,7 @@ test('#267 S08 ID-5 I10 a deprovisioned manager routes the task to Unroutable an
   expect(entry).toMatchObject({ actor: 'user:dana', type: USER_DEPROVISIONED })
 })
 
-test.fails('#267 S08 the Actor operator does each step of the manager acceptances as each person of the cast', async () => {
+test('#267 S08 the Actor operator does each step of the manager acceptances as each person of the cast', async () => {
   const manager = storyOperators({
     golden: managerGolden,
     people: PEOPLE,

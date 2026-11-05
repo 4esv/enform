@@ -1,15 +1,18 @@
 import type { Grant } from '../../engine/authorize.js'
+import { deprovisionedOf } from '../../engine/membership.js'
 import type { ActorId, Log } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import { teamsOf } from '../../engine/teams.js'
 import { grantsFor, resolverFor } from '../../server/intents.js'
 
-// Issue #256, AS-1, AS-4, AC-1, I8: the directory of the harness. A release
-// server reads a principal's groups from its session, the teams from the log
-// and the grants from the log; the harness has no session, so the groups come
-// from the scenario's `membership` seam, and everything else comes from the
-// same engine reads as the release server. Every mode (api, cli, dry) and the
-// prediction read this one directory, so they agree by construction (I6).
+// Issue #256, #267, AS-1, AS-4, AC-1, ID-5, I8: the directory of the harness.
+// A release server reads a principal's groups from its session, the teams
+// from the log, the grants from the log, the deprovisioned accounts from the
+// log and a person's manager from the directory; the harness has no session
+// and no directory, so the groups come from the scenario's `membership` seam
+// and the managers from its `managers` seam, and everything else comes from
+// the same engine reads as the release server. Every mode (api, cli, dry) and
+// the prediction read this one directory, so they agree by construction (I6).
 
 /** The groups of the cast, keyed by principal id (ID-4): the `membership` seam of a scenario. */
 export type Membership = Readonly<Record<string, readonly string[]>>
@@ -40,19 +43,25 @@ export function grantsApplying(
 }
 
 /**
- * The directory resolver of the harness (AS-1, AS-4): the release server's
- * `resolverFor`, over the teams the log holds now (AS-6) and the groups the
- * membership seam gives. A team target resolves to the members the team holds
- * at resolution time, so a member who joined after the task was created is
- * reached (S08, I13); a group target resolves to the principals whose
- * membership names the group.
+ * The directory resolver of the harness (AS-1, AS-4, ID-5): the release
+ * server's `resolverFor`, over the teams the log holds now (AS-6), the groups
+ * the membership seam gives, the managers the managers seam names and the
+ * deprovisioned accounts the log records. A team target resolves to the
+ * members the team holds at resolution time, so a member who joined after
+ * the task was created is reached (S08, I13); a group target resolves to the
+ * principals whose membership names the group; `manager-of:starter` resolves
+ * to the starter's manager; and a deprovisioned person resolves to nobody.
  */
 export function directoryOf(
   log: Log,
   membership: Membership | undefined,
   managers?: Managers
 ): (starter: ActorId | undefined, data: Readonly<Record<string, unknown>>) => TargetResolver {
-  void managers
+  const gone = deprovisionedOf(log)
+  const directory = {
+    provisioned: (principal: string) => !gone.has(principal),
+    managerOf: (principal: string) => managers?.[principal],
+  }
   const teamMembers = new Map(teamsOf(log).map((team) => [team.name, team.members]))
   const groupMembers = new Map<string, string[]>()
   for (const [principal, groups] of Object.entries(membership ?? {})) {
@@ -62,5 +71,5 @@ export function directoryOf(
       else members.push(principal)
     }
   }
-  return (starter, data) => resolverFor(starter, data, teamMembers, groupMembers)
+  return (starter, data) => resolverFor(starter, data, teamMembers, groupMembers, directory)
 }
