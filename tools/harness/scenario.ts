@@ -1,4 +1,5 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
+import type { Grant } from '../../engine/authorize.js'
 import {
   type ActorId,
   createOperation,
@@ -62,6 +63,14 @@ export type Scenario = {
   /** The flow slug that the interface path opens (the `/app/?slug=` value). */
   readonly flowSlug?: string
   readonly steps: readonly Step[]
+  /**
+   * The grants that the installation holds before the story (#256, AC-1): what
+   * `enform init` seeds for the first administrator, and what an earlier story
+   * granted. The harness server authorizes every intent against the grants
+   * that apply to the acting principal (I8), so a story whose first step needs
+   * a scope declares it here rather than appending an unauthorized operation.
+   */
+  readonly bootstrap?: readonly Grant[]
   /**
    * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
    * the same steps in a browser). A gui step maps to the engine step at the

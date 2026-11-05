@@ -48,4 +48,10 @@ function grantStep(grant: Grant): Step {
 }
 
 /** The golden path: Dana adds the S02 grants to `course-overload` (S02, AC-2). */
-export const golden = scenario({ slug: 'grant-scopes', steps: grants.map(grantStep) })
+export const golden = scenario({
+  slug: 'grant-scopes',
+  // Dana holds `org.grants` (STORIES.md, Cast): the installation seeded it for
+  // its first administrator, so the harness authorizes her grant changes (I8).
+  bootstrap: [{ principal: 'dana', scopes: ['org.grants'], resource: 'org' }],
+  steps: grants.map(grantStep),
+})

@@ -419,7 +419,7 @@ async function apiRun(
   deliveries: Deliveries,
   clock: StepClock
 ): Promise<RunOutcome> {
-  const api = startApi(emptyState)
+  const api = startApi(emptyState, { bootstrap: scenario.bootstrap })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {

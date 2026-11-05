@@ -5,15 +5,14 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import { authorize, type Grant } from '../../engine/authorize.js'
-import { CompletionRefused, resolveCompletion } from '../../engine/completions.js'
 import { publishedByHash, publishedFlow } from '../../engine/flow.js'
 import { grantsOf } from '../../engine/grants.js'
 import { instanceOf, readInstance } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import type { TargetResolver } from '../../engine/routing.js'
 import { mayRead } from '../../engine/status.js'
-import { resolveIntent } from '../../engine/submission.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../../engine/timeline.js'
+import { grantsFor, isClientIntent, resolveClientOperation } from '../../server/intents.js'
 
 // Issue #24, DX-1, MVP.md 9.1: the in-process HTTP API that api/openapi.yaml
 // describes. It delegates to the engine (apply, the append-only log). It is
@@ -42,7 +41,20 @@ export type Api = {
  * member.
  */
 export type ApiOptions = {
+  /** The grants that apply to the acting principal, pre-filtered (a seam); absent reads the log. */
   readonly grants?: readonly Grant[]
+  /**
+   * The grants the installation holds before the story (#256): they apply to
+   * the principal they name, beside the grants the log records, as the first
+   * administrator's grant does on a release server.
+   */
+  readonly bootstrap?: readonly Grant[]
+  /**
+   * The directory groups each principal holds (ID-4, ID-5), keyed by principal
+   * id; a release server reads them from the session. A principal that the
+   * map does not name holds no group here.
+   */
+  readonly membership?: Readonly<Record<string, readonly string[]>>
   readonly resolve?: TargetResolver
 }
 
@@ -67,6 +79,24 @@ function isOperation(value: unknown): value is Operation {
     typeof o.payload === 'object' &&
     o.payload !== null
   )
+}
+
+/**
+ * The grants that apply to one principal (AC-1, I8, #256): the bootstrap
+ * grants that name it or one of its groups, and the grants the log records
+ * for it, read through the same `grantsFor` as the release server. The
+ * harness has no session, so the groups come from the `membership` seam.
+ */
+function grantsApplying(log: State['log'], actor: string, options: ApiOptions): readonly Grant[] {
+  const groups = options.membership?.[actor] ?? []
+  const held = new Set([actor, ...groups, ...groups.map((group) => `group:${group}`)])
+  const seeded = (options.bootstrap ?? []).filter((grant) => held.has(grant.principal))
+  return [...seeded, ...grantsFor(log, { id: actor, groups })]
+}
+
+/** Whether a value is a JSON object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -321,32 +351,33 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         } catch {
           return json(res, 400, { error: 'invalid JSON body' })
         }
-        let resolved: Operation | undefined
-        try {
-          const grants = options.grants ?? grantsOf(current.log)
-          // A start intent and a completion intent resolve through the engine
-          // before the append (ADR 0010). The two detectors are disjoint by the
-          // event type, and each answers undefined for an already resolved
-          // operation, which keeps the low-level append path.
-          resolved = resolveIntent(current.log, parsed, options.resolve ?? noMembers, grants)
-          if (resolved === undefined) {
-            resolved = resolveCompletion(current.log, parsed, options.resolve, grants)
+        // A client intent resolves through the same resolver as the release
+        // server (ADR 0010, #256), so api mode proves the release write path.
+        // The acting principal is the intent's actor (the harness has no
+        // session), the grants and the directory are the injected seams, and
+        // the server clock is the intent's own time, so a run is deterministic
+        // (I6). An operation that a scenario declares resolved keeps the raw
+        // append path.
+        if (isRecord(parsed) && isClientIntent(parsed)) {
+          const actor = typeof parsed.actor === 'string' ? parsed.actor : ''
+          const at = typeof parsed.at === 'number' ? parsed.at : 0
+          const resolved = resolveClientOperation(
+            {
+              log: current.log,
+              principal: { id: actor, groups: [] },
+              grants: options.grants ?? grantsApplying(current.log, actor, options),
+              resolver: () => options.resolve ?? noMembers,
+              now: () => at,
+            },
+            parsed
+          )
+          if ('error' in resolved) {
+            return json(res, resolved.status, {
+              error: resolved.error,
+              ...('errors' in resolved ? { errors: resolved.errors } : {}),
+            })
           }
-        } catch (error) {
-          // An engine refusal is not a malformed request: a completion that the
-          // engine refuses (a non-editable field, an actor that does not hold
-          // the step, an unauthorized outcome, or a value that fails its
-          // control) answers 409 with the reason, which names the field for
-          // FM-3, and with every validation error by field path for FM-4.
-          if (error instanceof CompletionRefused) {
-            return json(res, 409, { error: error.message, errors: error.errors })
-          }
-          return json(res, 400, {
-            error: error instanceof Error ? error.message : 'invalid intent',
-          })
-        }
-        if (resolved !== undefined) {
-          current = apply(resolved, current)
+          current = apply(resolved.operation, current)
           return json(res, 201, current.log[current.log.length - 1])
         }
         if (!isOperation(parsed)) return json(res, 400, { error: 'invalid operation' })

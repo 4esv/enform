@@ -101,7 +101,7 @@ test.fails('#256 a submit intent resolves into the routed submission with its as
   ])
 })
 
-test.fails('#256 a claim intent resolves through the shared resolver with the session principal', async () => {
+test('#256 a claim intent resolves through the shared resolver with the session principal', async () => {
   const { resolveClientOperation } = await import('../server/intents.js')
   const state = publishedState()
   const refused = resolveClientOperation(
