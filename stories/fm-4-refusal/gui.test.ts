@@ -86,7 +86,9 @@ test('#106 FM-4 the browser shows a server refusal at its control by path', asyn
     const error = page.locator('[data-error-for="summary"]')
     await error.waitFor({ timeout: 5000 })
     expect(await error.textContent()).toBe('is required')
-    expect(await page.textContent('.status')).toContain('summary is required')
+    // The reason is on the form's status line; the page has other status
+    // lines (the sync marker, the instance status), so the locator names it.
+    await page.locator('.status', { hasText: 'summary is required' }).waitFor({ timeout: 5000 })
 
     // A refused completion appends nothing (FM-4, I1): the server log is
     // unchanged after a bounded wait.
@@ -98,11 +100,11 @@ test('#106 FM-4 the browser shows a server refusal at its control by path', asyn
     await page.fill('[name="summary"]', values.summary)
     await page.click(`[data-outcome="${OUTCOME}"]`)
     await waitForLog(api, before + 1)
-    await page.waitForFunction(
-      () => document.querySelector('.status')?.textContent === 'Step completed',
-      undefined,
-      { timeout: 5000 }
-    )
+    // The outcome is announced in the notification with its label (S16,
+    // VT-3): the page offers Undo there while the engine allows it.
+    const toast = page.locator('[data-toast]')
+    await toast.waitFor({ timeout: 5000 })
+    expect(await toast.textContent()).toMatch(/^(Approved|Rejected|Sent back|Completed: )/)
     expect(await page.locator('[data-error-for]').count()).toBe(0)
   })
 }, 30_000)
@@ -132,11 +134,9 @@ test('#106 FM-4 the holder completes the step and the browser appends the engine
     await page.fill('[name="summary"]', values.summary)
     await page.click(`[data-outcome="${OUTCOME}"]`)
     await waitForLog(api, before + 1)
-    await page.waitForFunction(
-      () => document.querySelector('.status')?.textContent === 'Step completed',
-      undefined,
-      { timeout: 5000 }
-    )
+    const toast = page.locator('[data-toast]')
+    await toast.waitFor({ timeout: 5000 })
+    expect(await toast.textContent()).toMatch(/^(Approved|Rejected|Sent back|Completed: )/)
 
     // Exactly one completion, and it is the engine's operation: the server
     // resolved the step, the transition and the grants (A9, ADR 0010).

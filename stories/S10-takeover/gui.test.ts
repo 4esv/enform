@@ -8,7 +8,7 @@ import { guiGolden, guiSeed } from './scenario.js'
 // marks the takeover as undone. Expected to fail until the status line and
 // the timeline undo exist.
 
-test.fails(
+test(
   '#269 the S10 gui path takes the task over and the previous holder undoes it from the timeline',
   () => proveGuiPath(guiGolden, guiSeed()),
   120_000

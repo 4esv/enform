@@ -165,7 +165,12 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       }
       holder = undefined
       currentStep = stringField(event.payload, 'currentStep')
-      if (currentStep !== undefined) starts.set(currentStep, event.at)
+      if (currentStep !== undefined) {
+        starts.set(currentStep, event.at)
+        // A resubmission enters the step again (WF-3, S11): it waits to be
+        // opened, whatever its earlier round recorded (VT-2).
+        states.delete(currentStep)
+      }
       queue = stringField(event.payload, 'queue')
       continue
     }
@@ -226,7 +231,12 @@ function fold(instance: Instance, definition: FlowDefinition, log: Log): Folded 
       const next = recorded
         ? stringField(event.payload, 'currentStep')
         : nextStep(definition, step)?.key
-      if (next !== undefined) starts.set(next, event.at)
+      if (next !== undefined) {
+        starts.set(next, event.at)
+        // The instance enters the next step now: an earlier round of it, before
+        // a send back, no longer says whether it is opened (VT-2).
+        states.delete(next)
+      }
       currentStep = next
       queue = stringField(event.payload, 'queue')
       continue

@@ -9,7 +9,7 @@ import { guiGolden, guiSeed } from './scenario.js'
 // skipped step, and no note of the people who act on it. Expected to fail
 // until the status line, the release control and the note count exist.
 
-test.fails(
+test(
   '#269 the S14 gui path claims, releases, sends back, and shows the starter the status and the tracker',
   () => proveGuiPath(guiGolden, guiSeed()),
   120_000

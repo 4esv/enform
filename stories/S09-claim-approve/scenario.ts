@@ -271,8 +271,10 @@ export const guiGolden = scenario({
   steps: guiSteps(guiSeed()),
   gui: [
     {
-      // Lee claims the registrar task; the notification offers Undo (S16).
+      // Lee claims the registrar task; the notification offers Undo (S16),
+      // and he takes the claim back from it: two engine steps on one page.
       instance: INSTANCE_ID,
+      steps: 2,
       actions: [
         {
           expectText: {
@@ -282,14 +284,6 @@ export const guiGolden = scenario({
         },
         { click: '[data-claim]' },
         { expectText: { selector: '[data-toast]', text: 'Claimed. Undo.' } },
-      ],
-    },
-    {
-      // Lee takes the claim back from the notification.
-      instance: INSTANCE_ID,
-      actions: [
-        { click: '[data-claim]' },
-        { expectEvents: 1 },
         { click: '[data-toast-undo]' },
         { expectSelector: '[data-tracker-step="registrar"][data-tracker-state="unopened"]' },
       ],

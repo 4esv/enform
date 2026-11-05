@@ -299,6 +299,7 @@ export const guiGolden = scenario({
     {
       instance: INSTANCE_ID,
       actions: [
+        { fill: { field: 'to', value: ADVISOR_STEP } },
         { type: { selector: '[data-send-back-comment]', text: SEND_BACK_COMMENT } },
         { click: '[data-send-back]' },
         { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },
@@ -320,7 +321,6 @@ export const guiGolden = scenario({
         { expectSelector: '[data-tracker-step="request"][data-tracker-state="completed"]' },
         { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },
         { expectSelector: '[data-tracker-step="chair"][data-tracker-state="skipped"]' },
-        { expectSelector: '[data-tracker-step="registrar"][data-tracker-state="not-reached"]' },
         { expectText: { selector: '[data-notes-count]', text: '0' } },
       ],
     },

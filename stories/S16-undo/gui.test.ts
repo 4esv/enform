@@ -9,7 +9,7 @@ import { guiGolden, guiSeed } from './scenario.js'
 // the right request, and Priya records the decision at the final step, after
 // which nothing offers Undo. Expected to fail until the timeline undo exists.
 
-test.fails(
+test(
   '#269 the S16 gui path undoes from the timeline, marks the sent email, and nothing is undoable past the final step',
   () => proveGuiPath(guiGolden, guiSeed()),
   120_000

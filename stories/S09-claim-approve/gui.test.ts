@@ -8,7 +8,7 @@ import { guiGolden, guiSeed } from './scenario.js'
 // approves; the notification offers Undo on the approval too. Expected to
 // fail until the status line, the notification and the timeline undo exist.
 
-test.fails(
+test(
   '#269 the S09 gui path claims, undoes from the notification, claims again and approves',
   () => proveGuiPath(guiGolden, guiSeed()),
   120_000

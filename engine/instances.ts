@@ -57,6 +57,7 @@ import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
 import {
+  DEFAULT_UNDO_HOURS,
   EVENT_UNDONE,
   standingEvents,
   TASK_REASSIGNED,
@@ -173,6 +174,12 @@ export type InstanceView = {
   readonly closedAt?: number
   /** Who withdrew or cancelled the instance (S13, I14); only this actor may undo it (WF-5). */
   readonly closedBy?: ActorId
+  /**
+   * The end of the undo period of the close (WF-5, S13): the close time plus
+   * the flow's `undoHours`, or 24 hours when the flow sets none. The page
+   * offers Undo before that time; the engine refuses after it either way.
+   */
+  readonly undoUntil?: number
   /**
    * Whether the actor may withdraw the open instance (S13, WF-4, AC-5): only
    * its starter, and only while a task is open. The page uses it to show the
@@ -373,6 +380,12 @@ function viewForStep(
     ...(current.closeReason === undefined ? {} : { closeReason: current.closeReason }),
     ...(current.closedAt === undefined ? {} : { closedAt: current.closedAt }),
     ...(current.closedBy === undefined ? {} : { closedBy: current.closedBy }),
+    ...(current.closedAt === undefined
+      ? {}
+      : {
+          undoUntil:
+            current.closedAt + (context.definition.undoHours ?? DEFAULT_UNDO_HOURS) * 3_600_000,
+        }),
     canWithdraw: canWithdraw(actor, current),
     canCancel: canCancel(current, context),
     ...takeover,

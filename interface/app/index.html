@@ -45,7 +45,12 @@
         ...(queue ? { queue: true } : {}),
         ...(changes ? { changes: true } : {}),
         ...(sources
-          ? { clock: sources.clock, ids: sources.ids, instanceIds: sources.instanceIds }
+          ? {
+              clock: sources.clock,
+              now: sources.now,
+              ids: sources.ids,
+              instanceIds: sources.instanceIds,
+            }
           : {}),
       })
     </script>

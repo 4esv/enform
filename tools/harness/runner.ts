@@ -240,10 +240,13 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
         const covering = scenario.steps[Math.min(first, scenario.steps.length - 1)]
         await page.addInitScript(guiSources(covering, first, clock))
         await page.goto(guiUrl(api.port(), flowSlug, gui[i].actor ?? covering.actor, gui[i]))
-        // The app loads the flow and renders the page asynchronously; wait for
-        // a control before the step's actions touch the fields.
-        await page.waitForSelector('button[type="button"], [data-page-ready]', { timeout: 5000 })
         try {
+          // The app loads the flow and renders the page asynchronously; wait
+          // for a control before the step's actions touch the fields. A page
+          // that never renders reports the browser's errors with the failure.
+          await page.waitForSelector('button[type="button"], [data-page-ready]', {
+            timeout: 5000,
+          })
           await performGuiActions(page, context, api, seedLength, gui[i].actions)
           await waitForEvent(api, seedLength + first + covered)
         } catch (error) {
@@ -348,6 +351,9 @@ function guiSources(step: Step, index: number, clock: StepClock): string {
     const clocks = ${clocks}
     return {
       clock: () => clocks[Math.min(bump('__enformClock', -1), clocks.length - 1)],
+      // The step's time without advancing the clock: what the page labels
+      // and compares with, so a read never consumes an operation's time (I6).
+      now: () => clocks[Math.min(read('__enformClock', -1) + 1, clocks.length - 1)],
       ids: () => 'op-' + bump('__enformIds', ${index})${instanceIds}
     }
   })()`

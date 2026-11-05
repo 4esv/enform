@@ -134,14 +134,14 @@ Refs: AS-2, AC-4, RT-2, VT-1, I5, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S10: Take over from a peer on vacation (`takeover`)
 
@@ -149,14 +149,14 @@ Refs: AS-3, WF-5, A1, A2, I14
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S11: Send back for revision (`send-back`)
 
@@ -164,14 +164,14 @@ Refs: WF-2, WF-3, AC-4, SE-2
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S12: Reminders and escalation (`reminders-escalation`)
 
@@ -194,14 +194,14 @@ Refs: WF-4, WF-5, AC-1, AC-5, SE-5, I4
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S14: Find the status of a submission (`find-status`)
 
@@ -209,14 +209,14 @@ Refs: VT-1, VT-2, VT-3, VT-4, I8
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## S15: Investigate a problem (`investigate`)
 
@@ -239,14 +239,14 @@ Refs: WF-5, A2, I4, D6
 
 | Operator | api | cli | dry | gui |
 |---|---|---|---|---|
-| Actor | run | run | run | - |
-| Duplicate | run | run | run | - |
-| Race | run | run | run | - |
-| Fault | run | run | run | - |
-| Offline | run | run | run | - |
-| Clock | run | run | run | - |
-| Data | run | run | run | - |
-| Version | run | run | run | - |
+| Actor | run | run | run | run |
+| Duplicate | run | run | run | run |
+| Race | run | run | run | run |
+| Fault | run | run | run | run |
+| Offline | run | run | run | run |
+| Clock | run | run | run | run |
+| Data | run | run | run | run |
+| Version | run | run | run | run |
 
 ## Skipped cells
 

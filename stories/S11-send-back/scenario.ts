@@ -420,7 +420,8 @@ export const guiGolden = scenario({
       // Jordan may only send back: no Approve control, and the send back with a note.
       instance: INSTANCE_ID,
       actions: [
-        { expectSelector: '[data-outcome="send_back"]' },
+        { expectText: { selector: '[data-outcome-count]', text: '0' } },
+        { fill: { field: 'to', value: ADVISOR_STEP } },
         { type: { selector: '[data-send-back-comment]', text: JORDAN_COMMENT } },
         { click: '[data-send-back]' },
         { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },

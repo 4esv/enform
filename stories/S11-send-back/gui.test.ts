@@ -8,7 +8,7 @@ import { guiGolden, guiSeed } from './scenario.js'
 // approves; Jordan, who may only send back, sends it back with a note.
 // Expected to fail until the note and the controls exist as the path names them.
 
-test.fails(
+test(
   '#269 the S11 gui path sends back with a note, resubmits, approves and sends back again',
   () => proveGuiPath(guiGolden, guiSeed()),
   180_000
