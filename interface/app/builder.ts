@@ -428,6 +428,7 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   section.appendChild(outcomes.row)
 
   section.appendChild(renderStepSettings(step, at))
+  section.appendChild(renderConditions(state, step, at))
   section.appendChild(renderSections(state, step, at))
 
   const fields = document.createElement('div')
@@ -557,6 +558,374 @@ function renderStepSettings(step: BuilderStep, at: (what: string) => string): HT
   })
   box.appendChild(editable.row)
   return box
+}
+
+/**
+ * Render one step's conditions (FM-2, FM-5, WF-1, S05): the skip condition
+ * with its sentence ("Skip this step when Overload credits ≤ 2") and the
+ * rules, each a condition, an effect and the fields or sections it targets.
+ * The visual builder writes the JSON Logic tree; a tree it cannot draw stays
+ * JSON text.
+ */
+function renderConditions(
+  state: BuilderState,
+  step: BuilderStep,
+  at: (what: string) => string
+): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'builder-conditions'
+  const labels = fieldLabels(state.model)
+  const heading = document.createElement('h3')
+  heading.textContent = 'Conditions'
+  box.appendChild(heading)
+
+  const skip = document.createElement('div')
+  skip.className = 'skip-when'
+  skip.dataset.skipWhen = ''
+  const sentence = document.createElement('p')
+  sentence.dataset.skipText = ''
+  sentence.textContent =
+    step.skipWhen === undefined
+      ? 'This step is never skipped.'
+      : `Skip this step when ${conditionText(step.skipWhen, labels)}`
+  skip.appendChild(sentence)
+  if (step.skipWhen === undefined) {
+    const add = document.createElement('button')
+    add.type = 'button'
+    add.textContent = 'Add skip condition'
+    add.dataset.addSkip = ''
+    add.addEventListener('click', () => {
+      step.skipWhen = defaultCondition(labels)
+      render(state)
+    })
+    skip.appendChild(add)
+  } else {
+    skip.appendChild(
+      renderCondition(
+        state,
+        step.skipWhen,
+        (next) => {
+          step.skipWhen = next
+          sentence.textContent = `Skip this step when ${conditionText(next, labels)}`
+        },
+        labels,
+        at('skipWhen')
+      )
+    )
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.textContent = 'Remove skip condition'
+    remove.dataset.removeSkip = ''
+    remove.addEventListener('click', () => {
+      step.skipWhen = undefined
+      render(state)
+    })
+    skip.appendChild(remove)
+  }
+  box.appendChild(skip)
+
+  const rules = document.createElement('div')
+  rules.className = 'rules'
+  rules.dataset.rules = ''
+  const rulesHeading = document.createElement('h4')
+  rulesHeading.textContent = 'Rules'
+  rules.appendChild(rulesHeading)
+  step.rules.forEach((rule, index) => {
+    const row = document.createElement('div')
+    row.className = 'rule'
+    row.dataset.ruleIndex = String(index)
+    const text = document.createElement('p')
+    text.dataset.ruleText = ''
+    const describe = (): void => {
+      text.textContent = `${ruleEffectWords(rule.effect)} ${splitList(rule.targets).join(', ') || '(no target)'} when ${conditionText(rule.when, labels)}`
+    }
+    describe()
+    row.appendChild(text)
+    const effect = selectRow('Effect')
+    effect.input.dataset.ruleEffect = ''
+    effect.input.dataset.field = at(`rule:${index}/effect`)
+    for (const value of RULE_EFFECTS) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = value
+      effect.input.appendChild(option)
+    }
+    effect.input.value = rule.effect
+    effect.input.addEventListener('change', () => {
+      rule.effect = isRuleEffect(effect.input.value) ? effect.input.value : 'show'
+      describe()
+    })
+    row.appendChild(effect.row)
+    const targets = textRow('Fields or sections it applies to (comma-separated keys)')
+    targets.input.value = rule.targets
+    targets.input.dataset.ruleTargets = ''
+    targets.input.dataset.field = at(`rule:${index}/targets`)
+    targets.input.addEventListener('input', () => {
+      rule.targets = targets.input.value
+      describe()
+    })
+    row.appendChild(targets.row)
+    row.appendChild(
+      renderCondition(
+        state,
+        rule.when,
+        (next) => {
+          rule.when = next
+          describe()
+        },
+        labels,
+        at(`rule:${index}/when`)
+      )
+    )
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.textContent = 'Remove rule'
+    remove.dataset.removeRule = String(index)
+    remove.addEventListener('click', () => {
+      step.rules.splice(index, 1)
+      render(state)
+    })
+    row.appendChild(remove)
+    rules.appendChild(row)
+  })
+  const addRule = document.createElement('button')
+  addRule.type = 'button'
+  addRule.textContent = 'Add rule'
+  addRule.dataset.addRule = ''
+  addRule.addEventListener('click', () => {
+    step.rules.push({ when: defaultCondition(labels), effect: 'show', targets: '' })
+    render(state)
+  })
+  rules.appendChild(addRule)
+  box.appendChild(rules)
+  return box
+}
+
+/** The verb of one rule effect in its sentence (FM-2). */
+function ruleEffectWords(effect: RuleEffect): string {
+  const words: Record<RuleEffect, string> = {
+    show: 'Show',
+    hide: 'Hide',
+    collapse: 'Collapse',
+    require: 'Require',
+    lock: 'Lock',
+    skip: 'Skip',
+  }
+  return words[effect]
+}
+
+/** The first comparison a new condition offers: the first field equals nothing yet. */
+function defaultCondition(labels: ReadonlyMap<string, string>): Condition {
+  const first = labels.keys().next()
+  return { kind: 'compare', op: '==', left: first.done ? 'context.step' : first.value, right: '' }
+}
+
+/** The labels of every field of the flow, by key, in definition order (FM-2). */
+function fieldLabels(model: BuilderModel): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>()
+  for (const step of model.steps) {
+    for (const field of step.fields) {
+      if (field.key !== '' && !labels.has(field.key))
+        labels.set(field.key, field.label.trim() === '' ? field.key : field.label)
+    }
+  }
+  return labels
+}
+
+/**
+ * Render one condition (FM-5): its kind, and for a comparison the value, the
+ * operator and the literal; for a group its items; for a negation its item;
+ * for JSON the text. An edit calls back with the condition, so the sentence
+ * above follows each keystroke; a change of kind or shape re-renders.
+ */
+function renderCondition(
+  state: BuilderState,
+  condition: Condition,
+  set: (next: Condition) => void,
+  labels: ReadonlyMap<string, string>,
+  where: string
+): HTMLElement {
+  const box = document.createElement('div')
+  box.className = `condition condition-${condition.kind}`
+  box.dataset.condition = condition.kind
+
+  const kind = selectRow('Condition')
+  kind.input.dataset.conditionKind = ''
+  kind.input.dataset.field = `${where}/kind`
+  const kinds: readonly [string, string][] = [
+    ['compare', 'compares a value'],
+    ['and', 'all of'],
+    ['or', 'any of'],
+    ['not', 'not'],
+    ['json', 'JSON Logic'],
+  ]
+  for (const [value, text] of kinds) {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = text
+    kind.input.appendChild(option)
+  }
+  kind.input.value = condition.kind === 'group' ? condition.op : condition.kind
+  kind.input.addEventListener('change', () => {
+    set(conditionAs(kind.input.value, condition, labels))
+    render(state)
+  })
+  box.appendChild(kind.row)
+
+  if (condition.kind === 'compare') {
+    const left = selectRow('Value')
+    left.input.dataset.conditionLeft = ''
+    left.input.dataset.field = `${where}/left`
+    const values: [string, string][] = [...labels.entries()]
+    values.push(['context.step', 'Step'], ['context.user', 'User'])
+    if (!values.some(([key]) => key === condition.left))
+      values.push([condition.left, condition.left])
+    for (const [key, text] of values) {
+      const option = document.createElement('option')
+      option.value = key
+      option.textContent = text
+      left.input.appendChild(option)
+    }
+    left.input.value = condition.left
+    left.input.addEventListener('change', () => {
+      condition.left = left.input.value
+      set(condition)
+    })
+    box.appendChild(left.row)
+
+    const op = selectRow('Comparison')
+    op.input.dataset.conditionOp = ''
+    op.input.dataset.field = `${where}/op`
+    for (const value of COMPARE_OPS) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = COMPARE_SYMBOLS[value]
+      op.input.appendChild(option)
+    }
+    op.input.value = condition.op
+    op.input.addEventListener('change', () => {
+      const next = op.input.value
+      if (!isCompareOp(next)) return
+      condition.op = next
+      condition.right = literalOf(right.input.value, next)
+      set(condition)
+    })
+    box.appendChild(op.row)
+
+    const right = textRow(condition.op === 'in' ? 'One of (comma-separated)' : 'Compared with')
+    right.input.value = literalText(condition.right)
+    right.input.dataset.conditionRight = ''
+    right.input.dataset.field = `${where}/right`
+    right.input.addEventListener('input', () => {
+      condition.right = literalOf(right.input.value, condition.op)
+      set(condition)
+    })
+    box.appendChild(right.row)
+  } else if (condition.kind === 'group') {
+    const items = document.createElement('div')
+    items.className = 'condition-items'
+    condition.items.forEach((item, index) => {
+      const row = document.createElement('div')
+      row.className = 'condition-item'
+      row.dataset.conditionItem = String(index)
+      row.appendChild(
+        renderCondition(
+          state,
+          item,
+          (next) => {
+            condition.items[index] = next
+            set(condition)
+          },
+          labels,
+          `${where}/${index}`
+        )
+      )
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.textContent = 'Remove'
+      remove.dataset.removeCondition = String(index)
+      remove.disabled = condition.items.length <= 1
+      remove.addEventListener('click', () => {
+        condition.items.splice(index, 1)
+        set(condition)
+        render(state)
+      })
+      row.appendChild(remove)
+      items.appendChild(row)
+    })
+    box.appendChild(items)
+    const add = document.createElement('button')
+    add.type = 'button'
+    add.textContent = 'Add condition'
+    add.dataset.addCondition = ''
+    add.addEventListener('click', () => {
+      condition.items.push(defaultCondition(labels))
+      set(condition)
+      render(state)
+    })
+    box.appendChild(add)
+  } else if (condition.kind === 'not') {
+    box.appendChild(
+      renderCondition(
+        state,
+        condition.item,
+        (next) => {
+          condition.item = next
+          set(condition)
+        },
+        labels,
+        `${where}/not`
+      )
+    )
+  } else {
+    const json = document.createElement('label')
+    json.className = 'builder-field-row'
+    const span = document.createElement('span')
+    span.textContent = 'JSON Logic'
+    json.appendChild(span)
+    const text = document.createElement('textarea')
+    text.value = condition.text
+    text.dataset.conditionJson = ''
+    text.dataset.field = `${where}/json`
+    text.addEventListener('input', () => {
+      condition.text = text.value
+      set(condition)
+    })
+    json.appendChild(text)
+    box.appendChild(json)
+  }
+  return box
+}
+
+/** The condition of another kind that keeps as much of the current one as the kind allows. */
+function conditionAs(
+  kind: string,
+  current: Condition,
+  labels: ReadonlyMap<string, string>
+): Condition {
+  if (kind === 'and' || kind === 'or') {
+    if (current.kind === 'group') return { kind: 'group', op: kind, items: current.items }
+    return { kind: 'group', op: kind, items: [current] }
+  }
+  if (kind === 'not') return { kind: 'not', item: current }
+  if (kind === 'json') return { kind: 'json', text: JSON.stringify(treeOf(current)) }
+  return current.kind === 'compare' ? current : defaultCondition(labels)
+}
+
+/**
+ * The literal a comparison input names (FM-5): a number when it reads as one,
+ * a boolean for true and false, the text otherwise; `in` takes a list.
+ */
+function literalOf(text: string, op: CompareOp): Literal {
+  if (op === 'in') return splitList(text).map(scalarOf)
+  return scalarOf(text.trim())
+}
+
+function scalarOf(text: string): string | number | boolean {
+  if (text === 'true') return true
+  if (text === 'false') return false
+  if (/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(text)) return Number(text)
+  return text
 }
 
 /**
