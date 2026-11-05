@@ -319,10 +319,12 @@ test('#234 DE-4 the demo people use the flow and the in-flight instances', async
     'GET the demo flow as Sam'
   )
   expect(published.slug).toBe(slug)
+  // The request form is the first step (ADR 0014); the chair step follows the
+  // advisor and is skipped for a small overload (S05).
   expect(published.definition.steps.map((step) => step.key)).toEqual([
-    'chair',
     'request',
     'advisor',
+    'chair',
     'registrar',
   ])
 
@@ -330,11 +332,14 @@ test('#234 DE-4 the demo people use the flow and the in-flight instances', async
   if (first === undefined) throw new Error('the seed has no request instance')
   const view = await json<{
     instanceId: string
-    status: { currentStep?: string }
+    status: { currentStep?: string; state: string }
     values: Record<string, unknown>
   }>(await userFetch(samToken, `/api/v1/instances/${first.id}`), 'GET the request instance as Sam')
   expect(view.instanceId).toBe(first.id)
-  expect(view.status.currentStep, 'the first instance waits unclaimed at request').toBe('request')
+  expect(view.status.currentStep, 'the first instance is a draft on the request form').toBe(
+    'request'
+  )
+  expect(view.status.state).toBe('draft')
   expect(view.values.credits).toBe(2)
 
   const okaforFlows = await json<readonly FlowSummary[]>(

@@ -331,35 +331,34 @@ test('#232 the requester starts and submits without a flow scope and the approve
   ])
 
   const first = await jsonAs<InstanceView>(requester.token, `/api/v1/instances/${INSTANCE_ID}`)
-  expect(first.status, 'the start put the requester on step 1').toMatchObject({
+  expect(first.status, 'the start put the requester on step 1 as a draft').toMatchObject({
     step: 1,
     totalSteps: 2,
     currentStep: 'request',
-    state: 'waiting',
+    state: 'draft',
   })
   expect(first.values, 'the start records the requester value').toEqual({
     summary: 'Please approve',
   })
 
-  await postOperation(requester.token, requester.id, {
-    type: 'step.claimed@1',
-    payload: { instanceId: INSTANCE_ID, expectedVersion: first.version },
-  })
-  const heldRequest = await jsonAs<InstanceView>(
-    requester.token,
-    `/api/v1/instances/${INSTANCE_ID}`
-  )
-  expect(heldRequest.status.holder, 'the requester holds the request').toBe(requester.id)
+  // A draft is private to its starter (ADR 0014, D1): the approver, who is
+  // an assignee of the later step, reads nothing until the submit.
+  const privateDraft = await fetchAs(approver.token, `/api/v1/instances/${INSTANCE_ID}`)
+  expect(privateDraft.status, await privateDraft.text()).toBe(403)
 
-  await postOperation(requester.token, requester.id, {
-    type: 'step.completed@1',
+  // The requester submits the draft with `instance.start` alone (ADR 0014):
+  // the engine validates the request form, routes to the approval and
+  // records the approver's task-assigned email.
+  const submitted = await postOperation(requester.token, requester.id, {
+    type: 'instance.submitted@1',
     payload: {
       instanceId: INSTANCE_ID,
-      version: heldRequest.version,
-      outcome: 'submit',
+      version: first.version,
       values: { summary: 'Please approve' },
     },
   })
+  expect(submitted.type).toBe('instance.submitted@1')
+  expect(submitted.payload).toMatchObject({ step: 'request', currentStep: 'approve' })
   const atApproval = await jsonAs<InstanceView>(requester.token, `/api/v1/instances/${INSTANCE_ID}`)
   expect(atApproval.status, 'the submitted request moved to the approval').toMatchObject({
     step: 2,

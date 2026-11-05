@@ -112,8 +112,7 @@ let setupError: unknown
 /** The state that the journey accumulates between tests. */
 type Journey = {
   requestStartId: string
-  claimRequestId: string
-  completeRequestId: string
+  submitRequestId: string
   staleCompleteId: string
   claimApproveId: string
   staleClaimId: string
@@ -171,8 +170,7 @@ beforeAll(async () => {
     }
     journey = {
       requestStartId: '',
-      claimRequestId: '',
-      completeRequestId: '',
+      submitRequestId: '',
       staleCompleteId: '',
       claimApproveId: '',
       staleClaimId: '',
@@ -212,7 +210,6 @@ function twoStep(adminId: string): FlowDefinition {
         targets: [{ starter: 'starter' }],
         fields: [{ key: 'summary', control: 'text' }],
         editable: ['summary'],
-        outcomes: ['submit'],
       },
       {
         key: 'approve',
@@ -262,7 +259,7 @@ function eventCount(): number {
 }
 
 /**
- * Append the two outcome grants of the journey. This lane has no grant
+ * Append the outcome grant of the journey. This lane has no grant
  * configuration endpoint (issue #222), so the fixture appends them the way
  * `enform init` appends the administrator's grants: through the engine's
  * `addGrant` and the store's `appendOperation`. The journey itself is HTTP
@@ -311,7 +308,7 @@ test('#222 WF-1 an administrator creates and publishes a two-step flow', async (
   expect(published.version, 'the first publication is version 1').toBe(1)
   expect(published.definition).toEqual(definition)
 
-  await grantOutcomes(SLUG, adminId, ['submit', 'approve'])
+  await grantOutcomes(SLUG, adminId, ['approve'])
 })
 
 test('#222 DX-1 I8 a start intent records the session principal, the flow and the route', async () => {
@@ -336,23 +333,25 @@ test('#222 DX-1 I8 a start intent records the session principal, the flow and th
     { step: 'request', target: { starter: 'starter' }, members: [adminId] },
   ])
 
-  // The start puts the request in the starter's inbox before anybody claims
-  // it: `started` tracks the instance, `available` offers the unclaimed task,
-  // and `my` stays empty (VT-1, VT-2, AS-2).
+  expect(event.payload.skipped, 'a start routes nothing').toEqual([])
+
+  // The start is a private draft (ADR 0014): `started` tracks it as a draft
+  // for its starter, no task exists yet, so `available` and `my` stay empty
+  // (VT-1, VT-2, VT-4).
   const started = await inbox('started')
   const startedItem = started.find((item) => item.instanceId === INSTANCE_ID)
-  expect(startedItem, 'the started tab holds the new instance').toMatchObject({
+  expect(startedItem, 'the started tab holds the new draft').toMatchObject({
     flowSlug: SLUG,
     step: 'request',
-    state: 'unopened',
+    state: 'draft',
   })
-  expect(startedItem?.holder, 'nobody holds the task yet').toBeUndefined()
+  expect(startedItem?.holder, 'nobody holds a draft').toBeUndefined()
   expect(startedItem?.dueAt, 'the step sets no deadline').toBeUndefined()
   expect(startedItem?.lastActivityAt, 'the start is the last activity').toBeGreaterThan(0)
   expect(
-    (await inbox('available')).find((item) => item.instanceId === INSTANCE_ID),
-    'the unclaimed request is available to its assignee'
-  ).toMatchObject({ step: 'request', state: 'unopened' })
+    (await inbox('available')).some((item) => item.instanceId === INSTANCE_ID),
+    'a draft is not available to anybody'
+  ).toBe(false)
   expect(
     (await inbox('my')).some((item) => item.instanceId === INSTANCE_ID),
     'my tasks is empty before a claim'
@@ -370,7 +369,7 @@ test('#222 FM-7 the instance read shows the request step, the values and the ver
   expect(view.instanceId).toBe(INSTANCE_ID)
   expect(view.version, 'the start is version 0').toBe(0)
   expect(view.status.currentStep).toBe('request')
-  expect(view.status.state).toBe('waiting')
+  expect(view.status.state, 'the start is a draft').toBe('draft')
   expect(view.status.step).toBe(1)
   expect(view.status.totalSteps).toBe(2)
   expect(view.visible).toEqual(['summary'])
@@ -378,62 +377,57 @@ test('#222 FM-7 the instance read shows the request step, the values and the ver
   expect(view.values).toEqual({ summary: 'hello' })
 })
 
-test('#222 AS-2 AC-4 I5 claim and complete the request step', async () => {
+test('#222 ADR 0014 FM-4 the starter submits the draft and the approval becomes available', async () => {
   const { adminId } = requireSetup()
   const ids = requireJourney()
-  ids.claimRequestId = randomUUID()
-  const claimed = await postOperation({
-    id: ids.claimRequestId,
-    type: 'step.claimed@1',
+
+  // Nobody claims a draft, not even its starter (ADR 0014): the engine
+  // refuses and appends nothing.
+  const before = eventCount()
+  const claimDraft = await adminFetch('/api/v1/operations', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: randomUUID(),
+      type: 'step.claimed@1',
+      at: Date.now(),
+      actor: 'user:someone-else',
+      payload: { instanceId: INSTANCE_ID, expectedVersion: 0 },
+    }),
+  })
+  const draftRefusal = (await claimDraft.json()) as { error: string }
+  expect(claimDraft.status, draftRefusal.error).toBe(409)
+  expect(draftRefusal.error).toMatch(/draft/)
+  expect(eventCount(), 'a refused claim appends nothing').toBe(before)
+
+  // The submit completes the request form with the values it captured and
+  // routes the instance to the approval step (ADR 0014, FM-4, FM-7, WF-1).
+  ids.submitRequestId = randomUUID()
+  const submitted = await postOperation({
+    id: ids.submitRequestId,
+    type: 'instance.submitted@1',
     at: Date.now(),
     actor: 'user:someone-else',
-    payload: { instanceId: INSTANCE_ID, expectedVersion: 0 },
+    payload: { instanceId: INSTANCE_ID, version: 0, values: { summary: 'hello again' } },
   })
-  expect(claimed.type, 'the version is not recorded on the claim').toBe('step.claimed@1')
-  expect(claimed.payload).toEqual({ instanceId: INSTANCE_ID, step: 'request', holder: adminId })
-  expect(claimed.actor).toBe(adminId)
+  expect(submitted.type).toBe('instance.submitted@1')
+  expect(submitted.payload.step, 'the engine decided the step').toBe('request')
+  expect(submitted.payload.currentStep, 'the engine decided the route').toBe('approve')
+  expect(submitted.payload.values).toEqual({ summary: 'hello again' })
+  expect(submitted.payload.assignees).toEqual([
+    { step: 'approve', target: { user: adminId }, members: [adminId] },
+  ])
+  expect(submitted.actor).toBe(adminId)
 
-  const afterClaim = await adminJson<InstanceView>(`/api/v1/instances/${INSTANCE_ID}`)
-  expect(afterClaim.version, 'the claim advanced the version').toBe(1)
-  expect(afterClaim.status.state).toBe('in-progress')
-  expect(afterClaim.status.holder).toBe(adminId)
-
-  // A claimed task moves from `available` to `my` (VT-1, AS-2).
-  expect(
-    (await inbox('my')).find((item) => item.instanceId === INSTANCE_ID),
-    'the holder sees the request in my tasks'
-  ).toMatchObject({ step: 'request', state: 'opened', holder: adminId })
-  expect(
-    (await inbox('available')).some((item) => item.instanceId === INSTANCE_ID),
-    'a claimed task is not available'
-  ).toBe(false)
-
-  ids.completeRequestId = randomUUID()
-  const completed = await postOperation({
-    id: ids.completeRequestId,
-    type: 'step.completed@1',
-    at: Date.now(),
-    actor: 'user:someone-else',
-    payload: {
-      instanceId: INSTANCE_ID,
-      version: 1,
-      outcome: 'submit',
-      values: { summary: 'hello again' },
-    },
-  })
-  expect(completed.type).toBe('step.completed@1')
-  expect(completed.payload.step, 'the engine decided the step').toBe('request')
-  expect(completed.payload.outcome).toBe('submit')
-  expect(completed.payload.values).toEqual({ summary: 'hello again' })
-  expect(completed.actor).toBe(adminId)
-
-  const afterComplete = await adminJson<InstanceView>(`/api/v1/instances/${INSTANCE_ID}`)
-  expect(afterComplete.version, 'the completion advanced the version').toBe(2)
-  expect(afterComplete.status.currentStep).toBe('approve')
-  expect(afterComplete.status.state).toBe('waiting')
+  const afterSubmit = await adminJson<InstanceView>(`/api/v1/instances/${INSTANCE_ID}`)
+  expect(afterSubmit.version, 'the submit advanced the version').toBe(1)
+  expect(afterSubmit.status.currentStep).toBe('approve')
+  expect(afterSubmit.status.state).toBe('waiting')
+  // The approval step makes no field visible, so the read restricts the
+  // values to none (FM-3); the submit event above recorded them (FM-7).
+  expect(afterSubmit.values).toEqual({})
 
   // The request completed, so the approval step is the one in the inbox: it is
-  // available to its assignee and no longer in my tasks (VT-1, VT-2).
+  // available to its assignee and not in my tasks (VT-1, VT-2).
   const available = await inbox('available')
   const approval = available.find((item) => item.instanceId === INSTANCE_ID)
   expect(approval, 'the approval step is available').toMatchObject({
@@ -443,8 +437,23 @@ test('#222 AS-2 AC-4 I5 claim and complete the request step', async () => {
   expect(approval?.holder).toBeUndefined()
   expect(
     (await inbox('my')).some((item) => item.instanceId === INSTANCE_ID),
-    'the completed request left my tasks'
+    'nothing is held yet'
   ).toBe(false)
+
+  // A second submit of a submitted instance is refused: it is no draft.
+  const again = await adminFetch('/api/v1/operations', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: randomUUID(),
+      type: 'instance.submitted@1',
+      at: Date.now(),
+      actor: 'user:someone-else',
+      payload: { instanceId: INSTANCE_ID, version: 1, values: {} },
+    }),
+  })
+  const againRefusal = (await again.json()) as { error: string }
+  expect(again.status, againRefusal.error).toBe(409)
+  expect(againRefusal.error).toMatch(/not a draft/)
 })
 
 test('#222 I5 a stale completion answers 409 and appends nothing', async () => {
@@ -460,9 +469,10 @@ test('#222 I5 a stale completion answers 409 and appends nothing', async () => {
       actor: 'user:someone-else',
       payload: {
         instanceId: INSTANCE_ID,
-        // The request step was completed at version 1; the instance is at 2.
-        version: 1,
-        outcome: 'submit',
+        // The submit advanced the instance to version 1; a view of version 0
+        // is stale.
+        version: 0,
+        outcome: 'approve',
         values: {},
       },
     }),
@@ -482,7 +492,7 @@ test('#222 AS-2 I5 claim and complete the approval step', async () => {
     type: 'step.claimed@1',
     at: Date.now(),
     actor: 'user:someone-else',
-    payload: { instanceId: INSTANCE_ID, expectedVersion: 2 },
+    payload: { instanceId: INSTANCE_ID, expectedVersion: 1 },
   })
   expect(claimed.payload).toEqual({ instanceId: INSTANCE_ID, step: 'approve', holder: adminId })
 
@@ -508,7 +518,7 @@ test('#222 AS-2 I5 claim and complete the approval step', async () => {
       type: 'step.claimed@1',
       at: Date.now(),
       actor: 'user:someone-else',
-      payload: { instanceId: INSTANCE_ID, expectedVersion: 2 },
+      payload: { instanceId: INSTANCE_ID, expectedVersion: 1 },
     }),
   })
   const refusal = (await stale.json()) as { error: string }
@@ -523,16 +533,17 @@ test('#222 AS-2 I5 claim and complete the approval step', async () => {
     actor: 'user:someone-else',
     payload: {
       instanceId: INSTANCE_ID,
-      version: 3,
+      version: 2,
       outcome: 'approve',
       values: {},
     },
   })
   expect(completed.payload.step).toBe('approve')
   expect(completed.payload.outcome).toBe('approve')
+  expect(completed.payload.done, 'the last step completes the instance').toBe(true)
 
   const done = await adminJson<InstanceView>(`/api/v1/instances/${INSTANCE_ID}`)
-  expect(done.version, 'the final completion advanced the version').toBe(4)
+  expect(done.version, 'the final completion advanced the version').toBe(3)
   expect(done.status.state, 'the last step completes the instance').toBe('done')
   expect(done.status.currentStep, 'a done instance has no current step').toBeUndefined()
 
@@ -550,7 +561,7 @@ test('#222 I4 the log and the state hold the journey in sequence order', async (
   const log = await adminJson<readonly Event[]>('/api/v1/log')
   const state = await adminJson<StateView>('/api/v1/state')
 
-  const operationIds = [ids.requestStartId, ids.claimRequestId, ids.completeRequestId]
+  const operationIds = [ids.requestStartId, ids.submitRequestId, ids.claimApproveId]
   let previous = 0
   for (const operationId of operationIds) {
     const event = log.find((entry) => entry.operationId === operationId)
@@ -584,13 +595,14 @@ test('#222 I4 a second instance never appears in the first instance read', async
   const second = await adminJson<InstanceView>(`/api/v1/instances/${SECOND_INSTANCE_ID}`)
   expect(second.instanceId).toBe(SECOND_INSTANCE_ID)
   expect(second.status.currentStep).toBe('request')
+  expect(second.status.state, 'the second instance is a draft').toBe('draft')
   expect(second.values).toEqual({ summary: 'second' })
 
   // The second instance is the one the started tab now shows; the first is
   // done and absent (VT-1).
   const started = await inbox('started')
   const secondItem = started.find((item) => item.instanceId === SECOND_INSTANCE_ID)
-  expect(secondItem, 'the second instance is in the started tab').toBeDefined()
+  expect(secondItem, 'the second instance is in the started tab').toMatchObject({ state: 'draft' })
   expect(
     secondItem?.dueAt,
     'the request step sets no deadline, so it lends no timer'

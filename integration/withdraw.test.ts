@@ -286,11 +286,13 @@ test('#238 S13 Sam withdraws and undoes, Priya cancels and undoes, and the log k
   // close marker is gone, and the inbox shows the instance again (WF-5, I4).
   await samPage.click('[data-undo]')
   await samPage.waitForFunction(
-    () => document.querySelector('.instance-status')?.textContent?.includes('Step 2 of 4'),
+    () => document.querySelector('.instance-status')?.textContent?.includes('Step 1 of 4'),
     undefined,
     { timeout: 30_000 }
   )
-  await samPage.locator('[data-claim]').waitFor({ timeout: 30_000 })
+  // The reopened request is Sam's draft again (ADR 0014): the page offers
+  // the submit, not a claim.
+  await samPage.locator('[data-submit]').waitFor({ timeout: 30_000 })
   expect(await samPage.locator('[data-close]').count(), 'the close marker is gone').toBe(0)
   expect(await inboxIds(samToken, 'started'), 'the reopened request is back').toContain(request.id)
 

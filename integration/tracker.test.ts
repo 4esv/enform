@@ -15,7 +15,11 @@ import { type EnformProcess, startEnform } from './server.js'
 // holder of the open step, the condition that skipped a step and the comment
 // that sent one back. The API reads it from the log (I4), a send back moves it,
 // and `enform admin rebuild` reproduces it from the same events. Chromium shows
-// the tracker on the demo request instance with the skipped condition text.
+// the tracker on the demo request draft and the skipped condition text on the
+// registrar instance. A start is a private draft on the request form and the
+// submit routes it (ADR 0014), so the request form completes at the submit and
+// the chair step, which follows the advisor, is skipped by the advisor's
+// completion.
 
 const RUN = randomUUID().slice(0, 8)
 const ADMIN_EMAIL = `tracker-admin-${RUN}@test.local`
@@ -243,20 +247,44 @@ async function signIn(
   await page.locator('.app-header').waitFor({ timeout: 30_000 })
 }
 
-test('#244 VT-2 the request instance shows the skipped chair and the unopened request', async () => {
+test('#244 VT-2 the request draft shows the unopened request form and the registrar instance the skipped chair', async () => {
   const { config } = requireSetup()
   const sam = castMember('starter')
   const request = demoInstance((instance) => instance.step === 'request')
+  const registrar = demoInstance((instance) => instance.step === 'registrar')
   const token = await passwordToken(config, sam.email, sam.password)
-  const view = await readAs(token, request.id)
-  const startedAt = eventAt(await readLogAs(token), 'instance.started@1', request.id)
+  const log = await readLogAs(token)
 
+  // The draft sits on the request form and routes nothing yet (ADR 0014).
+  const view = await readAs(token, request.id)
+  const startedAt = eventAt(log, 'instance.started@1', request.id)
   expect(view.status.currentStep).toBe('request')
   expect(view.tracker).toEqual([
-    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
     { key: 'request', state: 'unopened', startAt: startedAt },
     { key: 'advisor', state: 'not-reached' },
+    { key: 'chair', state: 'not-reached' },
     { key: 'registrar', state: 'not-reached' },
+  ])
+
+  // The advisor's completion skipped the chair step for two credits (WF-1,
+  // S05): the registrar instance shows the condition and the unopened
+  // registrar task.
+  const routed = await readAs(token, registrar.id)
+  const routedStartedAt = eventAt(log, 'instance.started@1', registrar.id)
+  const submittedAt = eventAt(log, 'instance.submitted@1', registrar.id)
+  const advisorAt = eventAt(log, 'step.completed@1', registrar.id)
+  expect(routed.status.currentStep).toBe('registrar')
+  expect(routed.tracker).toEqual([
+    { key: 'request', state: 'completed', startAt: routedStartedAt, lastActivityAt: submittedAt },
+    { key: 'advisor', state: 'completed', startAt: submittedAt, lastActivityAt: advisorAt },
+    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
+    {
+      key: 'registrar',
+      state: 'unopened',
+      startAt: advisorAt,
+      // The demo registrar step sets a two minute deadline (S12, SE-4).
+      dueAt: advisorAt + 2 * 60_000,
+    },
   ])
 }, 180_000)
 
@@ -277,8 +305,8 @@ test('#244 VT-2 the demo request instance shows the tracker in Chromium', async 
       .locator('[data-tracker-state]')
       .evaluateAll((items) => items.map((item) => item.getAttribute('data-tracker-state')))
     expect(states, 'each step shows its VT-2 state in definition order').toEqual([
-      'skipped',
       'unopened',
+      'not-reached',
       'not-reached',
       'not-reached',
     ])
@@ -289,6 +317,17 @@ test('#244 VT-2 the demo request instance shows the tracker in Chromium', async 
       await page.locator('[data-tracker-step="request"]').getAttribute('data-current'),
       'the current step is marked'
     ).toBe('')
+
+    // The registrar instance shows the chair step the advisor's completion
+    // skipped, with its condition (S05, VT-2).
+    const registrar = demoInstance((instance) => instance.step === 'registrar')
+    await page.goto(
+      `${publicUrl}/?flow=${encodeURIComponent(flowSlug())}&instance=${encodeURIComponent(registrar.id)}`
+    )
+    await page.locator('[data-tracker]').waitFor({ timeout: 30_000 })
+    expect(
+      await page.locator('[data-tracker-step="chair"]').getAttribute('data-tracker-state')
+    ).toBe('skipped')
     const reason = await page
       .locator('[data-tracker-step="chair"] .tracker-condition')
       .textContent()
@@ -307,12 +346,14 @@ test('#244 VT-2 the advisor instance shows the request completed and the advisor
   const view = await readAs(token, advisor.id)
   const log = await readLogAs(token)
   const startedAt = eventAt(log, 'instance.started@1', advisor.id)
-  const completedAt = eventAt(log, 'step.completed@1', advisor.id)
+  const submittedAt = eventAt(log, 'instance.submitted@1', advisor.id)
 
+  // The submit completed the request form and entered the advisor step (ADR
+  // 0014); the chair step follows the advisor, so nothing skipped it yet.
   expect(view.tracker).toEqual([
-    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
-    { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: completedAt },
-    { key: 'advisor', state: 'unopened', startAt: completedAt },
+    { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: submittedAt },
+    { key: 'advisor', state: 'unopened', startAt: submittedAt },
+    { key: 'chair', state: 'not-reached' },
     { key: 'registrar', state: 'not-reached' },
   ])
 }, 180_000)
@@ -325,18 +366,21 @@ test('#244 VT-2 the done instance shows every step completed or skipped', async 
   const view = await readAs(token, done.id)
   const log = await readLogAs(token)
   const startedAt = eventAt(log, 'instance.started@1', done.id)
+  const requestAt = eventAt(log, 'instance.submitted@1', done.id)
   const completed = log.filter(
     (event) => event.type === 'step.completed@1' && event.payload.instanceId === done.id
   )
-  const [requestAt, advisorAt, registrarAt] = completed.map((event) => event.at)
-  if (requestAt === undefined || advisorAt === undefined || registrarAt === undefined) {
-    throw new Error('the done instance has no three completions')
+  const [advisorAt, registrarAt] = completed.map((event) => event.at)
+  if (advisorAt === undefined || registrarAt === undefined) {
+    throw new Error('the done instance has no two completions')
   }
 
+  // The submit completed the request form, the advisor's completion skipped
+  // the chair step, and the registrar's completion finished the instance.
   expect(view.tracker).toEqual([
-    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
     { key: 'request', state: 'completed', startAt: startedAt, lastActivityAt: requestAt },
     { key: 'advisor', state: 'completed', startAt: requestAt, lastActivityAt: advisorAt },
+    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
     {
       key: 'registrar',
       state: 'completed',
@@ -382,15 +426,16 @@ test('#244 VT-2 a send back moves the tracker to the target step with the commen
   })
   expect(sent.status, await sent.text()).toBe(201)
 
+  // A send back to the request form makes the instance a draft again (ADR
+  // 0014), so its starter reads it.
   const moved = await readAs(await passwordToken(config, sam.email, sam.password), instance.id)
   const log = await readLogAs(token)
-  const completedAt = eventAt(log, 'step.completed@1', instance.id)
+  const submittedAt = eventAt(log, 'instance.submitted@1', instance.id)
   const sentBackAt = eventAt(log, 'step.sent-back@1', instance.id)
   expect(moved.status.currentStep).toBe('request')
   // The sending step keeps the state the log records for it: Okafor claimed
   // the advisor step and the send back records no completion for it.
   expect(moved.tracker).toEqual([
-    { key: 'chair', state: 'skipped', condition: CHAIR_CONDITION },
     {
       key: 'request',
       state: 'sent-back',
@@ -398,7 +443,8 @@ test('#244 VT-2 a send back moves the tracker to the target step with the commen
       startAt: sentBackAt,
       lastActivityAt: sentBackAt,
     },
-    { key: 'advisor', state: 'opened', startAt: completedAt, lastActivityAt: sentBackAt },
+    { key: 'advisor', state: 'opened', startAt: submittedAt, lastActivityAt: sentBackAt },
+    { key: 'chair', state: 'not-reached' },
     { key: 'registrar', state: 'not-reached' },
   ])
   sentBackTracker = moved.tracker
