@@ -262,6 +262,9 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     if (auth === undefined) return unauthorized(c)
     return c.json({
       principal: auth.principal,
+      // The grants that apply to the principal (AC-1, DF-5, #264), so the
+      // builder knows which controls the server would refuse (I8).
+      grants: await grantsOfPrincipal(pool, auth.principal.id),
       expiresAt: auth.session.expiresAt,
       csrfToken: auth.session.csrfToken,
     })

@@ -2583,10 +2583,19 @@ components:
         and the cookie stops authenticating at once (ID-5). The browser and the
         CLI read the same session: one principal and one session row
         (ADR 0012).
-      required: [principal, expiresAt, csrfToken]
+      required: [principal, grants, expiresAt, csrfToken]
       properties:
         principal:
           $ref: '#/components/schemas/Principal'
+        grants:
+          type: array
+          description: >-
+            The grants that apply to the principal (AC-1, DF-5, #264), as the
+            server authorizes with them. The builder reads them to disable the
+            structural controls for a person who holds `flow.edit` and not
+            `flow.build`; the engine authorizes every write again (I8).
+          items:
+            $ref: '#/components/schemas/Grant'
         expiresAt:
           type: number
           description: >-
