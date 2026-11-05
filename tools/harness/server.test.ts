@@ -398,13 +398,17 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
   )
 })
 
-test.fails('#256 I1 a retry of an applied intent answers the applied event and resolves nothing again', async () => {
+test('#256 I1 a retry of an applied intent answers the applied event and resolves nothing again', async () => {
   // A client whose first answer was lost sends the same intent again (I1).
   // The second delivery is the same change: the server answers the event
   // the log holds, with the same seq, and the log does not grow. A claim
   // resolved a second time would be refused as already held, so the server
   // must not resolve it again.
-  const api = startApi(flowState(), { resolve, bootstrap: samGrants })
+  const api = startApi(flowState(), {
+    resolve,
+    bootstrap: samGrants,
+    membership: { 'user:sam': ['All-Students'] },
+  })
   const server = api.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
@@ -422,16 +426,21 @@ test.fails('#256 I1 a retry of an applied intent answers the applied event and r
       actor: 'user:sam',
       payload: { flow: SLUG, instanceId: INSTANCE_ID, values: {} },
     }
-    expect((await post(start)).status).toBe(201)
+    const started = await post(start)
+    expect(started.status, await started.clone().text()).toBe(201)
     const submit = {
       id: 'submit-1',
       type: 'instance.submitted@1',
       at: 2,
       actor: 'user:sam',
-      payload: { instanceId: INSTANCE_ID, version: 0, values: { summary: 'hello' } },
+      payload: {
+        instanceId: INSTANCE_ID,
+        version: 0,
+        values: { summary: 'hello', urgent: false },
+      },
     }
     const first = await post(submit)
-    expect(first.status).toBe(201)
+    expect(first.status, await first.clone().text()).toBe(201)
     const event = (await first.json()) as { seq: number }
     const before = api.state().log.length
     const again = await post(submit)

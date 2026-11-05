@@ -345,6 +345,14 @@ export function startApi(state: State = emptyState, options: ApiOptions = {}): A
         // (I6). An operation that a scenario declares resolved keeps the raw
         // append path.
         if (isRecord(parsed) && isClientIntent(parsed)) {
+          // A retry of an applied intent is the same change (I1): the server
+          // answers the event the log holds and resolves nothing again, as a
+          // client whose first answer was lost expects.
+          const applied =
+            typeof parsed.id === 'string'
+              ? current.log.find((event) => event.operationId === parsed.id)
+              : undefined
+          if (applied !== undefined) return json(res, 201, applied)
           const actor = typeof parsed.actor === 'string' ? parsed.actor : ''
           const at = typeof parsed.at === 'number' ? parsed.at : 0
           const groups = groupsOf(options.membership, actor)

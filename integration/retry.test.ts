@@ -107,7 +107,7 @@ function requireSetup(): Setup {
   return setup
 }
 
-test.fails('#256 I1 a retry of an applied intent answers the applied event and the log does not grow', async () => {
+test('#256 I1 a retry of an applied intent answers the applied event and the log does not grow', async () => {
   const { config, seed, publicUrl } = requireSetup()
   const sam = seed.users?.find((user) => user.role === 'starter')
   const slug = seed.flow?.slug
@@ -141,7 +141,7 @@ test.fails('#256 I1 a retry of an applied intent answers the applied event and t
     type: 'instance.submitted@1',
     at: Date.now(),
     actor: sam.id,
-    payload: { instanceId, version: 0, values: {} },
+    payload: { instanceId, version: 0, values: { summary: 'retry', credits: 1 } },
   }
   const first = await post(submit)
   expect(first.status, await first.clone().text()).toBe(201)

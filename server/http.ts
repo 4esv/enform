@@ -924,6 +924,14 @@ async function serveOperation(
   auth: Auth,
   body: Record<string, unknown>
 ) {
+  // A retry of an applied intent is the same change (I1, #256): the server
+  // answers the event the log holds and resolves nothing again, so a client
+  // whose first answer was lost never reads a refusal for a change that
+  // landed.
+  if (typeof body.id === 'string') {
+    const applied = await readEventByOperation(pool, body.id)
+    if (applied !== undefined) return c.json(applied, 201)
+  }
   const log = await readLog(pool)
   // The directory is read once per request (AS-4, #252), and only for an
   // intent that routes a step: the team projection and the Keycloak groups,
