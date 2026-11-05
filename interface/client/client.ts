@@ -583,7 +583,7 @@ export interface DefinitionChange {
  * far to move the simulated clock forward, in minutes.
  */
 export interface DryRunRequest {
-  readonly version?: Record<string, unknown>
+  readonly version?: string
   readonly data: Record<string, unknown>
   readonly as?: ActorId
   readonly advanceMinutes?: number
@@ -607,14 +607,46 @@ export interface DryRunTimer {
  */
 export interface DryRunResult {
   readonly flow: string
-  readonly version: Record<string, unknown>
+  readonly version: string
   readonly actor: ActorId
   readonly now: number
-  readonly route: Record<string, unknown>
-  readonly assignees: readonly Record<string, unknown>[]
+  readonly route: DryRunRoute
+  readonly assignees: readonly DryRunAssignee[]
   readonly next?: string
-  readonly intents: readonly Record<string, unknown>[]
+  readonly intents: readonly DryRunIntent[]
   readonly timers: readonly DryRunTimer[]
+}
+
+/**
+ * The route of a dry run (S05, WF-1): the active steps in order, and the steps a condition
+ * skipped with the condition.
+ */
+export interface DryRunRoute {
+  readonly active: readonly string[]
+  readonly skipped: readonly DryRunSkipped[]
+}
+
+export interface DryRunSkipped {
+  readonly step: string
+  readonly condition: Record<string, unknown>
+}
+
+/**
+ * Who one active step resolves to, and through which target (S08, AS-1).
+ */
+export interface DryRunAssignee {
+  readonly step: string
+  readonly target: Record<string, unknown>
+  readonly members: readonly ActorId[]
+}
+
+/**
+ * One side effect of the preview inbox (DR-3), as the outbox would carry it.
+ */
+export interface DryRunIntent {
+  readonly operation: string
+  readonly target: string
+  readonly payload: Record<string, unknown>
 }
 
 /**

@@ -603,11 +603,16 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     if (body === undefined || !isRecord(body.data)) {
       return c.json({ error: 'the body needs the data of the request form' }, 400)
     }
-    const versionValue = body.version ?? 'draft'
-    if (
-      versionValue !== 'draft' &&
-      (typeof versionValue !== 'number' || !Number.isInteger(versionValue) || versionValue < 1)
-    ) {
+    const requested = body.version ?? 'draft'
+    const versionValue: number | 'draft' =
+      requested === 'draft'
+        ? 'draft'
+        : typeof requested === 'number'
+          ? requested
+          : typeof requested === 'string' && /^[1-9][0-9]*$/.test(requested)
+            ? Number(requested)
+            : Number.NaN
+    if (versionValue !== 'draft' && (!Number.isInteger(versionValue) || versionValue < 1)) {
       return c.json({ error: 'version is a published version number or draft' }, 400)
     }
     const advance = body.advanceMinutes ?? 0
@@ -672,13 +677,13 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
         pool,
         createOperation(
           'dryrun.ran@1',
-          { flow: slug, version: versionValue, as },
+          { flow: slug, version: String(versionValue), as },
           operationDeps,
           auth.principal.id
         )
       )
     }
-    return c.json({ flow: slug, version: versionValue, actor, now, ...result })
+    return c.json({ flow: slug, version: String(versionValue), actor, now, ...result })
   })
 
   app.post('/api/v1/flows/:slug/publish', async (c) => {

@@ -23,10 +23,12 @@ enform flow push course-overload.flow.json       # the file becomes the draft (c
 enform flow pull course-overload                 # writes the draft as the canonical file, byte for byte
 enform flow diff course-overload --from 1 --to draft
 enform flow publish course-overload              # version n+1, with its content hash
-enform flow dry-run course-overload --data fixtures/sam.json --as sam
+enform flow dry-run course-overload --data fixtures/sam.json               # the draft: the route, who each step goes to, the inbox
+enform flow dry-run course-overload --data fixtures/sam.json --version 1 --advance P1D   # a version, one simulated day on (DR-4)
+enform flow dry-run course-overload --data fixtures/sam.json --as user:sam  # as another person: needs org.impersonate, recorded (DR-5)
 ```
 
-`push`, `pull`, `publish` and `diff` go to the server once one is configured. Without a server they work on the local `.enform/<slug>.json` store, so a definition can be drafted offline. `init`, `validate` and `dry-run` are file-based.
+`push`, `pull`, `publish`, `diff` and `dry-run` go to the server once one is configured. Without a server they work on the local `.enform/<slug>.json` store, so a definition can be drafted and dry-run offline (`--as` then names the starter only). `init` and `validate` are file-based.
 
 ## Grants (S02)
 

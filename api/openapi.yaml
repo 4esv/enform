@@ -2729,11 +2729,9 @@ components:
       required: [data]
       properties:
         version:
-          oneOf:
-            - type: integer
-              minimum: 1
-            - type: string
-              enum: [draft]
+          type: string
+          description: A published version number, or `draft`; absent means the draft.
+          pattern: '^([1-9][0-9]*|draft)$'
         data:
           type: object
           additionalProperties: true
@@ -2769,46 +2767,18 @@ components:
         flow:
           type: string
         version:
-          oneOf:
-            - type: integer
-            - type: string
-              enum: [draft]
+          type: string
+          description: The published version number that ran, or `draft`.
         actor:
           $ref: '#/components/schemas/ActorId'
         now:
           type: integer
         route:
-          type: object
-          required: [active, skipped]
-          properties:
-            active:
-              type: array
-              items:
-                type: string
-            skipped:
-              type: array
-              items:
-                type: object
-                required: [step, condition]
-                properties:
-                  step:
-                    type: string
-                  condition: {}
+          $ref: '#/components/schemas/DryRunRoute'
         assignees:
           type: array
           items:
-            type: object
-            required: [step, target, members]
-            properties:
-              step:
-                type: string
-              target:
-                type: object
-                additionalProperties: true
-              members:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ActorId'
+            $ref: '#/components/schemas/DryRunAssignee'
         next:
           type: string
         intents:
@@ -2817,20 +2787,60 @@ components:
             The preview inbox (DR-3): each side effect as the outbox would
             carry it, with what it would send and to whom.
           items:
-            type: object
-            required: [operation, target, payload]
-            properties:
-              operation:
-                type: string
-              target:
-                type: string
-              payload:
-                type: object
-                additionalProperties: true
+            $ref: '#/components/schemas/DryRunIntent'
         timers:
           type: array
           items:
             $ref: '#/components/schemas/DryRunTimer'
+    DryRunRoute:
+      type: object
+      description: >-
+        The route of a dry run (S05, WF-1): the active steps in order, and the
+        steps a condition skipped with the condition.
+      required: [active, skipped]
+      properties:
+        active:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            $ref: '#/components/schemas/DryRunSkipped'
+    DryRunSkipped:
+      type: object
+      required: [step, condition]
+      properties:
+        step:
+          type: string
+        condition:
+          description: The JSON expression that was true (FM-5).
+    DryRunAssignee:
+      type: object
+      description: Who one active step resolves to, and through which target (S08, AS-1).
+      required: [step, target, members]
+      properties:
+        step:
+          type: string
+        target:
+          type: object
+          additionalProperties: true
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActorId'
+    DryRunIntent:
+      type: object
+      description: One side effect of the preview inbox (DR-3), as the outbox would carry it.
+      required: [operation, target, payload]
+      properties:
+        operation:
+          type: string
+        target:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
     DraftWrite:
       type: object
       description: >-

@@ -5,6 +5,7 @@ import { classifyChange } from '../engine/edit.js'
 import { versionDiff } from '../engine/version.js'
 import {
   createFlow,
+  dryRunFlow,
   publishFlow,
   RequestRefused,
   readDraft,
@@ -61,6 +62,8 @@ const USAGE = {
   flowPush: 'flow push <file>',
   flowPublish: 'flow publish <slug>',
   flowDiff: 'flow diff <slug> --from <v|draft> --to <v|draft>',
+  flowDryRun:
+    'flow dry-run <slug> --data <file> [--version <v|draft>] [--as <principal>] [--advance <P1D|PT4H>]',
 } as const
 
 /** The canonical definition file suffix (DF-1). */
@@ -483,6 +486,20 @@ export async function runLog(args: Args, json: boolean, env: NodeJS.ProcessEnv):
   return 0
 }
 
+/**
+ * The minutes of an ISO 8601 duration of days, hours and minutes (DR-4):
+ * `P1D`, `PT4H`, `P3DT12H`, `PT90M`. A month or a year has no fixed length,
+ * so the parser refuses them.
+ */
+export function minutesOfDuration(text: string): number {
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(text.trim())
+  if (match === null || text.trim() === 'P' || text.trim() === 'PT') {
+    throw new Error(`--advance takes an ISO 8601 duration of days, hours and minutes, not ${text}`)
+  }
+  const [, days, hours, minutes] = match
+  return Number(days ?? 0) * 24 * 60 + Number(hours ?? 0) * 60 + Number(minutes ?? 0)
+}
+
 /** The slug of a definition file: its base name without the canonical suffix (DF-4). */
 function slugOfFile(file: string): string {
   const base = file.split('/').pop() ?? file
@@ -583,6 +600,52 @@ export async function runRemoteFlow(
       { ok: true, slug, version: published.version, contentHash: published.contentHash },
       `published ${slug} v${published.version} ${published.contentHash}`
     )
+    return 0
+  }
+  if (action === 'dry-run') {
+    // A dry run through the server (DR-1, DR-3, DR-4, DR-5): the engine
+    // routes and previews; `--as` needs org.impersonate and is recorded.
+    const slug = required(name, USAGE.flowDryRun)
+    const data = readValues(cwd, flag(args, '--data', USAGE.flowDryRun))
+    const version = optionalFlag(args, '--version') ?? 'draft'
+    if (!/^([1-9][0-9]*|draft)$/.test(version)) {
+      throw new Error(`flow dry-run: --version is a version number or draft, not ${version}`)
+    }
+    const as = optionalFlag(args, '--as')
+    const advance = optionalFlag(args, '--advance')
+    const result = await dryRunFlow(
+      {
+        version,
+        data,
+        ...(as === undefined ? {} : { as }),
+        ...(advance === undefined ? {} : { advanceMinutes: minutesOfDuration(advance) }),
+      },
+      slug
+    )
+    const lines = [
+      `${slug} ${result.version === 'draft' ? 'draft' : `v${result.version}`} as ${result.actor}`,
+      `active: ${result.route.active.join(', ') || 'none'}`,
+    ]
+    for (const skipped of result.route.skipped) {
+      lines.push(`skipped: ${skipped.step} (${JSON.stringify(skipped.condition)})`)
+    }
+    for (const assignee of result.assignees) {
+      lines.push(
+        `${assignee.step} -> ${JSON.stringify(assignee.target)} -> ${assignee.members.join(', ') || 'nobody (Unroutable)'}`
+      )
+    }
+    lines.push(`inbox: ${result.intents.length} email${result.intents.length === 1 ? '' : 's'}`)
+    for (const intent of result.intents) {
+      lines.push(
+        `  ${intent.operation} to ${String(intent.payload.to ?? '')} (${String(intent.payload.step ?? '')})`
+      )
+    }
+    for (const timer of result.timers) {
+      lines.push(
+        `timer: ${timer.kind} at ${new Date(timer.fireAt).toISOString()}${timer.fired ? ' fired' : ''}`
+      )
+    }
+    report(json, { ok: true, ...result }, lines.join('\n'))
     return 0
   }
   if (action === 'diff') {

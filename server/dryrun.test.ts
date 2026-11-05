@@ -151,7 +151,7 @@ test('#264 DR-1 DR-3 DR-4 a dry run of a version or the draft answers the route,
     timers: { kind: string; fired: boolean }[]
   }
   expect(result.flow).toBe('course-overload')
-  expect(result.version).toBe(1)
+  expect(result.version).toBe('1')
   expect(result.actor).toBe('user:priya')
   expect(result.route.active).toEqual(['request', 'advisor'])
   expect(result.route.skipped.map((step) => step.step)).toEqual(['chair'])
@@ -193,7 +193,7 @@ test('#264 DR-5 I8 running as another person needs org.impersonate and the log r
   expect(allowed.status, await allowed.clone().text()).toBe(200)
   expect(((await allowed.json()) as { actor: string }).actor).toBe('user:sam')
   expect(appended).toEqual([
-    { type: 'dryrun.ran@1', payload: { flow: 'course-overload', version: 1, as: 'user:sam' } },
+    { type: 'dryrun.ran@1', payload: { flow: 'course-overload', version: '1', as: 'user:sam' } },
   ])
   // Without a dry-run scope the run is refused (I8).
   expect((await run(sessionPool([]), { version: 1, data: {} })).status).toBe(403)

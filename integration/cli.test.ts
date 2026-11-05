@@ -371,7 +371,7 @@ test('#258 S13 Sam withdraws and undoes it, Priya cancels, and the starter alone
   expect(show('sam', instanceId).status.state).toBe('cancelled')
 })
 
-test.fails('#264 S05 S08 S12 DR-5 a dry run through the server routes, explains, previews and moves the clock, and runs as another person', () => {
+test('#264 S05 S08 S12 DR-5 a dry run through the server routes, explains, previews and moves the clock, and runs as another person', () => {
   const { dir } = requireSetup()
   const lin = demoUser('chair')
   const sam = demoUser('starter')
