@@ -18,6 +18,8 @@ These read the configuration file, the `ENFORM_*` environment and the flags; a f
 | `enform worker` | Delivers the outbox through SMTP with retries and backoff, fires due timers, and runs the scheduled directory sync. |
 | `enform admin create --admin-email <email> --admin-password <password>` | Creates the first administrator. |
 | `enform admin rebuild` | Folds every projection out of the log again. |
+| `enform admin sync` | Synchronizes every known account with the directory once (ID-5). |
+| `enform admin deprovision <user-id>` | Deprovisions a directory user through the server: the account is disabled and the tasks the person holds return to the pool. Sign in first. |
 | `enform admin backup --out <file>` | Writes the log and the operational state beside it to one file. |
 | `enform admin restore <file> [--database-url <url>]` | Loads a backup into an empty store and rebuilds the projections. |
 | `enform seed demo` | Loads the idempotent demo organization and prints its credentials once. |

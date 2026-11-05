@@ -20,7 +20,7 @@ A task shows the flow, the step, the holder or "unclaimed", the time it started,
 
 Open a flow (`/?flow=<slug>`) and fill in the request form. Each edit is saved on your device at once and sent as it lands; the draft is private to you until you submit. **Submit** validates on the server and routes the submission to its first task. "Started by me" then shows where it is.
 
-If you may not start a flow, the page says so in plain language and names the scope that would allow it.
+If you may not start a flow, the server refuses the start and the page shows the refusal with the scope that would allow it.
 
 ## Claim and complete
 
