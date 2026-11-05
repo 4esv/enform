@@ -191,7 +191,7 @@ type DraftView = {
   readonly definition: Record<string, unknown> & { readonly steps: Record<string, unknown>[] }
 }
 
-test.fails('#264 S01 S05 S08 S12 Dana builds the flow with its settings, sections, conditions and timers, dry-runs it and publishes', async () => {
+test('#264 S01 S05 S08 S12 Dana builds the flow with its settings, sections, conditions and timers, dry-runs it and publishes', async () => {
   const { page, publicUrl, config, okafor, lee } = requireSetup()
   const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
   // The registrar team that the escalation names (SE-4, AS-6).
@@ -348,7 +348,8 @@ test.fails('#264 S01 S05 S08 S12 Dana builds the flow with its settings, section
   expect(await page.textContent('[data-dry-inbox]')).toContain(
     `Assignment to ${okafor.id} for advisor`
   )
-  expect(await page.locator('[data-dry-timer="reminder"][data-dry-fired="false"]').count()).toBe(1)
+  // One reminder per elapsed day up to the three-day deadline, all pending.
+  expect(await page.locator('[data-dry-timer="reminder"][data-dry-fired="false"]').count()).toBe(3)
   expect(await page.locator('[data-dry-timer="escalation"][data-dry-fired="false"]').count()).toBe(
     1
   )
@@ -399,14 +400,15 @@ test.fails('#264 S01 S05 S08 S12 Dana builds the flow with its settings, section
   )
   await page.click('[data-dry-run]')
   await page.click('[data-dry-run]')
-  await page.locator('[data-dry-version] option[value="1"]').waitFor()
+  await page.locator('[data-dry-panel]').waitFor()
+  expect(await page.locator('[data-dry-version] option[value="1"]').count()).toBe(1)
   await page.selectOption('[data-dry-version]', '1')
   await page.fill('[data-dry-as]', '')
   await runDryRun(page)
   expect(await page.textContent('[data-dry-clock]')).toContain('Ran version 1')
 }, 180_000)
 
-test.fails('#264 S03 DF-5 Priya edits a label with the structural controls disabled, and Dana sees her change and her cursor', async () => {
+test('#264 S03 DF-5 Priya edits a label with the structural controls disabled, and Dana sees her change and her cursor', async () => {
   const { browser, page, publicUrl, config, priya, okafor } = requireSetup()
   const adminToken = await passwordToken(config, ADMIN_EMAIL, ADMIN_PASSWORD)
   const granted = await postIntent(adminToken, {
