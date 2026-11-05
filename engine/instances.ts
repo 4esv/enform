@@ -57,6 +57,7 @@ import { claimTimeOf, STEP_TAKEN_OVER } from './takeover.js'
 import { teamMembership } from './teams.js'
 import { type TrackerStep, trackerOf } from './tracker.js'
 import { EVENT_UNDONE, standingEvents, TASK_REASSIGNED, TASK_RELEASED, undoneSeqs } from './undo.js'
+import { DRAFT_REBOUND, type Misfit } from './version.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from './withdraw.js'
 
 /**
@@ -176,6 +177,18 @@ export type InstanceView = {
    * still authorizes the write and measures the idle period (A9, I8).
    */
   readonly canTakeOver: boolean
+  /**
+   * The rebind of an open draft to a newer version (RT-6, S04): the version
+   * it left, the version it is on, the values that no longer fit (kept, never
+   * deleted) and the required fields of the new form it leaves empty. It is
+   * present on a draft that the log moved and absent otherwise.
+   */
+  readonly rebound?: {
+    readonly from: string
+    readonly to: string
+    readonly misfits: readonly Misfit[]
+    readonly newRequired: readonly string[]
+  }
   /**
    * When a takeover becomes available for an `after-idle` step (S10, AS-3):
    * the claim time from the log plus the step's idle period. It is absent for
@@ -328,6 +341,34 @@ function viewForStep(
     canWithdraw: canWithdraw(actor, current),
     canCancel: canCancel(current, context),
     ...takeover,
+    ...reboundView(current, context.log),
+  }
+}
+
+/**
+ * The newest rebind of an open draft (RT-6, S04), read from the log: absent
+ * once the draft is submitted, because the author then acted on the version
+ * the form showed.
+ */
+function reboundView(
+  instance: ProjectedInstance,
+  log: Log
+): { readonly rebound?: InstanceView['rebound'] } {
+  if (instance.submitted !== false) return {}
+  const event = log.findLast(
+    (candidate) =>
+      candidate.type === DRAFT_REBOUND && candidate.payload.instanceId === instance.instanceId
+  )
+  if (event === undefined) return {}
+  return {
+    rebound: {
+      from: stringField(event.payload, 'from'),
+      to: stringField(event.payload, 'definitionVersion'),
+      misfits: Array.isArray(event.payload.misfits) ? (event.payload.misfits as Misfit[]) : [],
+      newRequired: Array.isArray(event.payload.newRequired)
+        ? (event.payload.newRequired as string[])
+        : [],
+    },
   }
 }
 
@@ -436,6 +477,10 @@ function fold(
       })
       return entered === undefined ? moved : recordAssignees(moved, entered)
     }
+    case DRAFT_REBOUND:
+      // The draft moved to a newer published version (RT-6, S04); its values
+      // stay as they are (A7), and the version counter does not advance.
+      return { ...instance, definitionVersion: stringField(event.payload, 'definitionVersion') }
     case DRAFT_EDITED: {
       // The starter changed the values the draft holds (ADR 0014, RT-3); the
       // version does not advance, so a stream of edits never conflicts.

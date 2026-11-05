@@ -375,6 +375,7 @@ export interface InstanceView {
   readonly canCancel: boolean
   readonly canTakeOver: boolean
   readonly takeoverAvailableAt?: number
+  readonly rebound?: Record<string, unknown>
 }
 
 /**
@@ -560,6 +561,9 @@ export interface DraftFlow {
 export interface DefinitionChange {
   readonly class: string
   readonly message: string
+  readonly path: string
+  readonly before?: Record<string, unknown>
+  readonly after?: Record<string, unknown>
 }
 
 /**

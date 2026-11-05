@@ -34,10 +34,16 @@ test('#40 the engine guards an edit-class push and rejects a structural one (S03
   // (a) The classification: an option change is edit-class; a step change is
   // structural (DF-5, D2).
   expect(classifyChange(draft, edited)).toEqual([
-    { class: 'edit', message: 'an option was added to step advisor: escalate' },
+    {
+      class: 'edit',
+      message: 'an option was added to step advisor: escalate',
+      path: '/steps/advisor/outcomes',
+      before: ['approve', 'send_back'],
+      after: ['approve', 'send_back', 'escalate'],
+    },
   ])
   expect(classifyChange(draft, withStep)).toEqual([
-    { class: 'structural', message: 'a step was added: chair' },
+    { class: 'structural', message: 'a step was added: chair', path: '/steps/chair' },
   ])
 
   // (b) The grants come from the log (I4): grantsOf reads Priya's grant back,

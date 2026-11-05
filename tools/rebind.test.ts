@@ -66,7 +66,7 @@ function deps(id: string, at = 1): OperationDeps {
   return { clock: () => at, ids: () => id }
 }
 
-test.fails('#256 RT-6 an open draft rebinds to the new version and reports what does not fit', async () => {
+test('#256 RT-6 an open draft rebinds to the new version and reports what does not fit', async () => {
   const { rebindDraft, DRAFT_REBOUND } = (await import('../engine/version.js')) as unknown as {
     rebindDraft: (...args: unknown[]) => {
       accepted: boolean

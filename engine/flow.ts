@@ -176,7 +176,7 @@ export function push(
 function assertPushAllowed(flow: Flow, definition: FlowDefinition, grants: readonly Grant[]): void {
   const changes: readonly DefinitionChange[] =
     flow.draft === undefined
-      ? [{ class: 'structural', message: 'the first draft was created' }]
+      ? [{ class: 'structural', message: 'the first draft was created', path: '/' }]
       : classifyChange(flow.draft, definition)
   assertChangeAllowed('push', `flow:${flow.slug}`, changes, grants)
 }
@@ -196,7 +196,7 @@ function assertPublishAllowed(
   const latest = flow.versions[flow.versions.length - 1]
   const changes: readonly DefinitionChange[] =
     latest === undefined
-      ? [{ class: 'structural', message: 'the first publication created the flow' }]
+      ? [{ class: 'structural', message: 'the first publication created the flow', path: '/' }]
       : classifyChange(latest.definition, definition)
   assertChangeAllowed('publish', `flow:${flow.slug}`, changes, grants)
 }

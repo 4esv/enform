@@ -180,7 +180,7 @@ test('#38 flow diff names the change from a version to the draft (S01, DF-6)', (
   )
   expect(toDraft.status, toDraft.stderr).toBe(0)
   expect(JSON.parse(toDraft.stdout).changes).toEqual([
-    { class: 'structural', message: 'a step was added: chair' },
+    { class: 'structural', message: 'a step was added: chair', path: '/steps/chair' },
   ])
 
   // Publishing the draft makes version 2, and version 1 to version 2 differs.

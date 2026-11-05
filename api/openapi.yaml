@@ -2059,6 +2059,37 @@ components:
             AS-3): the claim time from the log plus the step's idle period. It
             is absent for `always` and `never`, and while no holder has a
             claim.
+        rebound:
+          type: object
+          description: >-
+            The rebind of an open draft to a newer published version (RT-6,
+            S04): present on a draft the log moved, absent otherwise. The
+            starter's read of a draft moves it to the newest version first.
+            The draft keeps every value; `misfits` names the values that no
+            longer fit the request form and `newRequired` the required fields
+            of the new form the draft leaves empty.
+          required: [from, to, misfits, newRequired]
+          properties:
+            from:
+              type: string
+              description: The content hash of the version the draft left (DF-2).
+            to:
+              type: string
+              description: The content hash of the version the draft is on (DF-2).
+            misfits:
+              type: array
+              items:
+                type: object
+                required: [key, reason]
+                properties:
+                  key:
+                    type: string
+                  reason:
+                    type: string
+            newRequired:
+              type: array
+              items:
+                type: string
     Note:
       type: object
       description: >-
@@ -2478,7 +2509,7 @@ components:
         (DF-5, D2, DF-6). An edit-class change touches a label, help text, an
         option list or email copy and needs `flow.edit`; a structural change
         touches the shape of the flow and needs `flow.build`.
-      required: [class, message]
+      required: [class, message, path]
       properties:
         class:
           type: string
@@ -2490,6 +2521,16 @@ components:
           description: >-
             A short description of the difference, for the builder and for a
             refusal (DF-6).
+        path:
+          type: string
+          description: >-
+            Where the difference sits (DF-6): a JSON-pointer-like path that
+            names steps, sections and fields by key, for example
+            `/steps/request/sections/about/fields/summary/label`.
+        before:
+          description: The value before the change, when one place changed.
+        after:
+          description: The value after the change, when one place changed.
     DraftWrite:
       type: object
       description: >-

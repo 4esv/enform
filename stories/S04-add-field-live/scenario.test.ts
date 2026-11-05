@@ -59,7 +59,11 @@ test('#41 a published version pins its instance and a draft rebinds to the next 
   // (d) The difference from v1 to v2 names the structural change (DF-6): the
   // added step stands in for the new field.
   expect(versionDiff(v1, v2)).toEqual([
-    { class: 'structural', message: 'a step was added: reason_category' },
+    {
+      class: 'structural',
+      message: 'a step was added: reason_category',
+      path: '/steps/reason_category',
+    },
   ])
 
   // The lifecycle operations are the golden path, operation for operation, and

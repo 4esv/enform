@@ -36,7 +36,7 @@ const base = flow(`{
 }
 `)
 
-test.fails('#256 DF-5 a label and an option change are edit-class, with a path (S03)', () => {
+test('#256 DF-5 a label and an option change are edit-class, with a path (S03)', () => {
   const edited = flow(`{
   "schemaVersion": 2,
   "steps": [
@@ -77,7 +77,7 @@ test.fails('#256 DF-5 a label and an option change are edit-class, with a path (
   expect(classifyChange(base, base)).toEqual([])
 })
 
-test.fails('#256 DF-5 a field, a control, a requirement, a rule, a timer and a setting are structural (S04)', () => {
+test('#256 DF-5 a field, a control, a requirement, a rule, a timer and a setting are structural (S04)', () => {
   const changed = flow(`{
   "schemaVersion": 2,
   "anonymous": true,

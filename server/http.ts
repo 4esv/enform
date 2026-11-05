@@ -52,6 +52,7 @@ import { mayRead } from '../engine/status.js'
 import { INSTANCE_SUBMITTED } from '../engine/submission.js'
 import { teamsOf } from '../engine/teams.js'
 import { flowOf, isConfigChange, timeline, timelineFor } from '../engine/timeline.js'
+import { rebindDraft } from '../engine/version.js'
 import { type Config, issuerUrl, listenAddress } from './config.js'
 import { decryptToken, encryptToken, validEncryptionKey } from './crypto.js'
 import {
@@ -478,10 +479,13 @@ export function createApp(config: Config, pool: Pool): Hono {
     }
     const pushed = push(stored.flow, definition, operationDeps, auth.principal.id, grants)
     await appendOperation(pool, pushed.operation)
+    // The write answers the field-level changes it made, with their paths, so
+    // the builder shows what changed (DF-3, DF-6, #256).
     return c.json({
       slug,
       version: stored.draftVersion,
       definition: pushed.flow.draft ?? definition,
+      changes,
     })
   })
 
@@ -600,10 +604,25 @@ export function createApp(config: Config, pool: Pool): Hono {
     if (await isClearedSeedRecord(pool, 'instance', instanceId)) {
       return c.json({ error: 'the log holds no such instance' }, 404)
     }
-    const log = await readLog(pool)
-    const instance = instanceOf(log, instanceId)
+    let log = await readLog(pool)
+    let instance = instanceOf(log, instanceId)
     if (instance === undefined) {
       return c.json({ error: 'the log holds no such instance' }, 404)
+    }
+    // An open draft moves to the newest published version when its starter
+    // opens it again (RT-6, S04): the rebind is an attributed operation that
+    // keeps every value and names what no longer fits, appended before the
+    // read answers, so the form the author sees is the version they submit.
+    if (instance.submitted === false && instance.starter === auth.principal.id) {
+      const newest = publishedFlow(log, instance.flow)
+      if (newest !== undefined && newest.contentHash !== instance.definitionVersion) {
+        const rebound = rebindDraft(instance, auth.principal.id, newest, operationDeps)
+        if (rebound.accepted && rebound.operation !== undefined) {
+          await appendOperation(pool, rebound.operation)
+          log = await readLog(pool)
+          instance = instanceOf(log, instanceId) ?? instance
+        }
+      }
     }
     const published = publishedByHash(log, instance.definitionVersion)
     if (published === undefined) {
@@ -1154,7 +1173,7 @@ function mayReadDraft(grants: readonly Grant[], slug: string): boolean {
 /** The change class from the current draft to the next one (#220, DF-5). */
 function changesForPush(flow: Flow, definition: FlowDefinition): readonly DefinitionChange[] {
   return flow.draft === undefined
-    ? [{ class: 'structural', message: 'the first draft was created' }]
+    ? [{ class: 'structural', message: 'the first draft was created', path: '/' }]
     : classifyChange(flow.draft, definition)
 }
 
@@ -1162,7 +1181,7 @@ function changesForPush(flow: Flow, definition: FlowDefinition): readonly Defini
 function changesForPublish(flow: Flow): readonly DefinitionChange[] {
   const latest = flow.versions[flow.versions.length - 1]
   return latest === undefined
-    ? [{ class: 'structural', message: 'the first publication created the flow' }]
+    ? [{ class: 'structural', message: 'the first publication created the flow', path: '/' }]
     : classifyChange(latest.definition, flow.draft ?? latest.definition)
 }
 

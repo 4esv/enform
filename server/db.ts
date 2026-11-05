@@ -49,6 +49,7 @@ import { STEP_TAKEN_OVER } from '../engine/takeover.js'
 import { TEAM_CHANGE_TYPE, teamMembership } from '../engine/teams.js'
 import { trackerOf } from '../engine/tracker.js'
 import { EVENT_UNDONE, TASK_REASSIGNED, TASK_RELEASED } from '../engine/undo.js'
+import { DRAFT_REBOUND } from '../engine/version.js'
 import { INSTANCE_CANCELLED, INSTANCE_UNDONE, INSTANCE_WITHDRAWN } from '../engine/withdraw.js'
 import { newCsrfToken, newOperationId, newStateId } from './ids.js'
 import {
@@ -1319,6 +1320,18 @@ async function projectEvent(client: PoolClient, event: Event): Promise<void> {
         event.seq,
       ]
     )
+    return
+  }
+  if (event.type === DRAFT_REBOUND) {
+    const { instanceId, definitionVersion } = event.payload
+    if (typeof instanceId !== 'string' || typeof definitionVersion !== 'string') {
+      throw new Error(`events: malformed ${DRAFT_REBOUND} payload at seq ${event.seq}`)
+    }
+    await client.query('update instances set definition_version = $2, seq = $3 where id = $1', [
+      instanceId,
+      definitionVersion,
+      event.seq,
+    ])
     return
   }
   if (event.type === DRAFT_EDITED) {
