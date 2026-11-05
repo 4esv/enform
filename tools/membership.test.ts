@@ -3,7 +3,12 @@ import { claim } from '../engine/action.js'
 import { apply, emptyState, type State } from '../engine/apply.js'
 import { parse } from '../engine/definition.js'
 import { createInstance, type Instance } from '../engine/instance.js'
-import { deprovision, syncMembership, USER_DEPROVISIONED } from '../engine/membership.js'
+import {
+  DIRECTORY_ACTOR,
+  deprovision,
+  syncMembership,
+  USER_DEPROVISIONED,
+} from '../engine/membership.js'
 import type { OperationDeps } from '../engine/operation.js'
 import { type Membership, refreshAssignees } from '../engine/resolve.js'
 
@@ -139,9 +144,14 @@ test('#73 ID-5 group membership synchronizes and a deprovision releases claimed 
 
   const events = state.log.filter((event) => event.type === USER_DEPROVISIONED)
   expect(events).toHaveLength(1)
-  expect(events[0].actor).toBe(LEE)
+  // No person acted: the directory itself deprovisioned Lee (ID-5, I14).
+  expect(events[0].actor).toBe(DIRECTORY_ACTOR)
   expect(events[0].payload.principal).toBe(LEE)
-  expect(events[0].payload.released).toEqual(['registrar'])
+  // The fixture's instance has no id, so the release of its task is folded
+  // into the instances the function answers and recorded under the account
+  // (#267); an instance from the log releases through task.released@1.
+  expect(events[0].payload.released).toEqual([])
+  expect(released.releases).toEqual([])
   // The claim stays on the log: the deprovision appends and never rewrites (I4).
   expect(state.log).toHaveLength(2)
 

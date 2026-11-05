@@ -327,6 +327,7 @@ export interface TimelineEntry {
   readonly flow?: string
   readonly step?: string
   readonly comment?: string
+  readonly reason?: string
   readonly call?: TimelineCall
 }
 

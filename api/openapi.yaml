@@ -2070,6 +2070,14 @@ components:
           description: >-
             The comment that the payload carries, for a note or a send back
             (VT-5, VT-6).
+        reason:
+          type: string
+          description: >-
+            The reason that the payload carries, when the event records one
+            (VT-5, WF-5): why a task was released, reassigned or taken over,
+            why an instance was withdrawn or cancelled, or why an action was
+            undone. A release made by a deprovision says that the holder was
+            deprovisioned (ID-5, #267).
         call:
           $ref: '#/components/schemas/TimelineCall'
     Status:

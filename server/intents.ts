@@ -18,7 +18,7 @@
 import { claim, STEP_CLAIMED, STEP_COMPLETED } from '../engine/action.js'
 import { authorize, type Grant } from '../engine/authorize.js'
 import { CompletionRefused, resolveCompletion } from '../engine/completions.js'
-import { takeoverIdleMs } from '../engine/definition.js'
+import { type Target, takeoverIdleMs } from '../engine/definition.js'
 import { publishedByHash } from '../engine/flow.js'
 import { addGrant, flowOwner, GRANT_CHANGE_TYPE, grantsOf, revokeGrant } from '../engine/grants.js'
 import { instanceOf } from '../engine/instances.js'
@@ -935,13 +935,15 @@ export type ResolverDirectory = {
 }
 
 /**
- * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252).
- * `starter` resolves to the principal that started the instance, `user` to
- * itself, `field` to the principal in the data or the instance values, `team`
- * to the team membership, and `group` to the members that the Keycloak group
- * holds now. A missing or unknown group resolves to nobody, and the engine
- * routes the task to the Unroutable queue (I10); `manager-of` has no directory
- * source either.
+ * Build the target resolver of one request (AS-1, AS-4, I10, #222, #252,
+ * #267). `starter` resolves to the principal that started the instance,
+ * `user` to itself, `field` to the principal in the data or the instance
+ * values, `team` to the team membership, `group` to the members that the
+ * Keycloak group holds now, and `manager-of:starter` to the starter's manager
+ * through the directory. A missing or unknown group, a missing manager, and
+ * every principal the directory no longer holds (a deprovisioned user, ID-5)
+ * resolve to nobody, and the engine routes the task to the Unroutable queue
+ * (I10).
  */
 export function resolverFor(
   starter: string | undefined,
@@ -950,8 +952,8 @@ export function resolverFor(
   groupMembers: ReadonlyMap<string, readonly string[]>,
   directory: ResolverDirectory = {}
 ): TargetResolver {
-  void directory
-  return (target) => {
+  const provisioned = directory.provisioned ?? (() => true)
+  const named = (target: Target): readonly string[] => {
     if ('user' in target) return [target.user]
     if ('starter' in target) return starter === undefined ? [] : [starter]
     if ('field' in target) {
@@ -960,8 +962,11 @@ export function resolverFor(
     }
     if ('team' in target) return teamMembers.get(target.team) ?? []
     if ('group' in target) return groupMembers.get(target.group) ?? []
-    return []
+    if (starter === undefined || target['manager-of'] !== 'starter') return []
+    const manager = directory.managerOf?.(starter)
+    return manager === undefined || manager === '' ? [] : [manager]
   }
+  return (target) => named(target).filter(provisioned)
 }
 
 /**

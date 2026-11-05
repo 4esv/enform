@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { Ajv2020 } from 'ajv/dist/2020.js'
 import { expect, test } from 'vitest'
 import { claim } from '../engine/action.js'
 import { apply, emptyState, type State } from '../engine/apply.js'
@@ -61,8 +64,29 @@ const grants: readonly Grant[] = [
   { principal: SAM, scopes: ['instance.start'], resource: FLOW },
 ]
 
+/** The validator of one published event schema (MVP.md 9.1). */
+function validator(type: string) {
+  const schema = JSON.parse(
+    readFileSync(join(import.meta.dirname, '..', 'schemas', 'events', `${type}.json`), 'utf8')
+  )
+  return new Ajv2020({ allErrors: true }).compile(schema)
+}
+
 function deps(id: string, at: number): OperationDeps {
   return { clock: () => at, ids: () => id }
+}
+
+/** One source of distinct ids from `first` on (I1): a deprovision records one operation per release. */
+function sequence(first: number, at: number): OperationDeps {
+  let next = first
+  return {
+    clock: () => at,
+    ids: () => {
+      const id = `op-${next}`
+      next += 1
+      return id
+    },
+  }
 }
 
 /** The directory of the run: the release server's resolver over the log's deprovisions. */
@@ -123,7 +147,7 @@ function instanceVersion(state: State) {
   return { version: 1, contentHash: String(published.payload.contentHash), definition }
 }
 
-test.fails('#267 ID-5 a deprovision releases each held task with the reason and records the account', () => {
+test('#267 ID-5 a deprovision releases each held task with the reason and records the account', () => {
   let state = claimedState()
   const held = instanceOf(state.log, 'inst-1')
   if (held === undefined) throw new Error('not projected')
@@ -132,11 +156,11 @@ test.fails('#267 ID-5 a deprovision releases each held task with the reason and 
   // Dana, who holds org.grants, deprovisions Dr. Okafor once the directory no
   // longer holds him (ID-5). The engine refuses an actor without the scope.
   const gone = () => []
-  const refused = deprovision(OKAFOR, gone, [held], deps('op-4', 6), { actor: SAM, grants: [] })
+  const refused = deprovision(OKAFOR, gone, [held], sequence(4, 6), { actor: SAM, grants: [] })
   expect(refused.accepted).toBe(false)
   expect(refused.reason).toContain('org.grants')
 
-  const result = deprovision(OKAFOR, gone, [held], deps('op-4', 6), { actor: DANA, grants })
+  const result = deprovision(OKAFOR, gone, [held], sequence(4, 6), { actor: DANA, grants })
   expect(result.accepted).toBe(true)
   if (result.operation === undefined) throw new Error(result.reason)
   // One release per held task, through the release event with the reason
@@ -161,6 +185,9 @@ test.fails('#267 ID-5 a deprovision releases each held task with the reason and 
   // The ids are distinct, so the log keeps every event (I1).
   const ids = new Set([...result.releases, result.operation].map((operation) => operation.id))
   expect(ids.size).toBe(2)
+  // The payloads match the published schemas (MVP.md 9.1).
+  expect(validator('user.deprovisioned@1')(result.operation.payload)).toBe(true)
+  expect(validator('task.released@1')(result.releases[0].payload)).toBe(true)
 
   for (const operation of [...result.releases, result.operation]) state = apply(operation, state)
   // The projection folds the release: the task is back in the pool (A1), the
@@ -197,7 +224,7 @@ test.fails('#267 ID-5 a deprovision releases each held task with the reason and 
   expect(bySync.releases).toEqual([])
 })
 
-test.fails('#267 S08 I10 a target that names a deprovisioned user routes to Unroutable with the owner alert', () => {
+test('#267 S08 I10 a target that names a deprovisioned user routes to Unroutable with the owner alert', () => {
   let state = publishedState()
   const gone = deprovision(OKAFOR, () => [], [], deps('op-0', 2), { actor: DANA, grants })
   if (gone.operation === undefined) throw new Error(gone.reason)
