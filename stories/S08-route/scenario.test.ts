@@ -1,113 +1,128 @@
 import { expect, test } from 'vitest'
-import { contentHash, createInstance } from '../../engine/instance.js'
+import { STEP_COMPLETED } from '../../engine/action.js'
+import { instanceOf } from '../../engine/instances.js'
+import { outboxOf } from '../../engine/outbox.js'
+import { refreshAssignees, unroutableReason } from '../../engine/resolve.js'
+import { ALERT_CONNECTOR, UNROUTABLE_ALERT, UNROUTABLE_QUEUE } from '../../engine/routing.js'
+import { mayRead } from '../../engine/status.js'
+import { teamMembership } from '../../engine/teams.js'
+import { timeline } from '../../engine/timeline.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
 import {
-  createResolver,
-  refreshAssignees,
-  resolveTarget,
-  unroutableReason,
-} from '../../engine/resolve.js'
-import { ALERT_CONNECTOR, route, UNROUTABLE_ALERT, UNROUTABLE_QUEUE } from '../../engine/routing.js'
-import {
-  ADVISOR_FIELD,
+  ADVISOR_STEP,
   ANA,
-  definition,
-  deprovisioned,
-  directory,
-  INITIAL_DIRECTORY,
-  OWNER,
-  PROVISIONED_ADVISOR,
-  provisioned,
-  REGISTRAR_MEMBERS,
+  grantsOfPerson,
+  INSTANCE_ID,
+  instanceAfter,
+  OKAFOR,
+  PRIYA,
+  REGISTRAR_STEP,
   REGISTRAR_TEAM,
-  STARTER,
-  versionHash,
+  SLUG,
+  stateAfter,
+} from '../example-flow.js'
+import {
+  ARCHIVE_STEP,
+  ARCHIVE_TEAM,
+  definition,
+  golden,
+  INITIAL_REGISTRARS,
+  STEP,
 } from './scenario.js'
 
 // Issue #45: route each task to real, current people (S08). A dynamic target
-// resolves once, at creation: when the advisor field names a deprovisioned
-// user the task has no recipient and goes to the Unroutable queue, with an
-// alert to the flow owner and a reason (I10, AS-5). A group or a team resolves
-// live: when Ana joins registrar-office while the task is open, a
-// re-resolution shows the task to her with no new publication (AS-4). Each
-// instance records the resolved assignees and the membership snapshot (I13).
-// The path is deterministic (I6).
+// resolves once, at the submit, with a snapshot (AS-1, I13). A team resolves
+// live: when Ana joins registrar-office while the task is open, a read shows
+// the task to her with no new publication (AS-4). A step whose team holds
+// nobody goes to the Unroutable queue, with an alert to the flow owner and a
+// reason on the timeline (I10, AS-5). The path is deterministic (I6).
 
-test('#45 a task routes to the current people or to Unroutable (S08)', () => {
-  const dir = directory(INITIAL_DIRECTORY)
-  const advisorStep = definition.steps[0]
-  const registrarStep = definition.steps[1]
+test('#45 the S08 golden path runs in api, cli and dry mode: tasks reach current people or Unroutable (S08)', {
+  timeout: 60_000,
+}, async () => {
+  await runGolden(golden)
+  const { state, intents } = await runModes(golden)
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  if (instance === undefined) throw new Error('the request is not projected')
 
-  // (a) AS-5: the advisor field names a deprovisioned user, so the advisor
-  // task resolves to nobody. It goes to the Unroutable queue, Priya gets the
-  // alert, and the reason names the step and the target (I10).
-  const unrouted = route(advisorStep, createResolver(dir.membership, deprovisioned), OWNER)
-  expect(unrouted.assignees).toEqual([
-    { step: 'advisor', target: { field: ADVISOR_FIELD }, members: [] },
-  ])
-  expect(unrouted.queue).toBe(UNROUTABLE_QUEUE)
-  expect(unrouted.alert).toEqual({
+  // (a) AS-1, I13: the advisor field resolved to Dr. Okafor at the submit,
+  // and the instance records that snapshot.
+  expect(instance.assignees).toContainEqual({
+    step: ADVISOR_STEP,
+    target: { field: 'advisor' },
+    members: [OKAFOR],
+  })
+
+  // (b) AS-4: the registrar step recorded the team's members at Dr.
+  // Okafor's approval, Lee and Jordan, the membership snapshot (I13).
+  expect(instance.assignees).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: INITIAL_REGISTRARS,
+  })
+
+  // (c) AS-5, I10: Lee's approval entered the archive step, whose team holds
+  // nobody: the task is in the Unroutable queue, the completion records the
+  // empty resolution, and the alert to Priya rode in the same operation (I2).
+  expect(instance.currentStep).toBe(ARCHIVE_STEP)
+  expect(instance.queue).toBe(UNROUTABLE_QUEUE)
+  const archived = state.log[STEP.leeApprove]
+  expect(archived.type).toBe(STEP_COMPLETED)
+  expect(archived.payload).toMatchObject({
+    currentStep: ARCHIVE_STEP,
+    queue: UNROUTABLE_QUEUE,
+    assignees: [{ step: ARCHIVE_STEP, target: { team: ARCHIVE_TEAM }, members: [] }],
+  })
+  const alert = {
     operation: UNROUTABLE_ALERT,
     target: ALERT_CONNECTOR,
-    payload: { to: OWNER, step: 'advisor' },
+    payload: { to: PRIYA, step: ARCHIVE_STEP },
+  }
+  expect(intents).toContainEqual(alert)
+  expect(outboxOf([archived])).toContainEqual(alert)
+  expect(
+    unroutableReason(definition.steps[3], [
+      { step: ARCHIVE_STEP, target: { team: ARCHIVE_TEAM }, members: [] },
+    ])
+  ).toBe(`step ${ARCHIVE_STEP}: no target resolved to a current principal (team:${ARCHIVE_TEAM})`)
+  // The timeline carries the approval that left the task unroutable, in the
+  // one global order (I4, VT-5): the step Lee completed, attributed to him.
+  const entry = timeline(state.log).find((candidate) => candidate.seq === archived.seq)
+  expect(entry).toMatchObject({ actor: 'user:lee', type: STEP_COMPLETED, step: REGISTRAR_STEP })
+})
+
+test('#45 a team target resolves live: Ana joins while the task is open and may read it with no publication (S08)', () => {
+  // The instance at the registrar step, after Ana's join and before Lee's
+  // claim (AS-4). The recorded snapshot names Lee and Jordan; the team now
+  // holds Ana too, and the definition and its version are unchanged.
+  const steps = golden.steps.slice(0, STEP.leeClaim)
+  const instance = instanceAfter(steps)
+  const log = stateAfter(steps).log
+  expect(instance.currentStep).toBe(REGISTRAR_STEP)
+  expect(instance.assignees).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: INITIAL_REGISTRARS,
   })
-  expect(unroutableReason(advisorStep, unrouted.assignees)).toBe(
-    'step advisor: no target resolved to a current principal (field:advisor)'
-  )
+  const membership = teamMembership(log)
+  expect(membership(REGISTRAR_TEAM)).toEqual([...INITIAL_REGISTRARS, ANA])
+  const refreshed = refreshAssignees(instance.assignees, membership)
+  expect(refreshed).toContainEqual({
+    step: REGISTRAR_STEP,
+    target: { team: REGISTRAR_TEAM },
+    members: [...INITIAL_REGISTRARS, ANA],
+  })
+  // The advisor field keeps its snapshot through the refresh (AS-1, I13).
+  expect(refreshed).toContainEqual({
+    step: ADVISOR_STEP,
+    target: { field: 'advisor' },
+    members: [OKAFOR],
+  })
+  expect(instance.definitionVersion).toBe(golden.steps[1].payload.contentHash)
 
-  // The same field target resolves while the account is provisioned, so the
-  // unroutable result is about the missing principal, not the target kind.
-  const routed = route(advisorStep, createResolver(dir.membership, provisioned), OWNER)
-  expect(routed.assignees).toEqual([
-    { step: 'advisor', target: { field: ADVISOR_FIELD }, members: [PROVISIONED_ADVISOR] },
-  ])
-  expect(routed.queue).toBeUndefined()
-  expect(routed.alert).toBeUndefined()
-
-  // (b) AS-4: the team target resolves live. Lee and Jordan hold the registrar
-  // task now. Ana joins while the task is open, and a re-resolution includes
-  // her with no publication: the definition and its version are unchanged.
-  const before = route(registrarStep, createResolver(dir.membership, deprovisioned), OWNER)
-  expect(before.assignees).toEqual([
-    { step: 'registrar', target: { team: REGISTRAR_TEAM }, members: REGISTRAR_MEMBERS },
-  ])
-  dir.join(REGISTRAR_TEAM, ANA)
-  const after = refreshAssignees(before.assignees, dir.membership)
-  expect(after).toEqual([
-    { step: 'registrar', target: { team: REGISTRAR_TEAM }, members: [...REGISTRAR_MEMBERS, ANA] },
-  ])
-  expect(contentHash(definition)).toBe(versionHash)
-
-  // (c) AS-4, I13: a dynamic target resolves once. A re-resolution keeps the
-  // members that the instance recorded, even after the principal leaves.
-  const recorded = [
-    { step: 'advisor', target: { field: ADVISOR_FIELD }, members: [PROVISIONED_ADVISOR] },
-  ] as const
-  const shrunk = directory({ ...INITIAL_DIRECTORY, [PROVISIONED_ADVISOR]: [] })
-  expect(refreshAssignees(recorded, shrunk.membership)).toEqual(recorded)
-
-  // (d) I13: the instance records the resolved assignees and the snapshot.
-  const instance = createInstance(definition, before.assignees)
-  expect(instance.definitionVersion).toBe(versionHash)
-  expect(instance.assignees).toEqual(before.assignees)
-
-  // (e) AS-1: all six target kinds resolve. A user, a group and a team name a
-  // directory principal; a field, the starter and the starter's manager name
-  // one through the instance.
-  expect(resolveTarget({ user: PROVISIONED_ADVISOR }, dir.membership, provisioned)).toEqual([
-    PROVISIONED_ADVISOR,
-  ])
-  expect(resolveTarget({ group: 'CS-Chairs' }, dir.membership, provisioned)).toEqual(['user:lin'])
-  expect(resolveTarget({ team: REGISTRAR_TEAM }, dir.membership, provisioned)).toEqual([
-    ...REGISTRAR_MEMBERS,
-    ANA,
-  ])
-  expect(resolveTarget({ field: ADVISOR_FIELD }, dir.membership, provisioned)).toEqual([
-    PROVISIONED_ADVISOR,
-  ])
-  expect(resolveTarget({ starter: 'starter' }, dir.membership, provisioned)).toEqual([STARTER])
-  expect(resolveTarget({ 'manager-of': 'starter' }, dir.membership, provisioned)).toEqual([OWNER])
-
-  // (f) I6: the same inputs give the same route.
-  const twice = route(advisorStep, createResolver(dir.membership, deprovisioned), OWNER)
-  expect(twice).toEqual(unrouted)
+  // The read through the live resolver shows Ana the task (AS-4, I8); the
+  // recorded instance alone does not, and she holds no read scope.
+  const context = { flow: SLUG, definition, log, grants: grantsOfPerson(ANA) }
+  expect(mayRead(ANA, { ...instance, assignees: refreshed }, context)).toBe(true)
+  expect(mayRead(ANA, instance, context)).toBe(false)
 })
