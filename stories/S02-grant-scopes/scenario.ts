@@ -119,7 +119,7 @@ function grantStep(grant: Grant, index: number): Step {
 /** The golden path: the setup, the grants, Sam's request to the registrar step, Jordan's send back, a revoke. */
 function goldenSteps(): readonly Step[] {
   const steps: Step[] = [...setupSteps()]
-  grants.forEach((grant) => steps.push(grantStep(grant, steps.length)))
+  for (const grant of grants) steps.push(grantStep(grant, steps.length))
   const resolve = directory(values)
 
   // Sam starts and submits through the All-Students grant (AC-1, ID-4): the
