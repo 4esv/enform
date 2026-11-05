@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Added
 
+- Every story from S02 to S16 runs as a golden path of client intents on one shared example flow, in api, cli and dry mode, under all eight variation operators; the harness predicts each run through the shared resolver and holds a fuzzy path to the deviation the engine predicts (#256, STORIES.md Test method, I6, I8).
 - The repository layout of `MVP.md` section 9.1 and the five commands: `make setup`, `make check`, `make invariants`, `make stories` and `make stack` (#95).
 - The engine operation model: idempotent operations with client-created UUIDv7 IDs (I1) (#7).
 - The engine rebuilds derived state from the append-only log (I4) (#10).
