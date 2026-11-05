@@ -27,6 +27,8 @@ export type LogReadOptions = {
   readonly resolve?: TargetResolver
   /** Only the events of this instance (S16). */
   readonly instanceId?: string
+  /** Only the events of this flow (#260, RT-1): its configuration changes and its instances' events. */
+  readonly flow?: string
   /** Only the newest `limit` events of the result (S16). */
   readonly limit?: number
 }
@@ -61,7 +63,16 @@ export function readableLog(log: Log, actor: ActorId, options: LogReadOptions): 
     readable.set(instanceId, allowed)
     return allowed
   }
+  const flowMatches = (event: Event): boolean =>
+    options.flow === undefined ||
+    flowOf(event) === options.flow ||
+    instanceFlow(event) === options.flow
+  const instanceFlow = (event: Event): string | undefined => {
+    const instanceId = event.payload.instanceId
+    return typeof instanceId === 'string' ? instanceOf(log, instanceId)?.flow : undefined
+  }
   const events = log.filter((event) => {
+    if (!flowMatches(event)) return false
     const instanceId = event.payload.instanceId
     if (typeof instanceId === 'string') {
       if (options.instanceId !== undefined && options.instanceId !== instanceId) return false

@@ -175,6 +175,15 @@ paths:
           schema:
             type: integer
             minimum: 0
+        - name: flow
+          in: query
+          required: false
+          description: >-
+            Only the events of this flow (#260, RT-1): its configuration
+            changes and the events of its instances, as the person may read
+            them (I8).
+          schema:
+            type: string
       responses:
         '200':
           description: The ordered events of the log
@@ -182,9 +191,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Log'
+  /api/v1/realtime:
+    get:
+      operationId: realtime
+      x-url-only: true
+      summary: The realtime channel (WebSocket)
+      description: >-
+        The primary realtime transport (RT-1, DX-2, ADR 0006): a WebSocket
+        upgrade on this path, authenticated like a request (the session
+        cookie or a bearer token). The messages are `schemas/realtime/v1.json`:
+        `hello` and `welcome` agree the protocol version, a subscription names
+        one instance or one flow and is authorized when it opens (I8), a
+        change carries the seq and the type of a new event and no payload,
+        and presence travels both ways (RT-2). The client builds the URL from
+        this operation and opens the socket itself.
+      responses:
+        '101':
+          description: The connection switches to the WebSocket protocol.
+        '401':
+          description: There is no session.
   /api/v1/realtime/events:
     get:
       operationId: streamEvents
+      x-url-only: true
       summary: Stream the changes of one instance or one flow (Server-Sent Events)
       description: >-
         The Server-Sent Events fallback of the realtime channel (RT-1, DX-2,

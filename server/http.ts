@@ -719,10 +719,12 @@ export function createApp(config: Config, pool: Pool, hub: Hub = createHub()): H
     // The read is authorized over the whole log (I8): an instance's events
     // are readable through the instance the log holds, so the position
     // filter applies to the answer, not to what the authorization reads.
+    const flow = nonEmpty(c.req.query('flow'))
     const readable = readableLog(log, auth.principal.id, {
       grants: grantsFor(log, auth.principal),
       resolve,
       ...(instanceId === undefined ? {} : { instanceId }),
+      ...(flow === undefined ? {} : { flow }),
     })
     const since = after === undefined ? readable : readable.filter((event) => event.seq > after)
     return c.json(

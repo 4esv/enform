@@ -209,7 +209,11 @@ function renderOperation({ path, method, operation }) {
     ),
   ]
   const url = `\`${BASE_URL}${renderPath(path, pathParams)}${queryParams.length === 0 ? '' : SEARCH}\``
-  if (redirectOnly || binary) {
+  // An operation marked `x-url-only` is a channel the browser opens itself
+  // (a WebSocket upgrade, an EventSource stream): the client gives the URL
+  // and the page opens it, so no `/api/v1` path is written by hand (DX-4).
+  const urlOnly = operation['x-url-only'] === true
+  if (redirectOnly || binary || urlOnly) {
     if (parameter !== undefined) {
       throw new Error(`a URL builder cannot carry a request body: ${operation.operationId}`)
     }

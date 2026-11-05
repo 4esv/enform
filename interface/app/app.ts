@@ -58,6 +58,7 @@ import {
   type StepForm,
   stepKeys,
 } from './form.js'
+import { modeLabel, openRealtime, type Present, type Realtime, type Scope } from './realtime.js'
 
 /** The versioned event type of a start (S06, MVP.md 9.1). */
 const INSTANCE_STARTED = 'instance.started@1'
@@ -213,6 +214,15 @@ export async function mountApp(options: AppOptions): Promise<void> {
     who.textContent = displayName
     header.appendChild(who)
   }
+  // Issue #260, RT-1, A4: the transport mode is always visible. A page that
+  // follows an instance or a flow shows the rung it is on; a page that
+  // follows nothing says so rather than claiming a connection.
+  const connection = document.createElement('span')
+  connection.className = 'connection'
+  connection.dataset.connection = ''
+  connection.dataset.mode = 'none'
+  connection.textContent = 'Static page'
+  header.appendChild(connection)
   if (harnessActor === undefined) {
     const signOut = document.createElement('button')
     signOut.type = 'button'
@@ -237,6 +247,62 @@ export async function mountApp(options: AppOptions): Promise<void> {
     main.replaceChildren()
     page.readers.clear()
     page.rows.clear()
+  }
+
+  // Issue #260, RT-1, RT-2, I8: one realtime subscription per page. The
+  // server notifies and the page reads: a change re-reads through the API.
+  // The same scope keeps its channel across a re-render of the page.
+  let live: { readonly key: string; readonly channel: Realtime } | undefined
+  const watch = (
+    scope: Scope,
+    onChanged?: (change: { readonly seq: number; readonly eventType: string }) => void,
+    onPresence?: (people: readonly Present[]) => void
+  ): Realtime => {
+    const key = 'instance' in scope ? `instance:${scope.instance}` : `flow:${scope.flow}`
+    if (live !== undefined && live.key === key) return live.channel
+    live?.channel.close()
+    const channel = openRealtime({
+      scope,
+      seq: 0,
+      onMode: (mode) => {
+        connection.dataset.mode = mode
+        connection.textContent = modeLabel(mode)
+      },
+      onChanged: (change) => onChanged?.(change),
+      ...(onPresence === undefined ? {} : { onPresence }),
+      onReload: () => location.reload(),
+    })
+    live = { key, channel }
+    return channel
+  }
+
+  /** The people also on this page (RT-2), without the person who looks at it. */
+  const renderPresence = (host: HTMLElement, people: readonly Present[]): void => {
+    const others = people.filter((person) => person.id !== actor)
+    host.hidden = others.length === 0
+    host.textContent =
+      others.length === 0
+        ? ''
+        : `Also here: ${others
+            .map(
+              (person) =>
+                `${person.displayName}${person.where === undefined ? '' : ` (${person.where})`}`
+            )
+            .join(', ')}`
+  }
+
+  /** Re-render when no control of the page has the focus, else after it loses it (A4, RT-3). */
+  const whenIdle = (render: () => void): void => {
+    const active = document.activeElement
+    if (
+      active instanceof HTMLElement &&
+      main.contains(active) &&
+      active.matches('input, textarea, select')
+    ) {
+      active.addEventListener('focusout', () => render(), { once: true })
+      return
+    }
+    render()
   }
 
   const readValues = (): Record<string, JsonValue> => {
@@ -320,6 +386,7 @@ export async function mountApp(options: AppOptions): Promise<void> {
 
   const renderStart = async (slug: string): Promise<void> => {
     const flow = await readFlow(slug)
+    watch({ flow: slug })
     const heading = document.createElement('h1')
     heading.textContent = flow.slug
     main.appendChild(heading)
@@ -517,6 +584,23 @@ export async function mountApp(options: AppOptions): Promise<void> {
     instanceStatus.className = 'instance-status'
     instanceStatus.textContent = statusLine(view.status)
     main.appendChild(instanceStatus)
+    // Who else looks at this instance (RT-2), and the changes that reach it
+    // (RT-1): a change made elsewhere re-reads the page once no control of
+    // it has the focus, so typing is never clobbered (A4).
+    const presence = document.createElement('p')
+    presence.className = 'presence'
+    presence.dataset.presence = ''
+    presence.hidden = true
+    main.appendChild(presence)
+    const channel = watch(
+      { instance: instanceId },
+      () => whenIdle(() => void renderTask(slug, instanceId)),
+      (people) => {
+        const host = main.querySelector<HTMLElement>('[data-presence]')
+        if (host !== null) renderPresence(host, people)
+      }
+    )
+    channel.presence(view.status.currentStep)
     // Issue OU-1, I12, DX-4: the instance PDF of the current step. The URL
     // comes from the generated client, so the page names no API path. A new
     // tab carries the session cookie and the server authorizes the read.
@@ -1681,6 +1765,36 @@ export async function mountApp(options: AppOptions): Promise<void> {
 
   const renderBuilder = async (slug: string): Promise<void> => {
     await mountBuilder({ root: main, slug, actor, clock, ids })
+    // Presence on the draft definition (RT-2, S03): who is in the builder and
+    // at which field; a change of the flow on the server is announced, not
+    // applied over the person's edits (A4).
+    const presence = document.createElement('p')
+    presence.className = 'presence'
+    presence.dataset.presence = ''
+    presence.hidden = true
+    main.prepend(presence)
+    const notice = document.createElement('p')
+    notice.className = 'status'
+    notice.dataset.flowChanged = ''
+    notice.hidden = true
+    main.prepend(notice)
+    const channel = watch(
+      { flow: slug },
+      (change) => {
+        if (!change.eventType.startsWith('config.')) return
+        notice.hidden = false
+        notice.textContent = 'This flow changed on the server. Reload to see the newest draft.'
+      },
+      (people) => renderPresence(presence, people)
+    )
+    main.addEventListener('focusin', (event) => {
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const where = target.getAttribute('name') ?? target.dataset.field
+        channel.presence(where ?? undefined)
+      }
+    })
+    channel.presence()
   }
 
   try {
