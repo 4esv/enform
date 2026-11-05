@@ -28,6 +28,7 @@ import {
   RequestRefused,
   readDraft,
   readFlowGrants,
+  readSession,
   writeDraft,
 } from '../client/client.js'
 
@@ -187,6 +188,12 @@ type BuilderState = {
   starters: string[]
   /** The checked state of one step/target/outcome pair; absent means checked. */
   readonly grants: Map<string, boolean>
+  /**
+   * Whether the signed-in person may make a structural change (DF-5, S03).
+   * Without `flow.build` the builder offers only the edit-class controls: a
+   * label and an option list. The server refuses the rest anyway (I8).
+   */
+  build: boolean
 }
 
 /**
@@ -198,10 +205,18 @@ const grantIds = new Map<string, string>()
 
 /** Mount the builder for one flow. */
 export async function mountBuilder(options: BuilderOptions): Promise<void> {
-  const [draft, flows, grants] = await Promise.all([
+  // The flow's grants need org.grants or flow.grant; an editor who holds
+  // neither still opens the builder and sees no starter (DF-5, S03). The
+  // session names the editor's own grants, so the builder knows which
+  // controls the server would refuse.
+  const [draft, flows, grants, session] = await Promise.all([
     readDraft(options.slug),
     listFlows(),
-    readFlowGrants(options.slug),
+    readFlowGrants(options.slug).catch((error: unknown) => {
+      if (error instanceof RequestRefused && error.status === 403) return []
+      throw error
+    }),
+    readSession().catch(() => undefined),
   ])
   const summary = flows.find((flow) => flow.slug === options.slug)
   const state: BuilderState = {
@@ -215,8 +230,35 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
     model: readModel(draft.definition),
     starters: startersOf(grants, options.slug),
     grants: new Map(),
+    build: session === undefined ? true : canBuild(session.grants, options.slug),
   }
   render(state)
+}
+
+/**
+ * Edit-class controls stay enabled for an editor without `flow.build`
+ * (DF-5, D2): a field's label and option list. Everything else in the
+ * settings and the steps is structural and disabled, with a notice that
+ * names the scope; the grant controls are authorized on their own.
+ */
+function lockStructure(state: BuilderState): void {
+  if (state.build) return
+  const root = state.root
+  const notice = document.createElement('p')
+  notice.className = 'status'
+  notice.dataset.editOnly = ''
+  notice.textContent =
+    'You can change labels and option lists. Adding, removing or reshaping a step, a field, a section, a condition or a setting needs the scope flow.build.'
+  root.querySelector('[data-builder-status]')?.before(notice)
+  const controls = root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+    '[data-settings] input, [data-settings] select, [data-settings] button, #builder-steps input, #builder-steps select, #builder-steps textarea, #builder-steps button, [data-add-step], [data-remove-step]'
+  )
+  for (const control of controls) {
+    if (control.closest('.grants') !== null) continue
+    if ('fieldLabel' in control.dataset || 'fieldOptions' in control.dataset) continue
+    control.disabled = true
+    control.dataset.structural = ''
+  }
 }
 
 /** Render the whole builder from its state. */
@@ -303,6 +345,7 @@ function render(state: BuilderState): void {
     steps.appendChild(renderStep(state, step, index))
   })
   root.appendChild(steps)
+  lockStructure(state)
 }
 
 /**
