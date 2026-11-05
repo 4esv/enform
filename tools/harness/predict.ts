@@ -4,7 +4,7 @@ import type { Operation } from '../../engine/operation.js'
 import { isClientIntent, resolveClientOperation } from '../../server/intents.js'
 import { directoryOf, grantsApplying, groupsOf } from './directory.js'
 import {
-  goldenClock,
+  clockOf,
   goldenView,
   type Scenario,
   type StateView,
@@ -102,7 +102,7 @@ export function continueFrom(
   scenario: Scenario,
   state: State,
   from: number,
-  clock: StepClock = goldenClock
+  clock: StepClock = clockOf(scenario)
 ): Prediction {
   let current = state
   const outcomes: StepOutcome[] = []
@@ -115,7 +115,7 @@ export function continueFrom(
 }
 
 /** The engine's prediction of a whole run under a step clock (I6). */
-export function predict(scenario: Scenario, clock: StepClock = goldenClock): Prediction {
+export function predict(scenario: Scenario, clock: StepClock = clockOf(scenario)): Prediction {
   return continueFrom(scenario, emptyState, 0, clock)
 }
 
@@ -124,7 +124,7 @@ export function predict(scenario: Scenario, clock: StepClock = goldenClock): Pre
  * state of a golden path, and the deviation the engine predicts for a fuzzy
  * path. A scenario without an intent is the raw replay of its steps.
  */
-export function predictedView(scenario: Scenario, clock: StepClock = goldenClock): StateView {
+export function predictedView(scenario: Scenario, clock: StepClock = clockOf(scenario)): StateView {
   return toView(predict(scenario, clock).state)
 }
 
@@ -134,7 +134,10 @@ export function predictedView(scenario: Scenario, clock: StepClock = goldenClock
  * event. The check is what makes the declared payloads evidence rather than
  * documentation; a fuzzy path is held to the prediction instead.
  */
-export function assertGoldenDeclared(scenario: Scenario, clock: StepClock = goldenClock): void {
+export function assertGoldenDeclared(
+  scenario: Scenario,
+  clock: StepClock = clockOf(scenario)
+): void {
   const { outcomes } = predict(scenario, clock)
   outcomes.forEach((outcome, index) => {
     if ('error' in outcome) {
@@ -152,7 +155,11 @@ export function assertGoldenDeclared(scenario: Scenario, clock: StepClock = gold
 }
 
 /** The state after the first `count` steps, as the engine predicts it (I4, I5): the shared view of a race or a fault. */
-export function prefix(scenario: Scenario, count: number, clock: StepClock = goldenClock): State {
+export function prefix(
+  scenario: Scenario,
+  count: number,
+  clock: StepClock = clockOf(scenario)
+): State {
   let state = emptyState
   for (let i = 0; i < count; i += 1) {
     const outcome = decide(scenario, state, scenario.steps[i], i, clock)
@@ -166,6 +173,6 @@ export function prefix(scenario: Scenario, count: number, clock: StepClock = gol
  * prediction for a scenario with intents, and the raw replay of the declared
  * steps for one without (a scenario the server appends as it stands).
  */
-export function expectedView(scenario: Scenario, clock: StepClock = goldenClock): StateView {
+export function expectedView(scenario: Scenario, clock: StepClock = clockOf(scenario)): StateView {
   return hasIntents(scenario) ? predictedView(scenario, clock) : goldenView(scenario, clock)
 }

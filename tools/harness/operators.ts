@@ -36,11 +36,12 @@ import {
   emptyUpdates,
   type UpdateLog,
 } from '../../engine/updates.js'
+import { grantsApplying } from './directory.js'
 import { oracles } from './oracles.js'
 import { continueFrom, decide, predict, prefix, type StepOutcome } from './predict.js'
 import { type Deliveries, postStep, runSteps, withScenarioApi } from './runner.js'
 import {
-  goldenClock,
+  clockOf,
   goldenView,
   type Scenario,
   type StateView,
@@ -107,6 +108,22 @@ export function castOf(log: Log, bootstrap: readonly Grant[] = []): Cast {
     const held = cast[grant.principal]
     if (held === undefined) cast[grant.principal] = [grant]
     else held.push(grant)
+  }
+  return cast
+}
+
+/**
+ * The cast of a scenario (STORIES.md, Cast; AC-1, #256): the grants that
+ * apply to each named person at the end of the golden path, the bootstrap
+ * grants of it and its groups and the grants the story recorded, read as the
+ * harness directory reads them (directory.ts). The people keep their order,
+ * so the generated variants are deterministic (I6).
+ */
+export function castFor(scenario: Scenario, people: readonly ActorId[]): Cast {
+  const log = predict(scenario).state.log
+  const cast: Record<ActorId, readonly Grant[]> = {}
+  for (const person of people) {
+    cast[person] = grantsApplying(log, person, scenario.bootstrap, scenario.membership)
   }
   return cast
 }
@@ -291,7 +308,7 @@ function runRace(scenario: Scenario, variant: RaceVariant): void {
   const step = scenario.steps[index]
   // Both actions are decided from the same view (I5): the engine resolves
   // each intent against the prefix, or takes the declared operation as it is.
-  const golden = decide(scenario, view, step, index, goldenClock)
+  const golden = decide(scenario, view, step, index, clockOf(scenario))
   if ('error' in golden) {
     throw new Error(`${variant.id}: the engine refused the golden action: ${golden.error}`)
   }
@@ -300,7 +317,7 @@ function runRace(scenario: Scenario, variant: RaceVariant): void {
     view,
     { ...step, actor: variant.competitor },
     index,
-    goldenClock
+    clockOf(scenario)
   )
 
   // The golden action wins; the competing action is refused as stale (I5),
@@ -463,9 +480,9 @@ const SKEW = 0.5
  * variant's step and left in force after it. A forward or back move jumps by
  * an idle limit; a skew drifts by a fraction of a step.
  */
-function movedClock(move: ClockMove, movedIndex: number): StepClock {
+function movedClock(golden: StepClock, move: ClockMove, movedIndex: number): StepClock {
   const shift = move === 'forward' ? IDLE_LIMIT : move === 'back' ? -IDLE_LIMIT : SKEW
-  return (index) => goldenClock(index) + (index >= movedIndex ? shift : 0)
+  return (index) => golden(index) + (index >= movedIndex ? shift : 0)
 }
 
 /** One generated Clock variant: one step of the golden path, with the clock moved there. */
@@ -491,7 +508,7 @@ export function clockVariants(scenario: Scenario): readonly ClockVariant[] {
         id: `clock:${move}:step${index + 1}`,
         stepIndex: index,
         move,
-        clock: movedClock(move, index),
+        clock: movedClock(clockOf(scenario), move, index),
       })
     }
   })
@@ -998,7 +1015,7 @@ async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<
   const { outcomes } = predict(scenario)
   await withScenarioApi(scenario, async (api) => {
     for (let i = 0; i < variant.from; i += 1)
-      await postStep(api, scenario.steps[i], i, goldenClock, 1, outcomes[i])
+      await postStep(api, scenario.steps[i], i, clockOf(scenario), 1, outcomes[i])
 
     // The connection drops. Each later step is saved on the device (I15),
     // encrypted (I11) and shown as pending (I16); nothing reaches the server.
@@ -1008,7 +1025,7 @@ async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<
     const buffered: { readonly step: Step; readonly index: number }[] = []
     for (let i = variant.from; i < scenario.steps.length; i += 1) {
       const step = scenario.steps[i]
-      const operation = stepOperation(step, i)
+      const operation = stepOperation(step, i, clockOf(scenario))
       const edit = { operation: operation as unknown as Record<string, unknown> }
       drafts = saveDraft(drafts, operation.id, edit)
       updates = applyOptimistic(updates, operation.id, edit)
@@ -1037,8 +1054,8 @@ async function runOffline(scenario: Scenario, variant: OfflineVariant): Promise<
     // order. The server applies each one once (I1); the drafts sync and the
     // updates confirm (I15, I16).
     for (const { step, index } of buffered) {
-      await postStep(api, step, index, goldenClock, 2, outcomes[index])
-      const operation = stepOperation(step, index)
+      await postStep(api, step, index, clockOf(scenario), 2, outcomes[index])
+      const operation = stepOperation(step, index, clockOf(scenario))
       drafts = syncDraft(drafts, operation.id)
       updates = acknowledge(updates, operation.id)
     }

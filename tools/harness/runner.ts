@@ -19,12 +19,12 @@ import {
   sameOperation,
 } from './predict.js'
 import {
+  clockOf,
   fromView,
   type GuiAction,
   type GuiDomExpectation,
   type GuiFillValue,
   type GuiStep,
-  goldenClock,
   goldenViewPrefix,
   type Scenario,
   type StateView,
@@ -88,7 +88,7 @@ export async function runSteps(scenario: Scenario, options: RunOptions): Promise
   if (options.mode === 'dry') return dryRun(scenario)
   if (options.mode === 'cli') return cliRun(scenario)
   if (options.mode === 'gui') return guiRun(scenario, options)
-  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? goldenClock)
+  return apiRun(scenario, options.deliveries ?? ONCE, options.clock ?? clockOf(scenario))
 }
 
 /**
@@ -122,7 +122,7 @@ async function cliRun(scenario: Scenario): Promise<RunOutcome> {
   let state = emptyState
   for (let i = 0; i < scenario.steps.length; i++) {
     const step = scenario.steps[i]
-    const operation = stepOperation(step, i)
+    const operation = stepOperation(step, i, clockOf(scenario))
     const posted = step.intent === undefined ? operation : { ...operation, payload: step.intent }
     state = await cliApply(posted, state, scenario)
     if (step.intent !== undefined) {
@@ -198,7 +198,7 @@ async function guiRun(scenario: Scenario, options: RunOptions): Promise<RunOutco
   if (gui.length > scenario.steps.length) {
     throw new Error('gui mode: the gui path is longer than the scenario steps')
   }
-  const clock = options.clock ?? goldenClock
+  const clock = options.clock ?? clockOf(scenario)
   const flowSlug = scenario.flowSlug
   if (flowSlug === undefined) {
     throw new Error('gui mode: the scenario declares no flowSlug')
@@ -551,7 +551,7 @@ async function apiRun(
  */
 export function predictedOutcomes(
   scenario: Scenario,
-  clock: StepClock = goldenClock
+  clock: StepClock = clockOf(scenario)
 ): readonly StepOutcome[] {
   return predict(scenario, clock).outcomes
 }

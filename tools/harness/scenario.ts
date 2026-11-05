@@ -88,6 +88,13 @@ export type Scenario = {
    */
   readonly membership?: Readonly<Record<string, readonly string[]>>
   /**
+   * The step clock of the story (I6): the time of each step. Absent, step i
+   * happens at time i + 1. A story whose engine reads elapsed time (an idle
+   * limit, a deadline, an undo period) declares a clock that places its
+   * steps in time; the Clock operator moves it from there.
+   */
+  readonly clock?: StepClock
+  /**
    * The interface path, a prefix of `steps` (STORIES.md, Golden path: `gui` is
    * the same steps in a browser). A gui step maps to the engine step at the
    * same index. The path may declare fewer steps than `steps`, because an
@@ -137,6 +144,11 @@ export type StepClock = (stepIndex: number) => number
 /** The golden step clock (I6): step i happens at time i + 1. */
 export const goldenClock: StepClock = (index) => index + 1
 
+/** The step clock of a scenario (I6): its own, or the golden step clock. */
+export function clockOf(scenario: Scenario): StepClock {
+  return scenario.clock ?? goldenClock
+}
+
 /**
  * The operation that one step appends (I2): a step with side effects carries
  * them in the same operation, so one `apply` commits the state change and its
@@ -157,7 +169,7 @@ export function stepOperation(
 
 // The engine-side replay of the steps (I6): the golden end state that a run
 // must reproduce. The clock is the step clock and the IDs are `op-N`.
-export function goldenView(value: Scenario, clock: StepClock = goldenClock): StateView {
+export function goldenView(value: Scenario, clock: StepClock = clockOf(value)): StateView {
   let state = emptyState
   value.steps.forEach((step, i) => {
     state = apply(stepOperation(step, i, clock), state)
@@ -173,7 +185,7 @@ export function goldenView(value: Scenario, clock: StepClock = goldenClock): Sta
 export function goldenViewPrefix(
   value: Scenario,
   count: number,
-  clock: StepClock = goldenClock
+  clock: StepClock = clockOf(value)
 ): StateView {
   let state = emptyState
   for (let i = 0; i < count; i += 1) {
