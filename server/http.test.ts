@@ -198,3 +198,17 @@ test('#258 the server describes the device sign-in of the CLI without a credenti
   })
   expect(body).not.toContain(defaultConfig.keycloak.clientSecret)
 })
+
+// Issue #264, DF-5, S03: the session names the grants that apply to the
+// signed-in principal, so the builder disables the structural controls for a
+// person who holds `flow.edit` and not `flow.build` before the server refuses
+// the change. The engine stays the authority: the answer is a read of the
+// grants projection, and every write is authorized again (AC-1, I8).
+test.fails('#264 the session answers the grants that apply to the principal (DF-5)', async () => {
+  const grants = [{ principal: 'user-1', resource: 'flow:course-overload', scopes: ['flow.edit'] }]
+  const app = createApp(defaultConfig, sessionPool(grants))
+  const response = await app.request('/api/v1/session', { headers: { cookie } })
+  const body = await response.text()
+  expect(response.status, body).toBe(200)
+  expect(JSON.parse(body).grants).toEqual(grants)
+})
