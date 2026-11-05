@@ -44,7 +44,7 @@ async function local(): Promise<Local> {
   return (await import(LOCAL_MODULE)) as unknown as Local
 }
 
-test.fails('#262 I11 a draft is stored as ciphertext under the session key and reads back with its state', async () => {
+test('#262 I11 a draft is stored as ciphertext under the session key and reads back with its state', async () => {
   const { openLocal, SESSION_KEY_NAME } = await local()
   const storage = new Map<string, string>()
   const secrets = new Map<string, string>()
@@ -78,16 +78,18 @@ test.fails('#262 I11 a draft is stored as ciphertext under the session key and r
   expect(await stranger.readDraft('inst-1')).toBeUndefined()
 })
 
-test.fails('#262 RT-5 queued operations flush in order and stop at the first that does not reach the server', async () => {
+test('#262 RT-5 queued operations flush in order and stop at the first that does not reach the server', async () => {
   const { openLocal } = await local()
   const storage = new Map<string, string>()
-  const store = await openLocal({ storage, secrets: new Map() })
+  const secrets = new Map<string, string>()
+  const store = await openLocal({ storage, secrets })
   await store.enqueue({ id: 'op-1', type: 'instance.started@1' })
   await store.enqueue({ id: 'op-2', type: 'draft.edited@1' })
   await store.enqueue({ id: 'op-3', type: 'instance.submitted@1' })
   expect((await store.pending()).map((operation) => operation.id)).toEqual(['op-1', 'op-2', 'op-3'])
-  // The queue survives a new session over the same storage (I15).
-  const again = await openLocal({ storage, secrets: new Map() })
+  // The queue survives a refresh: a new session over the same storage with
+  // the same key, as the tab keeps it (I15, RT-4).
+  const again = await openLocal({ storage, secrets })
   const sent: string[] = []
   const first = await again.flush(async (operation) => {
     sent.push(String(operation.id))
@@ -107,7 +109,7 @@ test.fails('#262 RT-5 queued operations flush in order and stop at the first tha
   expect(await again.pending()).toEqual([])
 })
 
-test.fails('#262 I11 destroy removes the key and every ciphertext, so nothing is recoverable', async () => {
+test('#262 I11 destroy removes the key and every ciphertext, so nothing is recoverable', async () => {
   const { openLocal, SESSION_KEY_NAME } = await local()
   const storage = new Map<string, string>()
   const secrets = new Map<string, string>()
