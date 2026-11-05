@@ -1,10 +1,17 @@
-// Issue #224, DF-1, DF-4, DF-5, FM-1, FM-3, I12, ADR 0009, ADR 0012: the
-// builder. It loads the draft of one flow, edits the v2 definition as a form
-// and writes it back through the public API client. It edits a step's key, its
-// targets, its outcomes and its fields in place; it saves through
-// `writeDraft` and publishes through `publishFlow`. The engine still decides
-// whether the change is allowed, whether the definition is valid and what a
-// publication records (A9, DF-5); the builder only shows the server's answer.
+// Issue #224, #264, DF-1, DF-4, DF-5, FM-1, FM-2, FM-3, FM-5, ID-3, WF-5,
+// SE-3, SE-4, AS-3, I12, ADR 0009, ADR 0012: the builder. It loads the draft
+// of one flow, edits the v2 definition as a form and writes it back through
+// the public API client. It edits the flow's settings (anonymous access, the
+// undo period, the final step), each step's key, targets, outcomes, timers,
+// takeover, escalation, sections, fields, visible and editable lists, skip
+// condition and rules in place; it saves through `writeDraft` and publishes
+// through `publishFlow`. The engine still decides whether the change is
+// allowed, whether the definition is valid and what a publication records
+// (A9, DF-5); the builder only shows the server's answer.
+//
+// The model keeps every part of the definition it does not edit (a field
+// default, a connector read, a rule it cannot draw) exactly as it read it, so
+// a save never drops what the CLI or another builder wrote (DF-4, I9).
 //
 // Every step and field is plain DOM (ADR 0009). The grant controls post one
 // `config.grant.changed@1` operation per checked target and outcome through
@@ -58,17 +65,62 @@ type BuilderControl = (typeof BUILDER_CONTROLS)[number]
 /** The choice controls whose option list the builder edits (FM-1). */
 const CHOICE_CONTROLS: ReadonlySet<BuilderControl> = new Set(['select', 'multi-select', 'radio'])
 
+/** The takeover settings of a step (AS-3, S10); the empty string means absent. */
+const TAKEOVERS = ['', 'always', 'after-idle', 'never'] as const
+type Takeover = (typeof TAKEOVERS)[number]
+
+/** The six effects of a rule (FM-2). */
+const RULE_EFFECTS = ['show', 'hide', 'collapse', 'require', 'lock', 'skip'] as const
+export type RuleEffect = (typeof RULE_EFFECTS)[number]
+
+/** The comparisons the condition builder draws (FM-5). */
+const COMPARE_OPS = ['==', '!=', '<', '<=', '>', '>=', 'in'] as const
+export type CompareOp = (typeof COMPARE_OPS)[number]
+
+/** A literal on the right of a comparison; `in` takes a list. */
+export type Literal = string | number | boolean | readonly (string | number | boolean)[]
+
+/**
+ * One condition as the builder draws it (FM-2, FM-5, ADR 0008): a comparison
+ * of one value with a literal, an all-of or any-of group, a negation, or the
+ * JSON text of a tree the builder cannot draw, kept as it was read.
+ */
+export type Condition =
+  | { readonly kind: 'compare'; op: CompareOp; left: string; right: Literal }
+  | { readonly kind: 'group'; op: 'and' | 'or'; items: Condition[] }
+  | { readonly kind: 'not'; item: Condition }
+  | { readonly kind: 'json'; text: string }
+
 /** One field the builder edits in place. */
-type BuilderField = {
+export type BuilderField = {
+  /** The field as it was read, so the parts the builder does not edit are kept (DF-4). */
+  raw?: Record<string, unknown>
   key: string
   label: string
   control: BuilderControl
   options: string
   required: boolean
+  /** The key of the section the field belongs to; empty for a flat field (FM-1). */
+  section: string
+}
+
+/** One named group of fields of a step (FM-1). */
+export type BuilderSection = {
+  key: string
+  collapsed: boolean
+}
+
+/** One rule of a step (FM-2): a condition, an effect and the comma-separated targets. */
+export type BuilderRule = {
+  when: Condition
+  effect: RuleEffect
+  targets: string
 }
 
 /** One step the builder edits in place. */
-type BuilderStep = {
+export type BuilderStep = {
+  /** The step as it was read, so the parts the builder does not edit are kept (DF-4). */
+  raw?: Record<string, unknown>
   key: string
   targets: string[]
   outcomes: string
@@ -76,7 +128,34 @@ type BuilderStep = {
   reminderMinutes: string
   /** The deadline from the task's start in minutes, as typed (SE-4, S12). */
   deadlineMinutes: string
+  /** When an assignee may take over a claimed task (AS-3, S10). */
+  takeover: Takeover
+  /** The idle period before an after-idle takeover, in minutes, as typed (AS-3). */
+  idleMinutes: string
+  /** The comma-separated targets the escalation adds at the deadline (SE-4, S12). */
+  escalationTargets: string
+  /** The comma-separated keys the step shows; empty means every field (FM-3). */
+  visible: string
+  /** The comma-separated keys the actor may edit; empty means every field of the step (FM-3). */
+  editable: string
   fields: BuilderField[]
+  sections: BuilderSection[]
+  /** The condition that skips the step (WF-1, S05), or undefined for none. */
+  skipWhen: Condition | undefined
+  rules: BuilderRule[]
+}
+
+/** The whole definition as the builder edits it (DF-1). */
+export type BuilderModel = {
+  /** The definition as it was read, so the parts the builder does not edit are kept (DF-4). */
+  raw?: Record<string, unknown>
+  /** Whether the form is open without a sign-in (ID-3). */
+  anonymous: boolean
+  /** The undo period in hours, as typed (WF-5); empty means the server default. */
+  undoHours: string
+  /** The key of the step after which the flow is final (WF-5); empty means none. */
+  finalStep: string
+  steps: BuilderStep[]
 }
 
 export interface BuilderOptions {
@@ -99,7 +178,7 @@ type BuilderState = {
   readonly ids: () => string
   title: string | undefined
   draftVersion: number
-  steps: BuilderStep[]
+  model: BuilderModel
   /**
    * The principals that hold `instance.start` on the flow (#232). A `starter`
    * target grants its outcome to them; the builder actor is only the fallback
@@ -133,7 +212,7 @@ export async function mountBuilder(options: BuilderOptions): Promise<void> {
     ids: options.ids,
     title: summary?.title,
     draftVersion: draft.version,
-    steps: readSteps(draft.definition),
+    model: readModel(draft.definition),
     starters: startersOf(grants, options.slug),
     grants: new Map(),
   }
@@ -161,21 +240,15 @@ function render(state: BuilderState): void {
   addStep.textContent = 'Add step'
   addStep.dataset.addStep = ''
   addStep.addEventListener('click', () => {
-    if (state.steps.length > 0) {
-      const last = state.steps[state.steps.length - 1]
+    const steps = state.model.steps
+    if (steps.length > 0) {
+      const last = steps[steps.length - 1]
       // The last step becomes a middle step, so its default outcome is the
       // approval that the next step receives (DF-4, FM-1).
-      if (last.outcomes.trim() === '' || last.outcomes.trim() === 'submit')
+      if (last !== undefined && (last.outcomes.trim() === '' || last.outcomes.trim() === 'submit'))
         last.outcomes = 'approve'
     }
-    state.steps.push({
-      key: `step${state.steps.length + 1}`,
-      targets: ['starter'],
-      outcomes: 'submit',
-      reminderMinutes: '',
-      deadlineMinutes: '',
-      fields: [],
-    })
+    steps.push({ ...defaultStep(steps.length + 1), key: `step${steps.length + 1}` })
     render(state)
   })
   controls.appendChild(addStep)
@@ -184,10 +257,10 @@ function render(state: BuilderState): void {
   removeStep.type = 'button'
   removeStep.textContent = 'Remove last step'
   removeStep.dataset.removeStep = ''
-  removeStep.disabled = state.steps.length <= 1
+  removeStep.disabled = state.model.steps.length <= 1
   removeStep.addEventListener('click', () => {
-    if (state.steps.length <= 1) return
-    state.steps.pop()
+    if (state.model.steps.length <= 1) return
+    state.model.steps.pop()
     render(state)
   })
   controls.appendChild(removeStep)
@@ -221,21 +294,90 @@ function render(state: BuilderState): void {
   published.dataset.published = ''
   root.appendChild(published)
 
+  root.appendChild(renderSettings(state))
   root.appendChild(renderStarters(state))
 
   const steps = document.createElement('div')
   steps.id = 'builder-steps'
-  state.steps.forEach((step, index) => {
+  state.model.steps.forEach((step, index) => {
     steps.appendChild(renderStep(state, step, index))
   })
   root.appendChild(steps)
 }
 
-/** Render one step's key, targets, outcomes, fields and grant controls. */
+/**
+ * Render the flow's settings (ID-3, WF-5): anonymous access with its visible
+ * label, the undo period and the final step.
+ */
+function renderSettings(state: BuilderState): HTMLElement {
+  const model = state.model
+  const box = document.createElement('section')
+  box.className = 'builder-settings'
+  box.dataset.settings = ''
+  const heading = document.createElement('h2')
+  heading.textContent = 'Settings'
+  box.appendChild(heading)
+
+  const anonymousLabel = document.createElement('label')
+  anonymousLabel.className = 'inline'
+  const anonymous = document.createElement('input')
+  anonymous.type = 'checkbox'
+  anonymous.checked = model.anonymous
+  anonymous.dataset.anonymous = ''
+  anonymous.dataset.field = 'settings/anonymous'
+  const anonymousText = document.createElement('span')
+  anonymousText.dataset.anonymousLabel = ''
+  anonymousText.textContent = anonymousLabelOf(model.anonymous)
+  anonymous.addEventListener('change', () => {
+    model.anonymous = anonymous.checked
+    anonymousText.textContent = anonymousLabelOf(model.anonymous)
+  })
+  anonymousLabel.append(anonymous, anonymousText)
+  box.appendChild(anonymousLabel)
+
+  const undo = minuteRow('Undo period (hours, empty for the default)', model.undoHours, 'undoHours')
+  undo.input.dataset.field = 'settings/undoHours'
+  undo.input.addEventListener('input', () => {
+    model.undoHours = undo.input.value
+  })
+  box.appendChild(undo.row)
+
+  const finalStep = selectRow('Final step (no undo after it completes)')
+  finalStep.input.dataset.finalStep = ''
+  finalStep.input.dataset.field = 'settings/finalStep'
+  const none = document.createElement('option')
+  none.value = ''
+  none.textContent = 'none'
+  finalStep.input.appendChild(none)
+  for (const step of model.steps) {
+    const option = document.createElement('option')
+    option.value = step.key
+    option.textContent = step.key
+    finalStep.input.appendChild(option)
+  }
+  finalStep.input.value = model.steps.some((step) => step.key === model.finalStep)
+    ? model.finalStep
+    : ''
+  finalStep.input.addEventListener('change', () => {
+    model.finalStep = finalStep.input.value
+  })
+  box.appendChild(finalStep.row)
+  return box
+}
+
+/** The visible label of the anonymous setting (ID-3). */
+function anonymousLabelOf(anonymous: boolean): string {
+  return anonymous
+    ? 'Anonymous access: on. Anyone with the link can start without signing in.'
+    : 'Anonymous access: off. A starter signs in first.'
+}
+
+/** Render one step's key, targets, outcomes, settings, sections, fields and grant controls. */
 function renderStep(state: BuilderState, step: BuilderStep, index: number): HTMLElement {
   const section = document.createElement('section')
   section.className = 'builder-step'
   section.dataset.stepIndex = String(index)
+  const at = (what: string): string => `step:${step.key}/${what}`
 
   const heading = document.createElement('h2')
   heading.textContent = `Step ${index + 1}`
@@ -244,6 +386,7 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   const key = textRow('Key')
   key.input.value = step.key
   key.input.dataset.stepKey = ''
+  key.input.dataset.field = at('key')
   key.input.addEventListener('input', () => {
     step.key = key.input.value
   })
@@ -258,7 +401,8 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
     const input = textRow(target === 0 ? 'Target' : 'Second target (optional)')
     input.input.value = step.targets[target] ?? ''
     input.input.dataset.target = String(target)
-    input.input.placeholder = 'starter, user:<id> or <id>'
+    input.input.dataset.field = at(`target:${target}`)
+    input.input.placeholder = 'starter, user:<id>, group:<id>, team:<name> or field:<key>'
     input.input.addEventListener('input', () => {
       const value = input.input.value.trim()
       if (value === '') {
@@ -276,34 +420,15 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   const outcomes = textRow('Outcomes (comma-separated)')
   outcomes.input.value = step.outcomes
   outcomes.input.dataset.outcomes = ''
+  outcomes.input.dataset.field = at('outcomes')
   outcomes.input.addEventListener('input', () => {
     step.outcomes = outcomes.input.value
   })
   outcomes.input.addEventListener('change', () => render(state))
   section.appendChild(outcomes.row)
 
-  // The task's timers (SE-3, SE-4, S12): the reminder interval and the
-  // deadline from the task's start, both in minutes. An empty input means the
-  // step sets no reminder or no deadline, and the engine schedules nothing.
-  const reminders = minuteRow(
-    'Reminder every (minutes, empty for none)',
-    step.reminderMinutes,
-    'reminderMinutes'
-  )
-  reminders.input.addEventListener('input', () => {
-    step.reminderMinutes = reminders.input.value
-  })
-  section.appendChild(reminders.row)
-
-  const deadline = minuteRow(
-    'Deadline (minutes, empty for none)',
-    step.deadlineMinutes,
-    'deadlineMinutes'
-  )
-  deadline.input.addEventListener('input', () => {
-    step.deadlineMinutes = deadline.input.value
-  })
-  section.appendChild(deadline.row)
+  section.appendChild(renderStepSettings(step, at))
+  section.appendChild(renderSections(state, step, at))
 
   const fields = document.createElement('div')
   fields.className = 'builder-fields'
@@ -311,7 +436,7 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   fieldHeading.textContent = 'Fields'
   fields.appendChild(fieldHeading)
   step.fields.forEach((field, fieldIndex) => {
-    fields.appendChild(renderField(state, field, fieldIndex))
+    fields.appendChild(renderField(state, step, field, fieldIndex, at))
   })
   const addField = document.createElement('button')
   addField.type = 'button'
@@ -324,6 +449,7 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
       control: 'text',
       options: '',
       required: false,
+      section: step.sections[0]?.key ?? '',
     })
     render(state)
   })
@@ -334,15 +460,198 @@ function renderStep(state: BuilderState, step: BuilderStep, index: number): HTML
   return section
 }
 
-/** Render one field in place: its key, label, control, options and required mark. */
-function renderField(state: BuilderState, field: BuilderField, index: number): HTMLElement {
+/**
+ * Render one step's settings (SE-3, SE-4, AS-3, FM-3, S10, S12): the timers,
+ * the takeover, the escalation targets, and the visible and editable lists.
+ */
+function renderStepSettings(step: BuilderStep, at: (what: string) => string): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'step-settings'
+  const heading = document.createElement('h3')
+  heading.textContent = 'Step settings'
+  box.appendChild(heading)
+
+  // The task's timers (SE-3, SE-4, S12): the reminder interval and the
+  // deadline from the task's start, both in minutes. An empty input means the
+  // step sets no reminder or no deadline, and the engine schedules nothing.
+  const reminders = minuteRow(
+    'Reminder every (minutes, empty for none)',
+    step.reminderMinutes,
+    'reminderMinutes'
+  )
+  reminders.input.dataset.field = at('reminderMinutes')
+  reminders.input.addEventListener('input', () => {
+    step.reminderMinutes = reminders.input.value
+  })
+  box.appendChild(reminders.row)
+
+  const deadline = minuteRow(
+    'Deadline (minutes, empty for none)',
+    step.deadlineMinutes,
+    'deadlineMinutes'
+  )
+  deadline.input.dataset.field = at('deadlineMinutes')
+  deadline.input.addEventListener('input', () => {
+    step.deadlineMinutes = deadline.input.value
+  })
+  box.appendChild(deadline.row)
+
+  const escalation = textRow('Escalation targets at the deadline (comma-separated, empty for none)')
+  escalation.input.value = step.escalationTargets
+  escalation.input.dataset.escalationTargets = ''
+  escalation.input.dataset.field = at('escalationTargets')
+  escalation.input.addEventListener('input', () => {
+    step.escalationTargets = escalation.input.value
+  })
+  box.appendChild(escalation.row)
+
+  const takeover = selectRow('Takeover of a claimed task')
+  takeover.input.dataset.takeover = ''
+  takeover.input.dataset.field = at('takeover')
+  const takeoverLabels: Record<Takeover, string> = {
+    '': 'never (default)',
+    always: 'always, at once',
+    'after-idle': 'after the holder has been idle',
+    never: 'never',
+  }
+  for (const value of TAKEOVERS) {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = takeoverLabels[value]
+    takeover.input.appendChild(option)
+  }
+  takeover.input.value = step.takeover
+  takeover.input.addEventListener('change', () => {
+    step.takeover = isTakeover(takeover.input.value) ? takeover.input.value : ''
+    idle.row.hidden = step.takeover !== 'after-idle'
+  })
+  box.appendChild(takeover.row)
+
+  const idle = minuteRow(
+    'Idle period before a takeover (minutes, empty for 60)',
+    step.idleMinutes,
+    'idleMinutes'
+  )
+  idle.input.dataset.field = at('idleMinutes')
+  idle.row.hidden = step.takeover !== 'after-idle'
+  idle.input.addEventListener('input', () => {
+    step.idleMinutes = idle.input.value
+  })
+  box.appendChild(idle.row)
+
+  const visible = textRow('Visible fields (comma-separated keys, empty for all)')
+  visible.input.value = step.visible
+  visible.input.dataset.visible = ''
+  visible.input.dataset.field = at('visible')
+  visible.input.addEventListener('input', () => {
+    step.visible = visible.input.value
+  })
+  box.appendChild(visible.row)
+
+  const editable = textRow('Editable fields (comma-separated keys, empty for all of this step)')
+  editable.input.value = step.editable
+  editable.input.dataset.editable = ''
+  editable.input.dataset.field = at('editable')
+  editable.input.addEventListener('input', () => {
+    step.editable = editable.input.value
+  })
+  box.appendChild(editable.row)
+  return box
+}
+
+/**
+ * Render one step's sections (FM-1): each key and collapsed default, a
+ * control that removes it, and one that adds a section. A step shows either
+ * flat fields or sections, so the first section takes every field.
+ */
+function renderSections(
+  state: BuilderState,
+  step: BuilderStep,
+  at: (what: string) => string
+): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'builder-sections'
+  const heading = document.createElement('h3')
+  heading.textContent = 'Sections'
+  box.appendChild(heading)
+  const hint = document.createElement('p')
+  hint.className = 'hint'
+  hint.textContent =
+    step.sections.length === 0
+      ? 'No sections: the step shows its fields as one list.'
+      : 'Each field belongs to one section; a collapsed section opens on demand.'
+  box.appendChild(hint)
+  step.sections.forEach((section, index) => {
+    const row = document.createElement('div')
+    row.className = 'builder-section'
+    row.dataset.sectionIndex = String(index)
+    const key = textRow('Section key')
+    key.input.value = section.key
+    key.input.dataset.sectionKey = ''
+    key.input.dataset.field = at(`section:${section.key}/key`)
+    key.input.addEventListener('input', () => {
+      const previous = section.key
+      section.key = key.input.value
+      for (const field of step.fields) if (field.section === previous) field.section = section.key
+    })
+    key.input.addEventListener('change', () => render(state))
+    row.appendChild(key.row)
+    const collapsedLabel = document.createElement('label')
+    collapsedLabel.className = 'inline'
+    const collapsed = document.createElement('input')
+    collapsed.type = 'checkbox'
+    collapsed.checked = section.collapsed
+    collapsed.dataset.sectionCollapsed = ''
+    collapsed.dataset.field = at(`section:${section.key}/collapsed`)
+    collapsed.addEventListener('change', () => {
+      section.collapsed = collapsed.checked
+    })
+    collapsedLabel.append(collapsed, 'Collapsed by default')
+    row.appendChild(collapsedLabel)
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.textContent = 'Remove section'
+    remove.dataset.removeSection = String(index)
+    remove.addEventListener('click', () => {
+      step.sections.splice(index, 1)
+      const first = step.sections[0]?.key ?? ''
+      for (const field of step.fields) if (field.section === section.key) field.section = first
+      render(state)
+    })
+    row.appendChild(remove)
+    box.appendChild(row)
+  })
+  const add = document.createElement('button')
+  add.type = 'button'
+  add.textContent = 'Add section'
+  add.dataset.addSection = ''
+  add.addEventListener('click', () => {
+    const key = `section${step.sections.length + 1}`
+    step.sections.push({ key, collapsed: false })
+    if (step.sections.length === 1) for (const field of step.fields) field.section = key
+    render(state)
+  })
+  box.appendChild(add)
+  return box
+}
+
+/** Render one field in place: its key, label, control, options, section and required mark. */
+function renderField(
+  state: BuilderState,
+  step: BuilderStep,
+  field: BuilderField,
+  index: number,
+  at: (what: string) => string
+): HTMLElement {
   const row = document.createElement('div')
   row.className = 'builder-field'
   row.dataset.fieldIndex = String(index)
+  const where = (what: string): string => at(`field:${field.key}/${what}`)
 
   const key = textRow('Field key')
   key.input.value = field.key
   key.input.dataset.fieldKey = ''
+  key.input.dataset.field = where('key')
   key.input.addEventListener('input', () => {
     field.key = key.input.value
   })
@@ -351,6 +660,7 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
   const label = textRow('Label')
   label.input.value = field.label
   label.input.dataset.fieldLabel = ''
+  label.input.dataset.field = where('label')
   label.input.addEventListener('input', () => {
     field.label = label.input.value
   })
@@ -365,8 +675,9 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
   }
   control.input.value = field.control
   control.input.dataset.fieldControl = ''
+  control.input.dataset.field = where('control')
   control.input.addEventListener('change', () => {
-    field.control = control.input.value as BuilderControl
+    field.control = isBuilderControl(control.input.value) ? control.input.value : 'text'
     render(state)
   })
   row.appendChild(control.row)
@@ -375,10 +686,30 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
     const options = textRow('Options (comma-separated)')
     options.input.value = field.options
     options.input.dataset.fieldOptions = ''
+    options.input.dataset.field = where('options')
     options.input.addEventListener('input', () => {
       field.options = options.input.value
     })
     row.appendChild(options.row)
+  }
+
+  if (step.sections.length > 0) {
+    const section = selectRow('Section')
+    section.input.dataset.fieldSection = ''
+    section.input.dataset.field = where('section')
+    for (const entry of step.sections) {
+      const option = document.createElement('option')
+      option.value = entry.key
+      option.textContent = entry.key
+      section.input.appendChild(option)
+    }
+    section.input.value = step.sections.some((entry) => entry.key === field.section)
+      ? field.section
+      : (step.sections[0]?.key ?? '')
+    section.input.addEventListener('change', () => {
+      field.section = section.input.value
+    })
+    row.appendChild(section.row)
   }
 
   const requiredLabel = document.createElement('label')
@@ -387,11 +718,22 @@ function renderField(state: BuilderState, field: BuilderField, index: number): H
   required.type = 'checkbox'
   required.checked = field.required
   required.dataset.fieldRequired = ''
+  required.dataset.field = where('required')
   required.addEventListener('change', () => {
     field.required = required.checked
   })
   requiredLabel.append(required, 'Required')
   row.appendChild(requiredLabel)
+
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.textContent = 'Remove field'
+  remove.dataset.removeField = String(index)
+  remove.addEventListener('click', () => {
+    step.fields.splice(index, 1)
+    render(state)
+  })
+  row.appendChild(remove)
 
   return row
 }
@@ -446,6 +788,7 @@ function renderStarters(state: BuilderState): HTMLElement {
 
   const row = textRow('Principal (user:<id>, team:<name> or an id)')
   row.input.dataset.starterInput = ''
+  row.input.dataset.field = 'starters/add'
   row.input.placeholder = 'user:<id> or team:<name>'
   box.appendChild(row.row)
 
@@ -502,8 +845,10 @@ function renderGrants(state: BuilderState, step: BuilderStep, index: number): HT
     for (const target of targets) {
       // A `starter` target is dynamic: each grant names a configured starter,
       // because that is who the engine resolves `starter` to in an instance
-      // that person starts. A user target is its immutable ID (ID-4).
+      // that person starts. A user target is its immutable ID (ID-4). A field
+      // or manager-of target resolves per instance, so it grants nothing here.
       for (const principal of principalsOf(state, target)) {
+        if (principal === '') continue
         const key = grantKey(state.slug, step.key, principal, outcome)
         const label = document.createElement('label')
         const checkbox = document.createElement('input')
@@ -547,7 +892,7 @@ async function addStarter(state: BuilderState, input: HTMLInputElement): Promise
     confirmation.textContent = 'Enter a user:<id>, group:<id>, team:<name> or an id.'
     return
   }
-  const first = state.steps[0]
+  const first = state.model.steps[0]
   if (first === undefined) {
     confirmation.textContent = 'Add a first step before adding a starter.'
     return
@@ -587,7 +932,7 @@ async function addStarter(state: BuilderState, input: HTMLInputElement): Promise
 /** Write the draft through the API, and show the server's answer (DF-4, I5). */
 async function saveDraft(state: BuilderState): Promise<void> {
   const status = statusOf(state)
-  const definition = definitionOf(state)
+  const definition = writeDefinition(state.model)
   try {
     const written = await writeDraft({ version: state.draftVersion, definition }, state.slug)
     state.draftVersion = written.version
@@ -656,7 +1001,7 @@ async function showWriteError(
   if (error instanceof RequestRefused && error.status === 409) {
     const fresh = await readDraft(state.slug)
     state.draftVersion = fresh.version
-    state.steps = readSteps(fresh.definition)
+    state.model = readModel(fresh.definition)
     render(state)
     const refreshed = statusOf(state)
     refreshed.textContent = `The draft changed; reloaded version ${fresh.version}. ${error.error}`
@@ -665,53 +1010,159 @@ async function showWriteError(
   status.textContent = messageOf(error)
 }
 
+// The model (DF-1, DF-4, I9): the pure read of a v2 definition into what the
+// builder edits, and the pure write back. Both keep what the builder does
+// not edit, so `writeDefinition(readModel(definition))` is `definition`.
+
 /** The v2 definition the builder writes (DF-1, DF-4, I9). */
-function definitionOf(state: BuilderState): Record<string, unknown> {
-  return {
-    schemaVersion: 2,
-    steps: state.steps.map((step) => ({
-      key: step.key,
-      targets: step.targets
-        .map((target) => target.trim())
-        .filter((target) => target !== '')
-        .map(targetOf),
-      fields: step.fields.map((field) => ({
-        key: field.key,
-        control: field.control,
-        ...(field.label.trim() === '' ? {} : { label: field.label }),
-        ...(CHOICE_CONTROLS.has(field.control) ? { options: splitList(field.options) } : {}),
-        ...(field.required ? { required: true } : {}),
-      })),
-      // The step's assignees edit the fields the builder adds (FM-3); without
-      // this list the engine makes no field editable and the form is read-only.
-      ...(step.fields.length === 0 ? {} : { editable: step.fields.map((field) => field.key) }),
-      outcomes: splitList(step.outcomes),
-      ...minutesField('reminderMinutes', step.reminderMinutes),
-      ...minutesField('deadlineMinutes', step.deadlineMinutes),
-    })),
-  }
+export function writeDefinition(model: BuilderModel): Record<string, unknown> {
+  const flow: Record<string, unknown> = { ...(model.raw ?? {}) }
+  flow.schemaVersion = 2
+  setOrDelete(flow, 'anonymous', model.anonymous ? true : undefined)
+  setOrDelete(flow, 'undoHours', positiveMinutes(model.undoHours))
+  setOrDelete(flow, 'finalStep', nonEmpty(model.finalStep))
+  flow.steps = model.steps.map(writeStep)
+  return flow
 }
 
-/** Read the steps of a v2 definition into the builder's editable model. */
-function readSteps(definition: Record<string, unknown> | undefined): BuilderStep[] {
-  if (definition === undefined) return [defaultStep(1)]
-  const steps = Array.isArray(definition.steps) ? definition.steps : []
-  if (steps.length === 0) return [defaultStep(1)]
-  return steps.map((body, index) => readStep(body, index, steps.length))
+function writeStep(step: BuilderStep): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...(step.raw ?? {}) }
+  body.key = step.key
+  body.targets = step.targets
+    .map((target) => target.trim())
+    .filter((target) => target !== '')
+    .map(targetOf)
+  const fields = step.fields.map(writeField)
+  if (step.sections.length > 0) {
+    // A step shows either flat fields or sections (FM-1): a field whose
+    // section is gone joins the first one.
+    delete body.fields
+    const first = step.sections[0]?.key ?? ''
+    body.sections = step.sections.map((section) => ({
+      key: section.key,
+      ...(section.collapsed ? { collapsed: true } : {}),
+      fields: step.fields
+        .map((field, index) => ({ field, written: fields[index] }))
+        .filter(
+          ({ field }) =>
+            field.section === section.key ||
+            (section.key === first && !step.sections.some((entry) => entry.key === field.section))
+        )
+        .map(({ written }) => written),
+    }))
+  } else {
+    delete body.sections
+    setOrDelete(body, 'fields', fields.length === 0 ? undefined : fields)
+  }
+  const keys = step.fields.map((field) => field.key)
+  setOrDelete(body, 'visible', listOrUndefined(step.visible))
+  // The step's assignees edit the fields the builder adds (FM-3); without
+  // this list the engine makes no field editable and the form is read-only.
+  setOrDelete(
+    body,
+    'editable',
+    listOrUndefined(step.editable) ?? (keys.length === 0 ? undefined : keys)
+  )
+  setOrDelete(body, 'outcomes', listOrUndefined(step.outcomes))
+  setOrDelete(body, 'reminderMinutes', positiveMinutes(step.reminderMinutes))
+  setOrDelete(body, 'deadlineMinutes', positiveMinutes(step.deadlineMinutes))
+  setOrDelete(body, 'takeover', nonEmpty(step.takeover))
+  setOrDelete(
+    body,
+    'idleMinutes',
+    step.takeover === 'after-idle' ? positiveMinutes(step.idleMinutes) : undefined
+  )
+  setOrDelete(body, 'escalationTargets', listOrUndefined(step.escalationTargets)?.map(targetOf))
+  setOrDelete(body, 'skipWhen', step.skipWhen === undefined ? undefined : treeOf(step.skipWhen))
+  setOrDelete(
+    body,
+    'rules',
+    step.rules.length === 0
+      ? undefined
+      : step.rules.map((rule) => ({
+          when: treeOf(rule.when),
+          effect: rule.effect,
+          targets: splitList(rule.targets),
+        }))
+  )
+  return body
+}
+
+function writeField(field: BuilderField): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...(field.raw ?? {}) }
+  body.key = field.key
+  body.control = field.control
+  setOrDelete(body, 'label', nonEmpty(field.label))
+  setOrDelete(
+    body,
+    'options',
+    CHOICE_CONTROLS.has(field.control) ? splitList(field.options) : undefined
+  )
+  setOrDelete(body, 'required', field.required ? true : undefined)
+  return body
+}
+
+/** Read a v2 definition into the builder's editable model (DF-1, DF-4). */
+export function readModel(definition: Record<string, unknown> | undefined): BuilderModel {
+  const raw = definition === undefined ? {} : { ...definition }
+  const steps = Array.isArray(raw.steps) ? raw.steps : []
+  return {
+    raw,
+    anonymous: raw.anonymous === true,
+    undoHours: minutesOf(raw.undoHours),
+    finalStep: typeof raw.finalStep === 'string' ? raw.finalStep : '',
+    steps:
+      steps.length === 0
+        ? [defaultStep(1)]
+        : steps.map((body, index) => readStep(body, index, steps.length)),
+  }
 }
 
 function readStep(body: unknown, index: number, total: number): BuilderStep {
   const step = isRecord(body) ? body : {}
-  const fields = Array.isArray(step.fields) ? step.fields : []
   const outcomes = Array.isArray(step.outcomes) ? step.outcomes : []
+  const sections: BuilderSection[] = []
+  const fields: BuilderField[] = []
+  if (Array.isArray(step.sections)) {
+    for (const entry of step.sections) {
+      if (!isRecord(entry) || typeof entry.key !== 'string') continue
+      sections.push({ key: entry.key, collapsed: entry.collapsed === true })
+      for (const field of Array.isArray(entry.fields) ? entry.fields : []) {
+        const read = readField(field, entry.key)
+        if (read !== undefined) fields.push(read)
+      }
+    }
+  }
+  for (const field of Array.isArray(step.fields) ? step.fields : []) {
+    const read = readField(field, '')
+    if (read !== undefined) fields.push(read)
+  }
+  const rules: BuilderRule[] = []
+  for (const rule of Array.isArray(step.rules) ? step.rules : []) {
+    if (!isRecord(rule) || !isRuleEffect(rule.effect)) continue
+    rules.push({
+      when: conditionOf(rule.when),
+      effect: rule.effect,
+      targets: Array.isArray(rule.targets) ? rule.targets.map(String).join(', ') : '',
+    })
+  }
   return {
+    raw: step,
     key: typeof step.key === 'string' ? step.key : `step${index + 1}`,
-    targets: readTargets(step.targets),
+    targets: readTargets(step.targets, ['starter']),
     outcomes:
       outcomes.length > 0 ? outcomes.join(', ') : index === total - 1 ? 'submit' : 'approve',
     reminderMinutes: minutesOf(step.reminderMinutes),
     deadlineMinutes: minutesOf(step.deadlineMinutes),
-    fields: fields.map(readField).filter((field): field is BuilderField => field !== undefined),
+    takeover: isTakeover(step.takeover) ? step.takeover : '',
+    idleMinutes: minutesOf(step.idleMinutes),
+    escalationTargets: readTargets(step.escalationTargets, []).join(', '),
+    visible: Array.isArray(step.visible) ? step.visible.map(String).join(', ') : '',
+    editable: Array.isArray(step.editable) ? step.editable.map(String).join(', ') : '',
+    fields,
+    sections,
+    skipWhen: step.skipWhen === undefined ? undefined : conditionOf(step.skipWhen),
+    rules,
   }
 }
 
@@ -723,14 +1174,23 @@ function defaultStep(index: number): BuilderStep {
     outcomes: 'submit',
     reminderMinutes: '',
     deadlineMinutes: '',
+    takeover: '',
+    idleMinutes: '',
+    escalationTargets: '',
+    visible: '',
+    editable: '',
     fields: [],
+    sections: [],
+    skipWhen: undefined,
+    rules: [],
   }
 }
 
-function readField(body: unknown): BuilderField | undefined {
+function readField(body: unknown, section: string): BuilderField | undefined {
   if (!isRecord(body) || typeof body.key !== 'string') return undefined
   const control = body.control
   return {
+    raw: body,
     key: body.key,
     label: typeof body.label === 'string' ? body.label : '',
     control: isBuilderControl(control) ? control : 'text',
@@ -738,6 +1198,7 @@ function readField(body: unknown): BuilderField | undefined {
       ? body.options.filter((option): option is string => typeof option === 'string').join(', ')
       : '',
     required: body.required === true,
+    section,
   }
 }
 
@@ -746,7 +1207,20 @@ function isBuilderControl(value: unknown): value is BuilderControl {
   return typeof value === 'string' && (BUILDER_CONTROLS as readonly string[]).includes(value)
 }
 
-function readTargets(value: unknown): string[] {
+function isTakeover(value: unknown): value is Takeover {
+  return typeof value === 'string' && (TAKEOVERS as readonly string[]).includes(value)
+}
+
+function isRuleEffect(value: unknown): value is RuleEffect {
+  return typeof value === 'string' && (RULE_EFFECTS as readonly string[]).includes(value)
+}
+
+function isCompareOp(value: string): value is CompareOp {
+  return (COMPARE_OPS as readonly string[]).includes(value)
+}
+
+/** The targets of a definition as the builder's text, or the fallback when there are none. */
+function readTargets(value: unknown, fallback: readonly string[]): string[] {
   const targets = Array.isArray(value) ? value : []
   const read: string[] = []
   for (const target of targets) {
@@ -754,37 +1228,160 @@ function readTargets(value: unknown): string[] {
     if (target.starter !== undefined) read.push('starter')
     else if (typeof target.group === 'string') read.push(`group:${target.group}`)
     else if (typeof target.team === 'string') read.push(`team:${target.team}`)
+    else if (typeof target.field === 'string') read.push(`field:${target.field}`)
+    else if (typeof target['manager-of'] === 'string')
+      read.push(`manager-of:${target['manager-of']}`)
     else if (typeof target.user === 'string') read.push(target.user)
   }
-  return read.length === 0 ? ['starter'] : read
+  return read.length === 0 ? [...fallback] : read
 }
 
 /**
  * The target a builder input names (AS-1, #252, I12). `group:<id>` and
  * `team:<name>` keep their kind, so the engine resolves the directory group
- * or the team live; `user:<id>` and a bare id are the same user (ID-4).
+ * or the team live; `field:<key>` and `manager-of:<who>` are the dynamic
+ * targets of AS-1; `user:<id>` and a bare id are the same user (ID-4).
  */
-function targetOf(value: string): Record<string, string> {
+export function targetOf(value: string): Record<string, string> {
   const target = value.trim()
   if (target === 'starter') return { starter: 'starter' }
   const separator = target.indexOf(':')
   if (separator > 0 && separator < target.length - 1) {
     const kind = target.slice(0, separator)
     const name = target.slice(separator + 1).trim()
-    if (name !== '' && (kind === 'group' || kind === 'team' || kind === 'user')) {
+    if (
+      name !== '' &&
+      (kind === 'group' ||
+        kind === 'team' ||
+        kind === 'user' ||
+        kind === 'field' ||
+        kind === 'manager-of')
+    ) {
       return { [kind]: name }
     }
   }
   return { user: target }
 }
 
+// The condition builder (FM-2, FM-5, ADR 0008): one JSON Logic tree in, one
+// out. A tree the builder cannot draw stays JSON text and is written back as
+// it was read.
+
+/** Read a JSON Logic tree into the condition the builder draws, or keep it as JSON. */
+export function conditionOf(tree: unknown): Condition {
+  const json = (): Condition => ({ kind: 'json', text: JSON.stringify(tree) })
+  if (!isRecord(tree)) return json()
+  const entries = Object.entries(tree)
+  if (entries.length !== 1) return json()
+  const [operator, operands] = entries[0] as [string, unknown]
+  if (!Array.isArray(operands)) return json()
+  if (isCompareOp(operator)) {
+    if (operands.length !== 2) return json()
+    const [left, right] = operands as [unknown, unknown]
+    if (!isRecord(left) || typeof left.var !== 'string' || Object.keys(left).length !== 1)
+      return json()
+    if (operator === 'in') {
+      if (!Array.isArray(right) || !right.every(isScalar)) return json()
+      return { kind: 'compare', op: operator, left: left.var, right: [...right] }
+    }
+    if (!isScalar(right)) return json()
+    return { kind: 'compare', op: operator, left: left.var, right }
+  }
+  if (operator === 'and' || operator === 'or') {
+    if (operands.length === 0) return json()
+    return { kind: 'group', op: operator, items: operands.map(conditionOf) }
+  }
+  if (operator === '!' && operands.length === 1) {
+    return { kind: 'not', item: conditionOf(operands[0]) }
+  }
+  return json()
+}
+
+/** The JSON Logic tree of a condition (FM-5). JSON text that does not parse is kept as text. */
+export function treeOf(condition: Condition): unknown {
+  switch (condition.kind) {
+    case 'compare':
+      return { [condition.op]: [{ var: condition.left }, condition.right] }
+    case 'group':
+      return { [condition.op]: condition.items.map(treeOf) }
+    case 'not':
+      return { '!': [treeOf(condition.item)] }
+    case 'json':
+      try {
+        return JSON.parse(condition.text)
+      } catch {
+        return condition.text
+      }
+  }
+}
+
+function isScalar(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
+/** The symbol of one comparison as the builder shows it (S05). */
+const COMPARE_SYMBOLS: Readonly<Record<CompareOp, string>> = {
+  '==': '=',
+  '!=': '≠',
+  '<': '<',
+  '<=': '≤',
+  '>': '>',
+  '>=': '≥',
+  in: 'in',
+}
+
+/**
+ * A condition in plain words (S05, FM-2): each value by its field label, the
+ * reserved context values as Step and User, each comparison by its symbol, a
+ * group joined by its word and a negation as "not (...)". JSON the builder
+ * cannot draw shows as it is.
+ */
+export function conditionText(condition: Condition, labels: ReadonlyMap<string, string>): string {
+  switch (condition.kind) {
+    case 'compare':
+      return `${valueLabel(condition.left, labels)} ${COMPARE_SYMBOLS[condition.op]} ${literalText(condition.right)}`
+    case 'group':
+      return condition.items
+        .map((item) =>
+          item.kind === 'group' ? `(${conditionText(item, labels)})` : conditionText(item, labels)
+        )
+        .join(` ${condition.op} `)
+    case 'not':
+      return `not (${conditionText(condition.item, labels)})`
+    case 'json':
+      return condition.text
+  }
+}
+
+/** The label of a value a condition reads: a field label, or Step and User for the context (FM-2). */
+function valueLabel(path: string, labels: ReadonlyMap<string, string>): string {
+  if (path === 'context.step') return 'Step'
+  if (path === 'context.user') return 'User'
+  return labels.get(path) ?? path
+}
+
+function literalText(value: Literal): string {
+  return Array.isArray(value) ? value.map(String).join(', ') : String(value)
+}
+
+/**
+ * Whether the signed-in person may make a structural change to the flow
+ * (DF-5, S03): a grant that holds `flow.build` on the flow, on every flow or
+ * on the organization. The server authorizes the change again (AC-1, I8).
+ */
+export function canBuild(grants: readonly Grant[], slug: string): boolean {
+  const covering = new Set(['org', '*', 'flow:*', `flow:${slug}`])
+  return grants.some((grant) => grant.scopes.includes('flow.build') && covering.has(grant.resource))
+}
+
 /**
  * The principal that a target's grant names (AS-1, ID-4, #252): a group grant
  * names `group:<id>` and a team grant names `team:<name>`, while a user grant
  * names the bare id. The server merges both spellings of a group and a team
- * into the principal's grants.
+ * into the principal's grants. A field or manager-of target resolves per
+ * instance, so it names no principal here.
  */
-function principalOfTarget(target: string): string {
+export function principalOfTarget(target: string): string {
   const trimmed = target.trim()
   if (trimmed.startsWith('group:')) {
     const id = trimmed.slice('group:'.length).trim()
@@ -794,6 +1391,7 @@ function principalOfTarget(target: string): string {
     const name = trimmed.slice('team:'.length).trim()
     return name === '' ? '' : `team:${name}`
   }
+  if (trimmed.startsWith('field:') || trimmed.startsWith('manager-of:')) return ''
   return userTargetOf(trimmed)
 }
 
@@ -877,6 +1475,24 @@ function splitList(text: string): string[] {
     .filter((entry) => entry !== '')
 }
 
+/** A comma-separated list as an array, or undefined when it is empty. */
+function listOrUndefined(text: string): string[] | undefined {
+  const list = splitList(text)
+  return list.length === 0 ? undefined : list
+}
+
+/** A trimmed string, or undefined when it is empty. */
+function nonEmpty(text: string): string | undefined {
+  const trimmed = text.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/** Set one key of a definition body, or delete it when the value is absent. */
+function setOrDelete(body: Record<string, unknown>, key: string, value: unknown): void {
+  if (value === undefined) delete body[key]
+  else body[key] = value
+}
+
 /** One labelled text input of the builder. */
 function textRow(text: string): { readonly row: HTMLElement; readonly input: HTMLInputElement } {
   const row = document.createElement('label')
@@ -890,7 +1506,7 @@ function textRow(text: string): { readonly row: HTMLElement; readonly input: HTM
   return { row, input }
 }
 
-/** One labelled positive-integer input of the builder, for a step's timer settings (SE-3, SE-4). */
+/** One labelled positive-integer input of the builder, for a timer or a period setting (SE-3, SE-4, WF-5). */
 function minuteRow(
   text: string,
   value: string,
@@ -911,15 +1527,6 @@ function minuteRow(
   return { row, input }
 }
 
-/** One timer setting of a step, written only when it is a positive integer (SE-3, SE-4). */
-function minutesField(
-  name: 'reminderMinutes' | 'deadlineMinutes',
-  text: string
-): Record<string, number> {
-  const value = positiveMinutes(text)
-  return value === undefined ? {} : { [name]: value }
-}
-
 /** Read a positive integer from a builder input, or undefined when it is empty or invalid. */
 function positiveMinutes(text: string): number | undefined {
   const trimmed = text.trim()
@@ -927,7 +1534,7 @@ function positiveMinutes(text: string): number | undefined {
   return Number(trimmed)
 }
 
-/** Read one timer setting of a definition as the builder input's text (SE-3, SE-4). */
+/** Read one positive-integer setting of a definition as the builder input's text (SE-3, SE-4, WF-5). */
 function minutesOf(value: unknown): string {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? String(value) : ''
 }
@@ -957,6 +1564,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
-
-// The target normalization the builder and its unit test share (AS-1, #252).
-export { principalOfTarget, targetOf }
