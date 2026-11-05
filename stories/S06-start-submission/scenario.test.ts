@@ -2,6 +2,7 @@ import { expect, test } from 'vitest'
 import { apply, emptyState } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import { addGrant, grantsOf } from '../../engine/grants.js'
+import { instanceOf } from '../../engine/instances.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import {
@@ -12,7 +13,18 @@ import {
   startInstance,
   submitInstance,
 } from '../../engine/submission.js'
-import { flow, INSTANCE_ID, resolve, SLUG, samData, samGrants, versionV1 } from './scenario.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
+import {
+  flow,
+  golden,
+  INSTANCE_ID,
+  resolve,
+  SLUG,
+  STEP,
+  samData,
+  samGrants,
+  versionV1,
+} from './scenario.js'
 
 /** Sam, the signed-in principal who starts the submission (S06, ID-2). */
 const SAM = 'user:sam'
@@ -44,13 +56,55 @@ function grantsFromLog(grants: readonly Grant[]): readonly Grant[] {
   return grantsOf(state.log)
 }
 
-// Issue #43: Sam starts and submits a submission (S06). An authenticated start
-// creates a private draft on the request form (ID-2, ADR 0014). The submit
-// routes it to the first later step whose skip condition is false (WF-1, I10)
-// and, in the same operation, records the assignment email to its assignee
-// (I2, SE-1). A start with no principal,
-// or without instance.start on the flow, is refused (ID-2, AC-1). The path is
+// Issue #43, #179: Sam starts and submits a submission (S06). An authenticated
+// start creates a private draft on the request form (ID-2, ADR 0014). The
+// submit routes it to the first later step whose skip condition is false
+// (WF-1, I10) and, in the same operation, records the assignment email to its
+// assignee (I2, SE-1). Both go through the server as client intents (ADR
+// 0010), in api, cli and dry mode. A start with no principal, or without
+// instance.start on the flow, is refused (ID-2, AC-1). The path is
 // deterministic (I6).
+
+test('#43 the S06 golden path runs in api, cli and dry mode: the start is a draft and the submit routes it with the email (S06)', {
+  timeout: 60_000,
+}, async () => {
+  await runGolden(golden)
+  const { state, intents } = await runModes(golden)
+
+  // The two steps of the story resolved to the engine's own events (ADR
+  // 0010): the start, then the submit, each with the values the form holds
+  // (FM-7).
+  const events = state.log.slice(STEP.start)
+  expect(events.map((event) => event.type)).toEqual([INSTANCE_STARTED, INSTANCE_SUBMITTED])
+  expect(events[0].payload).toMatchObject({ values: samData, currentStep: 'request' })
+  expect(events[1].payload).toMatchObject({
+    values: samData,
+    submitted: true,
+    step: 'request',
+    currentStep: 'advisor',
+    skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
+  })
+
+  // The instance is submitted, on the advisor step, whose target names Dr.
+  // Okafor (I10, I13), and the outbox holds his assignment email, the one
+  // side effect of the story (I2, SE-1).
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  expect(instance?.submitted).toBe(true)
+  expect(instance?.currentStep).toBe('advisor')
+  expect(instance?.assignees).toContainEqual({
+    step: 'advisor',
+    target: { user: OKAFOR },
+    members: [OKAFOR],
+  })
+  expect(intents).toEqual([
+    {
+      operation: ASSIGNMENT_EMAIL,
+      target: EMAIL_CONNECTOR,
+      payload: { to: OKAFOR, step: 'advisor' },
+    },
+  ])
+  expect(outboxOf(state.log)).toEqual(intents)
+})
 
 test('#43 a start is a private draft and the submit routes it with the assignment email (S06)', () => {
   // (a) Sam holds instance.start on the flow, read back from the log (AC-1, I4).
@@ -85,15 +139,8 @@ test('#43 a start is a private draft and the submit routes it with the assignmen
   expect(result.accepted).toBe(true)
   if (result.operation === undefined) throw new Error(result.reason)
   expect(result.instance.submitted).toBe(true)
-  expect(result.instance.values).toEqual(samData)
   expect(result.instance.currentStep).toBe('advisor')
-  expect(result.instance.assignees).toContainEqual({
-    step: 'advisor',
-    target: { user: OKAFOR },
-    members: [OKAFOR],
-  })
   expect(result.operation.type).toBe(INSTANCE_SUBMITTED)
-  expect(result.operation.actor).toBe(SAM)
 
   // One apply commits the route and its side effect together (I2): the outbox
   // is the projection of that one event, so the email arrived with the route.
@@ -106,12 +153,6 @@ test('#43 a start is a private draft and the submit routes it with the assignmen
       payload: { to: OKAFOR, step: 'advisor' },
     },
   ])
-  expect(state.log[0].payload).toMatchObject({
-    step: 'request',
-    currentStep: 'advisor',
-    submitted: true,
-    skipped: [{ step: 'triage', condition: { '==': [{ var: 'urgent' }, false] } }],
-  })
 
   // (c) The engine never creates an anonymous draft (ID-2): a start with no
   // principal is refused.

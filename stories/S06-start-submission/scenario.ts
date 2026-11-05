@@ -1,17 +1,52 @@
 import { apply, emptyState, type State } from '../../engine/apply.js'
 import type { Grant } from '../../engine/authorize.js'
 import type { ConditionData } from '../../engine/condition.js'
-import { type FlowDefinition, parse } from '../../engine/definition.js'
-import { createFlow, type Flow, type FlowVersion, publish, push } from '../../engine/flow.js'
+import {
+  DEFINITION_CHANGED,
+  type Field,
+  type FlowDefinition,
+  parse,
+} from '../../engine/definition.js'
+import {
+  createFlow,
+  DEFINITION_PUBLISHED,
+  type Flow,
+  type FlowVersion,
+  publish,
+  push,
+} from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
 import type { OperationDeps } from '../../engine/operation.js'
 import { outboxOf } from '../../engine/outbox.js'
 import type { TargetResolver } from '../../engine/routing.js'
-import { startInstance, submitInstance } from '../../engine/submission.js'
+import {
+  INSTANCE_STARTED,
+  INSTANCE_SUBMITTED,
+  startInstance,
+  submitInstance,
+} from '../../engine/submission.js'
+import { TEAM_CHANGE_TYPE } from '../../engine/teams.js'
+import type { Requirements, Versioning } from '../../tools/harness/operators.js'
 import { type Step, scenario } from '../../tools/harness/scenario.js'
+import {
+  bootstrap,
+  DANA,
+  declared,
+  directory,
+  FLOW,
+  depsFor as fixtureDeps,
+  grantsOfPerson,
+  instanceAfter,
+  membership,
+  SAM as STARTER,
+  setupSteps,
+} from '../example-flow.js'
 
 // S06: Sam starts and submits a submission (STORIES.md, ADR 0014). He opens
-// the form link, fills it in and submits it. The engine never creates an
+// the form link, fills it in and submits it. The golden path posts the start
+// and the submit as client intents that the server resolves (ADR 0010,
+// #256), after the setup of the shared fixture; the interface path keeps its
+// own scenario below, because a browser cannot act the setup steps. The engine never creates an
 // anonymous draft (ID-2): the start needs a signed-in principal, here Sam, and
 // the scope instance.start on the flow (AC-1). The start is a private draft on
 // the request form; the submit routes it to the first later step whose skip
@@ -136,9 +171,13 @@ function withoutOutbox(
 }
 
 /**
- * The golden path of S06 (STORIES.md, ADR 0014): Sam starts a draft with the
- * values he typed, then submits it; the submit routes past the triage step to
- * the advisor and records the assignment email (ID-2, WF-1, I2, SE-1, FM-7).
+ * The interface path of S06 (STORIES.md, ADR 0014): Sam starts a draft with
+ * the values he typed, then submits it; the submit routes past the triage
+ * step to the advisor and records the assignment email (ID-2, WF-1, I2, SE-1,
+ * FM-7). The steps are declared resolved: gui mode seeds the server with the
+ * published flow (`flowState`) and the browser posts the start intent, which
+ * the server resolves to the first step; the harness appends the second as
+ * it stands.
  */
 function submissionSteps(): readonly Step[] {
   const started = startInstance(flow, INSTANCE_ID, samData, SAM, depsFor(0), resolve, samGrants)
@@ -170,7 +209,7 @@ function submissionSteps(): readonly Step[] {
   ]
 }
 
-export const golden = scenario({
+export const guiGolden = scenario({
   slug: 'start-submission',
   flowSlug: SLUG,
   steps: submissionSteps(),
@@ -187,3 +226,110 @@ export const golden = scenario({
     },
   ],
 })
+
+/** Version 2 of the flow: it adds an optional field to the request form (DF-2), for the Version operator. */
+export const definitionV2: FlowDefinition = parse(`{
+  "schemaVersion": 2,
+  "steps": [
+    {
+      "key": "request",
+      "targets": [{ "starter": "starter" }],
+      "fields": [
+        { "key": "summary", "control": "text", "required": true },
+        { "key": "overload_credits", "control": "number" },
+        { "key": "urgent", "control": "checkbox" },
+        { "key": "details", "control": "long-text" },
+        { "key": "reason_category", "control": "text" }
+      ],
+      "editable": ["summary", "overload_credits", "urgent", "details", "reason_category"]
+    },
+    {
+      "key": "triage",
+      "targets": [{ "group": "CS-Chairs" }],
+      "outcomes": ["approve"],
+      "skipWhen": { "==": [{ "var": "urgent" }, false] }
+    },
+    {
+      "key": "advisor",
+      "targets": [{ "user": "user:okafor" }],
+      "outcomes": ["approve", "send_back"]
+    },
+    {
+      "key": "registrar",
+      "targets": [{ "user": "user:lee" }],
+      "outcomes": ["record"]
+    }
+  ]
+}
+`)
+
+/** How the Version operator publishes version 2 between two steps (STORIES.md, Fuzzy paths). */
+export const versioning: Versioning = {
+  actor: DANA,
+  slug: SLUG,
+  definition: definitionV2,
+  started: definitionV1,
+}
+
+/** The form fields of the flow (FM-1): the Data operator generates values for them. */
+export const fields: readonly Field[] = definitionV1.steps.flatMap((step) => step.fields ?? [])
+
+/**
+ * The golden path of S06 through the engine (STORIES.md, ADR 0010, ADR
+ * 0014): the setup of the shared fixture publishes this flow, then Sam posts
+ * the start intent with the values he typed and the submit intent; the
+ * server resolves the draft and the route, past the triage step to the
+ * advisor, with the assignment email (ID-2, WF-1, I2, SE-1, FM-7).
+ */
+function goldenSteps(): readonly Step[] {
+  const steps: Step[] = [...setupSteps(definitionV1)]
+  const resolve = directory(samData, STARTER)
+  const sam = grantsOfPerson(STARTER)
+  const started = startInstance(flow, INSTANCE_ID, samData, STARTER, fixtureDeps(6), resolve, sam)
+  steps.push(declared(started.operation, { flow: SLUG, instanceId: INSTANCE_ID, values: samData }))
+  const submitted = submitInstance(
+    instanceAfter(steps),
+    STARTER,
+    samData,
+    0,
+    { flow: SLUG, definition: definitionV1, resolve, grants: sam, owner: STARTER },
+    fixtureDeps(7)
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  steps.push(
+    declared(submitted.operation, { instanceId: INSTANCE_ID, version: 0, values: samData })
+  )
+  return steps
+}
+
+export const golden = scenario({
+  slug: 'start-submission',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: goldenSteps(),
+})
+
+/** The indexes of the story's steps after the setup, for the requirements and the tests. */
+export const STEP = { start: 6, submit: 7 } as const
+
+/**
+ * What each step requires of its actor (I8), for the Actor operator: the
+ * build scope for the flow, org.teams for the team, instance.start for the
+ * start (AC-1), and the starter for the submit (ADR 0014).
+ */
+export const requires: Requirements = (step, index) => {
+  switch (step.type) {
+    case DEFINITION_CHANGED:
+    case DEFINITION_PUBLISHED:
+      return { scope: 'flow.build', resource: FLOW }
+    case TEAM_CHANGE_TYPE:
+      return { scope: 'org.teams', resource: 'org' }
+    case INSTANCE_STARTED:
+      return { scope: 'instance.start', resource: FLOW }
+    case INSTANCE_SUBMITTED:
+      return { actors: [STARTER] }
+    default:
+      throw new Error(`S06: step ${index + 1} has no requirement (${step.type})`)
+  }
+}
