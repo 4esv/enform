@@ -1,39 +1,61 @@
 import { expect, test } from 'vitest'
-import { apply, emptyState } from '../../engine/apply.js'
-import { authorize, type Grant } from '../../engine/authorize.js'
+import { authorize } from '../../engine/authorize.js'
 import { classifyChange } from '../../engine/edit.js'
-import { createFlow, push } from '../../engine/flow.js'
-import { addGrant, grantsOf } from '../../engine/grants.js'
-import { runGolden } from '../../tools/harness/runner.js'
-import { goldenView, stepOperation } from '../../tools/harness/scenario.js'
-import { danaGrant, draft, edited, FLOW, golden, priyaGrant, SLUG, withStep } from './scenario.js'
-
-// The injected sources of the golden path (I6): the clock is the step index
-// and the IDs are `op-N`, exactly as `stepOperation` builds them, so the push
-// operations equal the scenario's.
-function stepDeps(index: number): { clock: () => number; ids: () => string } {
-  return { clock: () => index + 1, ids: () => `op-${index + 1}` }
-}
-
-// The grants that one principal holds. AC-1 authorizes against those grants:
-// the caller passes the principal's own grants and those of its groups and
-// teams, and the function reads nothing else (I8).
-function heldBy(principal: string, held: readonly Grant[]): Grant[] {
-  return held.filter((grant) => grant.principal === principal)
-}
+import { publish, publishedFlow, push } from '../../engine/flow.js'
+import { contentHash } from '../../engine/instance.js'
+import { instanceOf } from '../../engine/instances.js'
+import { timeline } from '../../engine/timeline.js'
+import { runGolden, runModes } from '../../tools/harness/runner.js'
+import {
+  DANA,
+  definitionV1,
+  depsFor,
+  FLOW,
+  grantsOfPerson,
+  INSTANCE_ID,
+  PRIYA,
+  SLUG,
+} from '../example-flow.js'
+import { edited, flowV1, golden, priyaGrants, STEP, withField } from './scenario.js'
 
 // Issue #40: Priya holds `flow.edit` and not `flow.build`, so the class of a
-// definition change decides whether her push succeeds (DF-5, D2). A change to
-// an option is edit-class, so her push succeeds and the log attributes it to
-// her (DF-5, I14). A change that adds a step is structural, so the engine
-// rejects it without `flow.build`, and the message names the change and the
-// scope (DF-5, I1, AC-1). The literal label and field cases arrive with FM-1
-// (issue #74).
+// definition change decides whether her push succeeds (DF-5, D2). A label and
+// an option are edit-class, so her push and her publication succeed and the
+// log attributes them to her (DF-3, DF-5, I14). A change that adds a field is
+// structural, so the engine refuses it without `flow.build`, and the message
+// names the change and the scope (DF-5, AC-1). A new instance starts on her
+// version (DF-2).
 
-test('#40 the engine guards an edit-class push and rejects a structural one (S03)', async () => {
-  // (a) The classification: an option change is edit-class; a step change is
-  // structural (DF-5, D2).
-  expect(classifyChange(draft, edited)).toEqual([
+test('#40 the S03 golden path runs in api, cli and dry mode: Priya edits a label and an option and publishes (S03)', async () => {
+  await runGolden(golden)
+  const { state } = await runModes(golden)
+
+  // Version 2 is Priya's edit, published and attributed to her (DF-3, I14),
+  // and the change feed shows the author of each change.
+  const published = publishedFlow(state.log, SLUG)
+  expect(published?.version).toBe(2)
+  expect(published?.contentHash).toBe(contentHash(edited))
+  expect(published?.definition).toEqual(edited)
+  const feed = timeline(state.log)
+  expect(feed.map((entry) => entry.actor).slice(0, 2)).toEqual([DANA, DANA])
+  expect(feed[STEP.priyaPush].actor).toBe(PRIYA)
+  expect(feed[STEP.priyaPush].flow).toBe(SLUG)
+  expect(feed[STEP.priyaPublish].actor).toBe(PRIYA)
+
+  // Sam's instance started on version 2 (DF-2): the newest version pins it.
+  expect(instanceOf(state.log, INSTANCE_ID)?.definitionVersion).toBe(contentHash(edited))
+}, 60_000)
+
+test('#40 the engine guards an edit-class push and refuses a structural one by its class (S03)', () => {
+  // (a) The classification: a label and an option are edit-class; an added
+  // field is structural, and each difference names its path (DF-5, DF-6, D2).
+  expect(classifyChange(definitionV1, edited)).toEqual([
+    {
+      class: 'edit',
+      message: 'the label of field summary in step request changed',
+      path: '/steps/request/fields/summary/label',
+      after: 'Summary of your request',
+    },
     {
       class: 'edit',
       message: 'an option was added to step advisor: escalate',
@@ -42,47 +64,47 @@ test('#40 the engine guards an edit-class push and rejects a structural one (S03
       after: ['approve', 'send_back', 'escalate'],
     },
   ])
-  expect(classifyChange(draft, withStep)).toEqual([
-    { class: 'structural', message: 'a step was added: chair', path: '/steps/chair' },
+  expect(classifyChange(definitionV1, withField).map((change) => change.class)).toEqual([
+    'structural',
+    'structural',
   ])
+  expect(classifyChange(definitionV1, withField)[0]).toEqual({
+    class: 'structural',
+    message: 'a field was added to step request: reason_category',
+    path: '/steps/request/fields/reason_category',
+  })
 
-  // (b) The grants come from the log (I4): grantsOf reads Priya's grant back,
-  // and AC-1 authorizes against it.
-  const grantLog = apply(addGrant(priyaGrant, 'dana', stepDeps(0)), emptyState).log
-  const priya = heldBy('user:priya', grantsOf(grantLog))
-  expect(priya).toEqual([priyaGrant])
-  expect(authorize(priya, 'flow.edit', FLOW)).toBe(true)
-  expect(authorize(priya, 'flow.build', FLOW)).toBe(false)
+  // (b) AC-1 authorizes against Priya's grants alone: she edits and does not
+  // build.
+  expect(authorize(priyaGrants, 'flow.edit', FLOW)).toBe(true)
+  expect(authorize(priyaGrants, 'flow.build', FLOW)).toBe(false)
 
-  // (c) Dana builds the first draft (structural, `flow.build`), then Priya
-  // pushes her edit (edit-class, `flow.edit`). The pushes are the golden path,
-  // operation for operation (I6).
-  let flow = createFlow(SLUG)
-  const first = push(flow, draft, stepDeps(0), 'dana', [danaGrant])
-  flow = first.flow
-  const change = push(flow, edited, stepDeps(1), 'user:priya', priya)
-  expect([first.operation, change.operation]).toEqual(
-    golden.steps.map((step, index) => stepOperation(step, index))
+  // (c) Priya's edit-class push succeeds and the log attributes it to her
+  // (DF-5, I14); it is the golden step.
+  const flow = flowV1()
+  const change = push(flow, edited, depsFor(STEP.priyaPush), PRIYA, priyaGrants)
+  expect(change.flow.draft).toEqual(edited)
+  expect(change.operation.actor).toBe(PRIYA)
+  expect(golden.steps[STEP.priyaPush].payload).toEqual(change.operation.payload)
+
+  // (d) The same grants cannot make a structural change (DF-5, D2). The
+  // refusal names the change and the scope that it needs.
+  expect(() => push(flow, withField, depsFor(STEP.priyaPush), PRIYA, priyaGrants)).toThrow(
+    /a field was added to step request: reason_category/
+  )
+  expect(() => push(flow, withField, depsFor(STEP.priyaPush), PRIYA, priyaGrants)).toThrow(
+    /flow\.build/
+  )
+  // A publication is guarded the same way: a structural draft needs flow.build.
+  const structural = push(flow, withField, depsFor(STEP.priyaPush), DANA, grantsOfPerson(DANA))
+  expect(() => publish(structural.flow, depsFor(STEP.priyaPublish), PRIYA, priyaGrants)).toThrow(
+    /flow\.build/
   )
 
-  // (d) Priya's edit-class push succeeds and the log attributes it to her
-  // (DF-5, I14).
-  expect(change.flow.draft).toEqual(edited)
-  expect(change.operation.actor).toBe('user:priya')
-
-  // (e) The same grants cannot make a structural change (DF-5, D2). The
-  // rejection names the change and the scope that it needs.
-  expect(() => push(flow, withStep, stepDeps(2), 'user:priya', priya)).toThrow(/a step was added/)
-  expect(() => push(flow, withStep, stepDeps(2), 'user:priya', priya)).toThrow(/flow\.build/)
-
-  // (f) Dana holds `flow.build`, so her structural push succeeds (D2).
-  const built = push(flow, withStep, stepDeps(2), 'dana', [danaGrant])
-  expect(built.flow.draft).toEqual(withStep)
-
-  // (g) The api-mode run reaches the golden end state (I6), and the change
-  // feed records the author of each change (DF-5, I14).
-  await runGolden(golden)
-  const log = goldenView(golden).log
-  expect(log).toHaveLength(2)
-  expect(log.map((event) => event.actor)).toEqual(['dana', 'user:priya'])
+  // (e) Dana holds `flow.build`, so her structural push succeeds (D2), and
+  // Priya's edit-class publication succeeds with `flow.edit` alone (DF-3).
+  expect(structural.flow.draft).toEqual(withField)
+  const released = publish(change.flow, depsFor(STEP.priyaPublish), PRIYA, priyaGrants)
+  expect(released.flow.versions.map((version) => version.version)).toEqual([1, 2])
+  expect(golden.steps[STEP.priyaPublish].payload).toEqual(released.operation.payload)
 })
