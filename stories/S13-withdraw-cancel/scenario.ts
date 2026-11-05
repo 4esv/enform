@@ -29,7 +29,9 @@ import {
   DANA,
   declared,
   definitionV1,
+  depsFor,
   directory,
+  exampleTeamState,
   FLOW,
   flow,
   grantsOfPerson,
@@ -42,6 +44,9 @@ import {
   SAM,
   SLUG,
   samValues,
+  seedApproved,
+  seedClaimed,
+  seedSubmitted,
   setupSteps,
   stepResource,
 } from '../example-flow.js'
@@ -262,3 +267,112 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S13: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/**
+ * The server state the interface path starts from (#269, S13): the request at
+ * the registrar step, held by Ana; Priya holds `instance.cancel` through the
+ * bootstrap of the path.
+ */
+export function guiSeed(): State {
+  return seedClaimed(seedApproved(seedSubmitted(exampleTeamState(), values), values), ANA)
+}
+
+/**
+ * The interface path of S13 (STORIES.md): Sam withdraws his own request with
+ * a reason and undoes it; Priya cancels it with a reason and undoes that too.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const instanceAt = () => {
+    const log = [...seed.log, ...stateAfter(steps).log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S13 gui: no instance')
+    return instance
+  }
+  const withdrawn = withdraw(instanceAt(), SAM, WITHDRAW_REASON, depsFor(0))
+  if (withdrawn.operation === undefined) throw new Error(withdrawn.reason)
+  steps.push(
+    declared(withdrawn.operation, { instanceId: INSTANCE_ID, reason: WITHDRAW_REASON, version: 4 })
+  )
+  const restored = undoWithdrawOrCancel(instanceAt(), SAM, 5, UNDO_PERIOD, 2, depsFor(1))
+  if (restored.operation === undefined) throw new Error(restored.reason)
+  steps.push(declared(restored.operation, { instanceId: INSTANCE_ID, version: 5 }))
+  const cancelled = cancel(
+    instanceAt(),
+    PRIYA,
+    CANCEL_REASON,
+    { flow: SLUG, grants: [...grantsOfPerson(PRIYA), cancelGrant] },
+    depsFor(2)
+  )
+  if (cancelled.operation === undefined) throw new Error(cancelled.reason)
+  steps.push(
+    declared(cancelled.operation, { instanceId: INSTANCE_ID, reason: CANCEL_REASON, version: 6 })
+  )
+  const reopened = undoWithdrawOrCancel(instanceAt(), PRIYA, 7, UNDO_PERIOD, 4, depsFor(3))
+  if (reopened.operation === undefined) throw new Error(reopened.reason)
+  steps.push(declared(reopened.operation, { instanceId: INSTANCE_ID, version: 7 }))
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'withdraw-cancel',
+  flowSlug: SLUG,
+  bootstrap: [...bootstrap, cancelGrant],
+  membership,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { type: { selector: '[data-withdraw-reason]', text: WITHDRAW_REASON } },
+        { click: '[data-withdraw]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: `Withdrawn by user:sam: ${WITHDRAW_REASON}`,
+          },
+        },
+      ],
+    },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-undo]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:ana.',
+          },
+        },
+      ],
+    },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { type: { selector: '[data-cancel-reason]', text: CANCEL_REASON } },
+        { click: '[data-cancel]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: `Cancelled by user:priya: ${CANCEL_REASON}`,
+          },
+        },
+      ],
+    },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-undo]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:ana.',
+          },
+        },
+      ],
+    },
+  ],
+})

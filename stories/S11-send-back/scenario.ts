@@ -1,8 +1,11 @@
 import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import type { State } from '../../engine/apply.js'
 import { DEFINITION_CHANGED } from '../../engine/definition.js'
 import { DEFINITION_PUBLISHED } from '../../engine/flow.js'
+import { instanceOf } from '../../engine/instances.js'
 import { STEP_SENT_BACK, sendBack } from '../../engine/sendBack.js'
 import {
+  editDraft,
   INSTANCE_STARTED,
   INSTANCE_SUBMITTED,
   startInstance,
@@ -18,6 +21,7 @@ import {
   declared,
   definitionV1,
   directory,
+  exampleTeamState,
   FLOW,
   flow,
   grantsOfPerson,
@@ -32,7 +36,10 @@ import {
   SAM,
   SLUG,
   samValues,
+  seedClaimed,
+  seedSubmitted,
   setupSteps,
+  stateAfter,
   stepResource,
 } from '../example-flow.js'
 
@@ -70,18 +77,19 @@ export const STEP = {
   jordanSendBack: 14,
 } as const
 
+/** What Dr. Okafor's actions read (I8): the flow, his grants and the directory for the values. */
+const okaforContext = (actorValues = values) => ({
+  flow: SLUG,
+  definition: definitionV1,
+  grants: grantsOfPerson(OKAFOR),
+  resolve: directory(actorValues),
+})
+
 /** The golden path: the setup, then the request, its send back, its resubmission, and Jordan's send back. */
 function goldenSteps(): readonly Step[] {
   const steps: Step[] = [...setupSteps()]
   const resolve = directory(values)
   const sam = grantsOfPerson(SAM)
-  const okafor = grantsOfPerson(OKAFOR)
-  const okaforContext = (actorValues = values) => ({
-    flow: SLUG,
-    definition: definitionV1,
-    grants: okafor,
-    resolve: directory(actorValues),
-  })
 
   // Sam starts and submits; the submit routes to Dr. Okafor (ADR 0014).
   const started = startInstance(flow, INSTANCE_ID, values, SAM, depsFor(STEP.start), resolve, sam)
@@ -253,3 +261,170 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S11: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/**
+ * The server state the interface path starts from (#269, S11): Sam's request
+ * at the advisor step, claimed by Dr. Okafor.
+ */
+export function guiSeed(): State {
+  return seedClaimed(seedSubmitted(exampleTeamState(), values), OKAFOR)
+}
+
+/**
+ * The interface path of S11 (STORIES.md): Dr. Okafor sends the request back
+ * with a note; Sam sees the note above the form, corrects the summary and
+ * submits again; Dr. Okafor claims and approves; Jordan claims at the
+ * registrar step and may only send back, which he does with a note.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const corrected = { ...values, ...CORRECTION }
+  const instanceAt = () => {
+    const log = [...seed.log, ...stateAfter(steps).log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S11 gui: no instance')
+    return instance
+  }
+  const sentBack = sendBack(
+    instanceAt(),
+    OKAFOR,
+    REQUEST_STEP,
+    COMMENT,
+    2,
+    okaforContext(),
+    depsFor(0)
+  )
+  if (sentBack.operation === undefined) throw new Error(sentBack.reason)
+  steps.push(
+    declared(sentBack.operation, {
+      instanceId: INSTANCE_ID,
+      to: REQUEST_STEP,
+      comment: COMMENT,
+      version: 2,
+    })
+  )
+
+  // Sam corrects the summary on the draft page: one edit, then the submit.
+  const edited = editDraft(instanceAt(), SAM, CORRECTION, depsFor(1))
+  if (edited.operation === undefined) throw new Error(edited.reason)
+  steps.push(declared(edited.operation, { instanceId: INSTANCE_ID, values: CORRECTION }))
+  const resubmitted = submitInstance(
+    instanceAt(),
+    SAM,
+    {},
+    3,
+    {
+      flow: SLUG,
+      definition: definitionV1,
+      resolve: directory(corrected),
+      grants: grantsOfPerson(SAM),
+      owner: SAM,
+    },
+    depsFor(2)
+  )
+  if (resubmitted.operation === undefined) throw new Error(resubmitted.reason)
+  steps.push(declared(resubmitted.operation, { instanceId: INSTANCE_ID, version: 3, values: {} }))
+
+  const claimAgain = claim(instanceAt(), OKAFOR, 4, depsFor(3))
+  if (claimAgain.operation === undefined) throw new Error(claimAgain.reason)
+  steps.push(declared(claimAgain.operation, { instanceId: INSTANCE_ID, expectedVersion: 4 }))
+  const approved = complete(
+    instanceAt(),
+    OKAFOR,
+    'approve',
+    {},
+    5,
+    { ...okaforContext(corrected), owner: SAM },
+    depsFor(4)
+  )
+  if (approved.operation === undefined) throw new Error(approved.reason)
+  steps.push(
+    declared(approved.operation, {
+      instanceId: INSTANCE_ID,
+      version: 5,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+
+  const jordanClaim = claim(instanceAt(), JORDAN, 6, depsFor(5))
+  if (jordanClaim.operation === undefined) throw new Error(jordanClaim.reason)
+  steps.push(declared(jordanClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 6 }))
+  const jordanSentBack = sendBack(
+    instanceAt(),
+    JORDAN,
+    ADVISOR_STEP,
+    JORDAN_COMMENT,
+    7,
+    {
+      flow: SLUG,
+      definition: definitionV1,
+      grants: grantsOfPerson(JORDAN),
+      resolve: directory(corrected),
+    },
+    depsFor(6)
+  )
+  if (jordanSentBack.operation === undefined) throw new Error(jordanSentBack.reason)
+  steps.push(
+    declared(jordanSentBack.operation, {
+      instanceId: INSTANCE_ID,
+      to: ADVISOR_STEP,
+      comment: JORDAN_COMMENT,
+      version: 7,
+    })
+  )
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'send-back',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      // Dr. Okafor selects the step and writes the note.
+      instance: INSTANCE_ID,
+      actions: [
+        { type: { selector: '[data-send-back-comment]', text: COMMENT } },
+        { click: '[data-send-back]' },
+        { expectSelector: '[data-not-readable]' },
+      ],
+    },
+    {
+      // Sam sees the note above the form, corrects the summary and submits.
+      instance: INSTANCE_ID,
+      steps: 2,
+      actions: [
+        { expectText: { selector: '[data-note-comment]', text: COMMENT } },
+        { fill: { field: 'summary', value: CORRECTION.summary } },
+        { expectText: { selector: '[data-sync-for="summary"]', text: 'Synced' } },
+        { click: '[data-submit]' },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="unopened"]' },
+      ],
+    },
+    { instance: INSTANCE_ID, actions: [{ click: '[data-claim]' }, { expect: 'Claimed' }] },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-outcome="approve"]' },
+        { expectSelector: '[data-tracker-step="registrar"][data-tracker-state="unopened"]' },
+      ],
+    },
+    { instance: INSTANCE_ID, actions: [{ click: '[data-claim]' }, { expect: 'Claimed' }] },
+    {
+      // Jordan may only send back: no Approve control, and the send back with a note.
+      instance: INSTANCE_ID,
+      actions: [
+        { expectSelector: '[data-outcome="send_back"]' },
+        { type: { selector: '[data-send-back-comment]', text: JORDAN_COMMENT } },
+        { click: '[data-send-back]' },
+        { expectSelector: '[data-tracker-step="advisor"][data-tracker-state="sent-back"]' },
+      ],
+    },
+  ],
+})

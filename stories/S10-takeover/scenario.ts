@@ -22,6 +22,7 @@ import {
   declared,
   definitionV1,
   directory,
+  exampleTeamState,
   FLOW,
   flow,
   grantsOfPerson,
@@ -34,6 +35,9 @@ import {
   SAM,
   SLUG,
   samValues,
+  seedApproved,
+  seedClaimed,
+  seedSubmitted,
   setupSteps,
   stepResource,
 } from '../example-flow.js'
@@ -257,3 +261,129 @@ export const requires: Requirements = (step, index) => {
 
 /** The registrar step of the story, for the tests. */
 export const TAKEN_STEP = REGISTRAR_STEP
+
+/**
+ * The server state the interface path starts from (#269, S10): the request
+ * at the registrar step, claimed by Lee at time 0.
+ */
+export function guiSeed(): State {
+  return seedClaimed(seedApproved(seedSubmitted(exampleTeamState(), values), values), LEE)
+}
+
+/** The clock of the interface path (I6): two days after Lee's claim, one hour per step. */
+export const guiClock: StepClock = (index) => T0 + 2 * DAY + index * HOUR
+
+/**
+ * The interface path of S10 (STORIES.md): the task shows "Claimed by Lee";
+ * Ana takes it over with a reason; Lee, back early, undoes the takeover from
+ * the timeline.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const depsAt = (index: number): OperationDeps => ({
+    clock: () => guiClock(index),
+    ids: () => `op-${index + 1}`,
+  })
+  const instanceAt = () => {
+    // The steps are placed by the gui clock (I6): the idle time and the undo
+    // period read the events' times.
+    let after = emptyState
+    steps.forEach((step, index) => {
+      after = apply(stepOperation(step, index, guiClock), after)
+    })
+    const log = [...seed.log, ...after.log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S10 gui: no instance')
+    return { instance, log }
+  }
+  const held = instanceAt()
+  const taken = takeover(
+    held.instance,
+    ANA,
+    REASON,
+    guiClock(0),
+    IDLE_PERIOD,
+    4,
+    held.log,
+    depsAt(0)
+  )
+  if (taken.operation === undefined) throw new Error(taken.reason)
+  steps.push(declared(taken.operation, { instanceId: INSTANCE_ID, reason: REASON, version: 4 }))
+
+  const takeoverSeq = seed.log.length + 1
+  const after = instanceAt()
+  const undone = undoAction(
+    after.instance,
+    LEE,
+    takeoverSeq,
+    UNDO_REASON,
+    5,
+    {
+      flow: SLUG,
+      definition: definitionV1,
+      log: after.log,
+      grants: grantsOfPerson(LEE),
+      now: guiClock(1),
+      undoPeriod: 24 * HOUR,
+    },
+    depsAt(1)
+  )
+  if (undone.operation === undefined) throw new Error(undone.reason)
+  steps.push({
+    actor: LEE,
+    type: EVENT_UNDONE,
+    payload: undone.operation.payload,
+    intent: { instanceId: INSTANCE_ID, eventId: takeoverSeq, reason: UNDO_REASON, version: 5 },
+  })
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'takeover',
+  flowSlug: SLUG,
+  bootstrap,
+  membership,
+  clock: guiClock,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      // Ana sees who holds the task and since when, and takes it over.
+      instance: INSTANCE_ID,
+      actions: [
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:lee.',
+          },
+        },
+        { type: { selector: '[data-takeover-reason]', text: REASON } },
+        { click: '[data-takeover]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:ana.',
+          },
+        },
+      ],
+    },
+    {
+      // Lee undoes the takeover from the timeline, with a reason (WF-5).
+      instance: INSTANCE_ID,
+      actions: [
+        { expectSelector: '[data-timeline-type="step.taken-over@1"]' },
+        { type: { selector: '[data-undo-reason]', text: UNDO_REASON } },
+        { click: '[data-undo-action]' },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 4: registrar is opened, in progress by user:lee.',
+          },
+        },
+        { expectSelector: '[data-timeline-type="step.taken-over@1"][data-timeline-undone]' },
+      ],
+    },
+  ],
+})

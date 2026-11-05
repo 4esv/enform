@@ -69,6 +69,8 @@ export type GuiAction =
   | { readonly reload: true }
   /** Wait until the server holds this many events of the step, for an action that posts several. */
   | { readonly expectEvents: number }
+  /** Type a text into the control the selector names (a reason, a comment), when a field name is ambiguous (#269). */
+  | { readonly type: { readonly selector: string; readonly text: string } }
 
 /** One gui step, index-aligned with the scenario step at the same index (STORIES.md). */
 export type GuiStep = {
@@ -80,9 +82,17 @@ export type GuiStep = {
   /**
    * How many engine steps this gui step covers (#262, RT-3): a local-first
    * page posts the start, each edit and the submit from one page load, so one
-   * gui step may cover several engine steps, in order. Absent means one.
+   * gui step may cover several engine steps, in order. Absent means one. Zero
+   * is a page that only reads (S14, #269): it posts nothing and checks what
+   * the page shows.
    */
   readonly steps?: number
+  /**
+   * The principal that opens the page (#269); absent means the actor of the
+   * first engine step the gui step covers. A step that only reads names who
+   * reads (S14: Sam reads the status of his own request).
+   */
+  readonly actor?: string
 }
 
 export type Scenario = {

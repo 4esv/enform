@@ -1,3 +1,4 @@
+import { claim, complete } from '../engine/action.js'
 import { apply, emptyState, type State } from '../engine/apply.js'
 import type { Grant } from '../engine/authorize.js'
 import type { ConditionData } from '../engine/condition.js'
@@ -8,7 +9,8 @@ import { instanceOf, type ProjectedInstance } from '../engine/instances.js'
 import type { ActorId, Operation, OperationDeps } from '../engine/operation.js'
 import { outboxOf } from '../engine/outbox.js'
 import type { TargetResolver } from '../engine/routing.js'
-import { TEAM_CHANGE_TYPE } from '../engine/teams.js'
+import { startInstance, submitInstance } from '../engine/submission.js'
+import { addTeamMember, createTeam, TEAM_CHANGE_TYPE } from '../engine/teams.js'
 import { resolverFor } from '../server/intents.js'
 import type { Membership } from '../tools/harness/directory.js'
 import type { Versioning } from '../tools/harness/operators.js'
@@ -309,4 +311,112 @@ export function instanceAfter(steps: readonly Step[], id: string = INSTANCE_ID):
   const instance = instanceOf(stateAfter(steps).log, id)
   if (instance === undefined) throw new Error(`the steps hold no instance ${id}`)
   return instance
+}
+
+/**
+ * A fixed operation source for a seeded state (I6, #269): the id names the
+ * seeded event and `at` places it. A browser path starts from a seeded
+ * state, and its own steps mint `op-N` from index 0, so a seeded id never
+ * collides with a step's.
+ */
+export function seedDeps(id: string, at = 0): OperationDeps {
+  return { clock: () => at, ids: () => id }
+}
+
+/**
+ * The example flow and the registrar team with its members, as a browser
+ * path starts from them (DF-2, AS-6, #269): `exampleFlowState` plus the team
+ * steps of `setupSteps`, under seeded ids.
+ */
+export function exampleTeamState(definition: FlowDefinition = definitionV1): State {
+  let state = exampleFlowState(definition)
+  const dana = grantsOfPerson(DANA)
+  const created = createTeam(REGISTRAR_TEAM, DANA, seedDeps('seed-team'), dana)
+  state = apply(created.operation, state)
+  let team = created.team
+  for (const member of REGISTRAR_MEMBERS) {
+    const added = addTeamMember(team, member, DANA, seedDeps(`seed-team-${member}`), dana)
+    team = added.team
+    state = apply(added.operation, state)
+  }
+  return state
+}
+
+/** The flow and the definition a seeded request runs on (DF-2). */
+export type SeedFlow = {
+  readonly flow: Flow
+  readonly definition: FlowDefinition
+}
+
+/**
+ * The state after Sam started and submitted his request (S06, ADR 0014,
+ * #269): the request waits at the advisor step, under seeded ids at time 0.
+ */
+export function seedSubmitted(
+  state: State,
+  values: ConditionData,
+  on: SeedFlow = { flow, definition: definitionV1 }
+): State {
+  const resolve = directory(values)
+  const sam = grantsOfPerson(SAM)
+  const started = startInstance(
+    on.flow,
+    INSTANCE_ID,
+    values,
+    SAM,
+    seedDeps('seed-start'),
+    resolve,
+    sam
+  )
+  const next = apply(started.operation, state)
+  const submitted = submitInstance(
+    started.instance,
+    SAM,
+    {},
+    0,
+    { flow: SLUG, definition: on.definition, resolve, grants: sam, owner: SAM },
+    seedDeps('seed-submit')
+  )
+  if (submitted.operation === undefined) throw new Error(submitted.reason)
+  return apply(submitted.operation, next)
+}
+
+/**
+ * The state after Dr. Okafor claimed and approved the request (S09, #269):
+ * with a two-credit overload the chair step is skipped, so the request waits
+ * at the registrar step, under seeded ids at time 0.
+ */
+export function seedApproved(
+  state: State,
+  values: ConditionData,
+  on: SeedFlow = { flow, definition: definitionV1 }
+): State {
+  const resolve = directory(values)
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  if (instance === undefined) throw new Error('the seed holds no instance')
+  const claimed = claim(instance, OKAFOR, instance.version ?? 0, seedDeps('seed-okafor-claim'))
+  if (claimed.operation === undefined) throw new Error(claimed.reason)
+  const next = apply(claimed.operation, state)
+  const held = instanceOf(next.log, INSTANCE_ID)
+  if (held === undefined) throw new Error('the seed holds no instance')
+  const approved = complete(
+    held,
+    OKAFOR,
+    'approve',
+    {},
+    held.version ?? 0,
+    { flow: SLUG, definition: on.definition, grants: grantsOfPerson(OKAFOR), resolve, owner: SAM },
+    seedDeps('seed-okafor-approve')
+  )
+  if (approved.operation === undefined) throw new Error(approved.reason)
+  return apply(approved.operation, next)
+}
+
+/** The state after one more seeded claim by `who` (S09, AS-2, #269). */
+export function seedClaimed(state: State, who: ActorId): State {
+  const instance = instanceOf(state.log, INSTANCE_ID)
+  if (instance === undefined) throw new Error('the seed holds no instance')
+  const claimed = claim(instance, who, instance.version ?? 0, seedDeps(`seed-claim-${who}`))
+  if (claimed.operation === undefined) throw new Error(claimed.reason)
+  return apply(claimed.operation, state)
 }

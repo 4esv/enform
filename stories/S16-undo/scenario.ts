@@ -1,7 +1,9 @@
 import { claim, complete, STEP_CLAIMED, STEP_COMPLETED } from '../../engine/action.js'
+import { apply, type State } from '../../engine/apply.js'
 import { DEFINITION_CHANGED, type FlowDefinition, parse } from '../../engine/definition.js'
 import { DEFINITION_PUBLISHED, type Flow } from '../../engine/flow.js'
 import { contentHash } from '../../engine/instance.js'
+import { instanceOf } from '../../engine/instances.js'
 import type { Operation } from '../../engine/operation.js'
 import {
   ASSIGNMENT_EMAIL,
@@ -24,6 +26,7 @@ import {
   declared,
   depsFor,
   directory,
+  exampleTeamState,
   FLOW,
   grantsOfPerson,
   INSTANCE_ID,
@@ -39,6 +42,10 @@ import {
   SAM,
   SLUG,
   samValues,
+  seedApproved,
+  seedClaimed,
+  seedDeps,
+  seedSubmitted,
   setupSteps,
   stateAfter,
   stepResource,
@@ -359,3 +366,165 @@ export const requires: Requirements = (step, index) => {
       throw new Error(`S16: step ${index + 1} has no requirement (${step.type})`)
   }
 }
+
+/**
+ * The server state the interface path starts from (#269, S16): Lee approved
+ * the wrong request at the registrar step, the archive task reached Priya,
+ * and the worker recorded that her email went out (I13).
+ */
+export function guiSeed(): State {
+  const on = { flow, definition }
+  let state = seedClaimed(
+    seedApproved(seedSubmitted(exampleTeamState(definition), values, on), values, on),
+    LEE
+  )
+  const held = instanceOf(state.log, INSTANCE_ID)
+  if (held === undefined) throw new Error('S16 gui: no instance')
+  const wrong = complete(
+    held,
+    LEE,
+    'approve',
+    {},
+    held.version ?? 0,
+    { flow: SLUG, definition, grants: grantsOfPerson(LEE), resolve: directory(values), owner: SAM },
+    seedDeps('seed-lee-approve')
+  )
+  if (wrong.operation === undefined) throw new Error(wrong.reason)
+  state = apply(wrong.operation, state)
+  return apply(
+    {
+      id: 'seed-email-sent',
+      type: CONNECTOR_CALLED,
+      at: 0,
+      actor: SYSTEM,
+      payload: { ...sentCall, time: 0 },
+    },
+    state
+  )
+}
+
+/**
+ * The interface path of S16 (STORIES.md): Undo stays available in the
+ * timeline; Lee undoes the approval with a reason, the timeline marks the
+ * email that already went out "Already sent", Lee approves the right
+ * request, and Priya records the decision at the final step.
+ */
+function guiSteps(seed: State): readonly Step[] {
+  const steps: Step[] = []
+  const resolve = directory(values)
+  const instanceAt = () => {
+    const log = [...seed.log, ...stateAfter(steps).log].map((event, index) => ({
+      ...event,
+      seq: index + 1,
+    }))
+    const instance = instanceOf(log, INSTANCE_ID)
+    if (instance === undefined) throw new Error('S16 gui: no instance')
+    return { instance, log }
+  }
+  // The approval is the seed's last event but one: the call record follows it.
+  const approveSeq = seed.log.length - 1
+  const before = instanceAt()
+  const undone = undoAction(
+    before.instance,
+    LEE,
+    approveSeq,
+    REASON,
+    5,
+    {
+      flow: SLUG,
+      definition,
+      log: before.log,
+      grants: grantsOfPerson(LEE),
+      now: goldenClock(0),
+      undoPeriod: UNDO_PERIOD,
+    },
+    depsFor(0)
+  )
+  if (undone.operation === undefined) throw new Error(undone.reason)
+  steps.push(
+    declaredUndo(undone.operation, {
+      instanceId: INSTANCE_ID,
+      eventId: approveSeq,
+      reason: REASON,
+      version: 5,
+    })
+  )
+  const leeContext = { flow: SLUG, definition, grants: grantsOfPerson(LEE), resolve, owner: SAM }
+  const right = complete(instanceAt().instance, LEE, 'approve', {}, 6, leeContext, depsFor(1))
+  if (right.operation === undefined) throw new Error(right.reason)
+  steps.push(
+    declared(right.operation, {
+      instanceId: INSTANCE_ID,
+      version: 6,
+      outcome: 'approve',
+      values: {},
+    })
+  )
+  const priyaClaim = claim(instanceAt().instance, PRIYA, 7, depsFor(2))
+  if (priyaClaim.operation === undefined) throw new Error(priyaClaim.reason)
+  steps.push(declared(priyaClaim.operation, { instanceId: INSTANCE_ID, expectedVersion: 7 }))
+  const recorded = complete(
+    instanceAt().instance,
+    PRIYA,
+    RECORD,
+    {},
+    8,
+    { flow: SLUG, definition, grants: storyGrantsOf(PRIYA), resolve, owner: SAM },
+    depsFor(3)
+  )
+  if (recorded.operation === undefined) throw new Error(recorded.reason)
+  steps.push(
+    declared(recorded.operation, {
+      instanceId: INSTANCE_ID,
+      version: 8,
+      outcome: RECORD,
+      values: {},
+    })
+  )
+  return steps
+}
+
+export const guiGolden = scenario({
+  slug: 'undo',
+  flowSlug: SLUG,
+  bootstrap: storyGrants,
+  membership,
+  steps: guiSteps(guiSeed()),
+  gui: [
+    {
+      // Lee undoes the approval from the timeline with a reason; the email
+      // that already went out is marked "Already sent" (A2).
+      instance: INSTANCE_ID,
+      actions: [
+        { expectSelector: '[data-timeline-type="step.completed@1"] [data-undo-action]' },
+        { type: { selector: '[data-undo-reason]', text: REASON } },
+        { click: '[data-undo-action]' },
+        { expectSelector: '[data-timeline-type="step.completed@1"][data-timeline-undone]' },
+        { expectText: { selector: '[data-already-sent]', text: 'Already sent' } },
+        {
+          expectText: {
+            selector: '[data-status-line]',
+            text: 'Step 4 of 5: registrar is opened, in progress by user:lee.',
+          },
+        },
+      ],
+    },
+    {
+      instance: INSTANCE_ID,
+      actions: [
+        { click: '[data-outcome="approve"]' },
+        { expectSelector: '[data-tracker-step="archive"][data-tracker-state="unopened"]' },
+      ],
+    },
+    { instance: INSTANCE_ID, actions: [{ click: '[data-claim]' }, { expect: 'Claimed' }] },
+    {
+      // The final step: once recorded, nothing on the instance can be undone (WF-5).
+      instance: INSTANCE_ID,
+      actions: [
+        { click: `[data-outcome="${RECORD}"]` },
+        { expectText: { selector: '[data-status-line]', text: 'Done: all 5 steps completed.' } },
+        { expectText: { selector: '[data-undo-count]', text: '0' } },
+      ],
+    },
+  ],
+})
