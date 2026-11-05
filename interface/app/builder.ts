@@ -193,6 +193,8 @@ type BuilderState = {
   readonly ids: () => string
   title: string | undefined
   draftVersion: number
+  /** The hash of the draft the model was read from, so a save names its base and merges (DF-3, S03). */
+  draftHash: string | undefined
   model: BuilderModel
   /**
    * The principals that hold `instance.start` on the flow (#232). A `starter`
@@ -274,6 +276,7 @@ export async function mountBuilder(options: BuilderOptions): Promise<BuilderHand
     ids: options.ids,
     title: summary?.title,
     draftVersion: draft.version,
+    draftHash: draft.draftHash,
     model: readModel(draft.definition),
     starters: startersOf(grants, options.slug),
     grants: new Map(),
@@ -322,6 +325,7 @@ export async function mountBuilder(options: BuilderOptions): Promise<BuilderHand
         entry?.publishedVersion !== state.publishedVersion
       if (!changed) return false
       state.draftVersion = fresh.version
+      state.draftHash = fresh.draftHash
       state.loaded = loaded
       state.model = readModel(fresh.definition)
       state.title = entry?.title
@@ -1731,8 +1735,18 @@ async function saveDraft(state: BuilderState): Promise<void> {
   const status = statusOf(state)
   const definition = writeDefinition(state.model)
   try {
-    const written = await writeDraft({ version: state.draftVersion, definition }, state.slug)
+    // The write names the draft it was based on, so a draft another person
+    // saved since merges with this one instead of being replaced (DF-3, S03).
+    const written = await writeDraft(
+      {
+        version: state.draftVersion,
+        definition,
+        ...(state.draftHash === undefined ? {} : { baseHash: state.draftHash }),
+      },
+      state.slug
+    )
     state.draftVersion = written.version
+    state.draftHash = written.draftHash
     state.loaded = JSON.stringify(written.definition ?? definition)
     state.dirty = false
     status.textContent = `Saved draft version ${written.version}`
@@ -1753,7 +1767,9 @@ async function publishDraft(state: BuilderState): Promise<void> {
     }
     // The next draft publishes as the next version, so a second save and
     // publish are based on the version the server now names (I5).
-    state.draftVersion = (await readDraft(state.slug)).version
+    const fresh = await readDraft(state.slug)
+    state.draftVersion = fresh.version
+    state.draftHash = fresh.draftHash
     state.publishedVersion = published.version
     state.dirty = false
   } catch (error: unknown) {
@@ -1802,6 +1818,7 @@ async function showWriteError(
   if (error instanceof RequestRefused && error.status === 409) {
     const fresh = await readDraft(state.slug)
     state.draftVersion = fresh.version
+    state.draftHash = fresh.draftHash
     state.loaded = JSON.stringify(fresh.definition ?? null)
     state.model = readModel(fresh.definition)
     state.dirty = false
