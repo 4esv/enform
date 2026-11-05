@@ -17,7 +17,15 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['**/*.test.ts'],
-          exclude: ['node_modules/**', 'invariants/**', 'stories/**', 'integration/**'],
+          // A linked worktree under .claude/ or a nested node_modules is not this
+          // checkout's suite (AGENTS.md: a delegated lane works in its own tree).
+          exclude: [
+            '**/node_modules/**',
+            '**/.claude/**',
+            'invariants/**',
+            'stories/**',
+            'integration/**',
+          ],
         },
       },
       { test: { name: 'invariants', include: ['invariants/**/*.test.ts'] } },
