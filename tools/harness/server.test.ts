@@ -4,6 +4,7 @@ import { apply, emptyState, type State } from '../../engine/apply.js'
 import { createFlow, publish, publishedFlow, push } from '../../engine/flow.js'
 import { addGrant } from '../../engine/grants.js'
 import {
+  flowState,
   INSTANCE_ID,
   resolve,
   SLUG,
@@ -395,4 +396,51 @@ test('#76 the api-mode server reads one instance and refuses the rest (I8)', asy
       expect(await missing.json()).toEqual({ error: 'not found' })
     }
   )
+})
+
+test.fails('#256 I1 a retry of an applied intent answers the applied event and resolves nothing again', async () => {
+  // A client whose first answer was lost sends the same intent again (I1).
+  // The second delivery is the same change: the server answers the event
+  // the log holds, with the same seq, and the log does not grow. A claim
+  // resolved a second time would be refused as already held, so the server
+  // must not resolve it again.
+  const api = startApi(flowState(), { resolve, bootstrap: samGrants })
+  const server = api.server
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const base = `http://127.0.0.1:${api.port()}`
+    const post = (body: unknown) =>
+      fetch(`${base}/api/v1/operations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    const start = {
+      id: 'start-1',
+      type: 'instance.started@1',
+      at: 1,
+      actor: 'user:sam',
+      payload: { flow: SLUG, instanceId: INSTANCE_ID, values: {} },
+    }
+    expect((await post(start)).status).toBe(201)
+    const submit = {
+      id: 'submit-1',
+      type: 'instance.submitted@1',
+      at: 2,
+      actor: 'user:sam',
+      payload: { instanceId: INSTANCE_ID, version: 0, values: { summary: 'hello' } },
+    }
+    const first = await post(submit)
+    expect(first.status).toBe(201)
+    const event = (await first.json()) as { seq: number }
+    const before = api.state().log.length
+    const again = await post(submit)
+    expect(again.status, await again.clone().text()).toBe(201)
+    expect(((await again.json()) as { seq: number }).seq).toBe(event.seq)
+    expect(api.state().log).toHaveLength(before)
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve()))
+    )
+  }
 })
