@@ -41,6 +41,7 @@ docker compose -f deploy/compose.yaml exec server \
 | `ENFORM_SMTP_URL`, `ENFORM_MAIL_FROM` | `smtp://mailpit:1025`, `enform@localhost` | The mail transport and sender. |
 | `ENFORM_SESSION_IDLE_MINUTES`, `ENFORM_SESSION_ABSOLUTE_HOURS` | `30`, `12` | The browser session limits. |
 | `ENFORM_SESSION_ENCRYPTION_KEY` | written by `enform init` | A 32-byte key in base64 that seals stored refresh tokens. |
+| `ENFORM_DIRECTORY_SYNC_SECONDS` | `300` | How often the worker synchronizes the accounts with the directory; `0` disables the schedule. |
 | `ENFORM_LOG_LEVEL` | `info` | The log level. |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT` | `enform`, `enform`, `enform`, `5432` | The PostgreSQL service. |
 | `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_DB` | `admin`, `admin`, `keycloak` | The Keycloak service. |

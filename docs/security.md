@@ -30,7 +30,7 @@ Every rule and every validation runs again on the server at each submission. The
 
 Every change is attributed, versioned and appended to one log in one global order. Nothing is edited in place and nothing is deleted: an undo adds a compensating event. The log is the audit record, and the timeline and the change feed are views of it. Reads of the log are authorized per event: a person reads the events of the instances they may read, the configuration changes of the flows they may follow, and everything with `org.grants`.
 
-The one exception is **redaction**: a legal deletion is a redaction event that requires `org.redact`, is attributed, and is not reversible, by design.
+The one exception the design reserves is **redaction**: a legal deletion is a redaction event that requires `org.redact`, is attributed, and is not reversible. The event type is defined; no command or route issues it yet.
 
 ## Dry runs
 
@@ -38,7 +38,7 @@ A dry run stores nothing of its run and never shows in live views. Running as an
 
 ## Rules
 
-Conditions are JSON expression trees evaluated by the engine. A TypeScript rule is one node type of the same tree and runs in a sandbox with CPU, memory and time limits and no network access.
+Conditions are JSON expression trees evaluated by a pure function of the engine: no I/O, no clock, no network. The TypeScript rule node with its sandbox is part of the design (ADR 0008) and not yet in the engine.
 
 ## Deployment
 

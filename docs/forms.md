@@ -57,9 +57,9 @@ A step's **skip when** condition uses the same expression format and skips the w
 
 ## One expression format
 
-Every condition is a JSON expression tree in the JSON Logic form. The visual condition builder writes it ("Skip this step when [Overload credits] [≤] [2]"), and a developer writes it in the file. The two are the same tree, so a condition written in the builder round-trips through `enform flow pull` and back. The supported operators are the comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`), `and`, `or`, `!`, `in` and `var`. A tree the builder cannot show as a sentence is shown as JSON and kept intact.
+Every condition is a JSON expression tree in the JSON Logic form. The visual condition builder writes it ("Skip this step when [Overload credits] [≤] [2]"), and a developer writes it in the file. The two are the same tree, so a condition written in the builder round-trips through `enform flow pull` and back. The engine evaluates a path read (`var`), the comparisons (`==`, `===`, `!=`, `!==`, `<`, `<=`, `>`, `>=`), the logic operators (`and`, `or`, `not`, `if`, `!!`) and arithmetic (`+`, `-`, `*`, `/`, `%`). An unknown operator or a path the data does not have is an error, never a silent false. The condition builder draws comparisons, all-of, any-of and not; a tree it cannot draw is shown as JSON and kept intact.
 
-A TypeScript rule is one node type of the same tree and runs in a sandbox with CPU, memory and time limits and no network access.
+A TypeScript rule as one more node type of the same tree, run in a sandbox with CPU, memory and time limits and no network access, is part of the design (ADR 0008) and not yet in the engine.
 
 ## Validation
 
