@@ -428,8 +428,11 @@ test('#244 VT-2 a send back moves the tracker to the target step with the commen
 
   // A send back to the request form makes the instance a draft again (ADR
   // 0014), so its starter reads it.
-  const moved = await readAs(await passwordToken(config, sam.email, sam.password), instance.id)
-  const log = await readLogAs(token)
+  const samToken = await passwordToken(config, sam.email, sam.password)
+  const moved = await readAs(samToken, instance.id)
+  // The log read is authorized the same way (#256, I8): the draft's events
+  // are the starter's to read, so the expected times come from Sam's read.
+  const log = await readLogAs(samToken)
   const submittedAt = eventAt(log, 'instance.submitted@1', instance.id)
   const sentBackAt = eventAt(log, 'step.sent-back@1', instance.id)
   expect(moved.status.currentStep).toBe('request')

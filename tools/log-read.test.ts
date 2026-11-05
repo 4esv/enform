@@ -70,22 +70,8 @@ function build(): State {
   return apply(sent.operation, state)
 }
 
-test.fails('#256 I8 the log read shows each principal only what it may read', async () => {
-  // The module is named through a variable until it exists, so this expected
-  // failure type-checks (MVP.md 11.1).
-  const moduleName = 'logRead'
-  const { readableLog } = (await import(`../engine/${moduleName}.js`)) as unknown as {
-    readableLog: (
-      log: State['log'],
-      actor: string,
-      options: {
-        grants: readonly Grant[]
-        resolve?: TargetResolver
-        instanceId?: string
-        limit?: number
-      }
-    ) => readonly { seq: number }[]
-  }
+test('#256 I8 the log read shows each principal only what it may read', async () => {
+  const { readableLog } = await import('../engine/logRead.js')
   const state = build()
   const all = state.log.map((event) => event.seq)
   const types = (events: readonly { seq: number }[]) =>

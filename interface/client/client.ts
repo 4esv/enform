@@ -897,8 +897,12 @@ export async function readInstanceTimeline(
   return (await response.json()) as readonly TimelineEntry[]
 }
 
-export async function readLog(): Promise<Log> {
-  const url = `${configured().baseUrl}/api/v1/log`
+export async function readLog(instance?: string, limit?: number): Promise<Log> {
+  const query = new URLSearchParams()
+  if (instance !== undefined) query.set('instance', String(instance))
+  if (limit !== undefined) query.set('limit', String(limit))
+  const search = query.size === 0 ? '' : `?${query}`
+  const url = `${configured().baseUrl}/api/v1/log${search}`
   const response = await fetch(url, {
     method: 'GET',
     headers: headers(),

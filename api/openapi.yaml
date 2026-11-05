@@ -144,7 +144,28 @@ paths:
     get:
       operationId: readLog
       summary: Read the append-only log
-      description: The single sequence of all events, in one global order (I4).
+      description: >-
+        The single sequence of all events, in one global order (I4), as the
+        signed-in principal may read it (I8): the events of the instances it
+        may read (its own, the ones it is assigned to, the flows it holds
+        `instance.read` on; a draft stays private to its starter), the
+        configuration changes of the flows it holds `instance.timeline` on,
+        and everything with `org.grants` on `org`. `instance` keeps one
+        instance's events and `limit` the newest ones (S16).
+      parameters:
+        - name: instance
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Only the events of this instance (DX-1).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Only the newest events, this many.
       responses:
         '200':
           description: The ordered events of the log
@@ -158,8 +179,11 @@ paths:
       summary: Read the state rebuilt from the log
       description: >-
         The derived state is rebuilt from the log (I4), so it is reproducible
-        from the same sequence of events.
+        from the same sequence of events. It is the organization's: the read
+        needs `org.grants` on `org` (I8).
       responses:
+        '403':
+          description: The principal holds no `org.grants` on `org`.
         '200':
           description: The state rebuilt from the log
           content:

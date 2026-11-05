@@ -44,6 +44,7 @@ import {
   STARTER_DEFINITION,
 } from '../engine/flow.js'
 import { instanceOf, readInstance, readInstanceStep } from '../engine/instances.js'
+import { readableLog } from '../engine/logRead.js'
 import type { Log, Operation, OperationDeps } from '../engine/operation.js'
 import { renderInstancePdf } from '../engine/pdf.js'
 import type { TargetResolver } from '../engine/routing.js'
@@ -581,16 +582,41 @@ export function createApp(config: Config, pool: Pool): Hono {
     return serveOperation(c, pool, config, auth, body)
   })
 
+  // The log read is authorized (I8, #256): the engine keeps the events of the
+  // instances the principal may read, the configuration changes of the flows
+  // it holds instance.timeline on, and everything for org.grants. The
+  // `instance` and `limit` queries serve `enform log` (S16, DX-3).
   app.get('/api/v1/log', async (c) => {
     const auth = await authenticate(c, pool, config)
     if (auth === undefined) return unauthorized(c)
-    return c.json(await readLog(pool))
+    const log = await readLog(pool)
+    const instanceId = nonEmpty(c.req.query('instance'))
+    const limitQuery = nonEmpty(c.req.query('limit'))
+    const limit = limitQuery === undefined ? undefined : Number(limitQuery)
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+      return c.json({ error: 'limit must be a non-negative integer' }, 400)
+    }
+    const teamMembers = await teamMembersFor(pool, log)
+    const groupMembers = await groupMembersFor(config)
+    const resolve = resolverFor(undefined, {}, teamMembers, groupMembers)
+    return c.json(
+      readableLog(log, auth.principal.id, {
+        grants: grantsFor(log, auth.principal),
+        resolve,
+        ...(instanceId === undefined ? {} : { instanceId }),
+        ...(limit === undefined ? {} : { limit }),
+      })
+    )
   })
 
+  // The whole derived state is the organization's (I8): org.grants on org.
   app.get('/api/v1/state', async (c) => {
     const auth = await authenticate(c, pool, config)
     if (auth === undefined) return unauthorized(c)
     const log = await readLog(pool)
+    if (!authorize(grantsFor(log, auth.principal), 'org.grants', 'org')) {
+      return c.json({ error: 'the state needs org.grants on org' }, 403)
+    }
     return c.json({ applied: log.map((event) => event.operationId), log })
   })
 
