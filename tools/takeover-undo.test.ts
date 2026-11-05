@@ -91,7 +91,7 @@ function current(state: State) {
   return instance
 }
 
-test.fails('#47 a holder may not take over from himself, and the previous holder may undo a takeover', () => {
+test('#47 a holder may not take over from himself, and the previous holder may undo a takeover', () => {
   let state = claimedState()
   const later = T0 + 2 + 2 * 24 * HOUR
 

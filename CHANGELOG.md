@@ -120,6 +120,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The
 
 ### Fixed
 
+- A takeover by the holder of the task is refused, and the person a takeover took the task from may undo it, like its actor and a flow owner (#47, S10, AS-3, WF-5).
 - An intent the engine refuses for what the principal may do (a missing start scope, a claim by a non-assignee, a completion by someone who does not hold the step, an outcome the holder's grants do not cover) answers 403, not 400 or 409 (#256, I8, AC-1, AC-4).
 - A retry of a client intent with the id of an applied operation answers the applied event and resolves nothing again, on the release server and in the harness (#256, I1).
 - The escalation adds its targets and an undo reschedules the closed task's timers: the `timer.fired@1` escalation event folds its `adds` labels into the instance's assignees and the task members without removing the current owner, with `user:<id>` and `team:<name>` resolved through the team membership and the group directory named as the remaining gap, and `instance.undone@1` schedules the restored step's timers again from its settings and the undo time, re-arming a cancelled reminder and inserting the next escalation occurrence without duplicating a row. A read and a rebuild reproduce both (S12, S13, SE-4, SE-5, WF-5, I2, I3, I4) (#250, #218).

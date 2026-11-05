@@ -185,6 +185,15 @@ export const UNDOABLE_TYPES: readonly string[] = [
 /** The event type of a completion, as a literal for the same reason as UNDOABLE_TYPES. */
 const COMPLETED = 'step.completed@1'
 
+/** The event type of a takeover, as a literal for the same reason as UNDOABLE_TYPES. */
+const TAKEN_OVER = 'step.taken-over@1'
+
+/** The previous holder that a takeover names, for the refusal's reason (S10, WF-5). */
+function takenFromHint(event: Event): string {
+  const from = event.payload.from
+  return event.type === TAKEN_OVER && typeof from === 'string' ? `, ${from}` : ''
+}
+
 /** The email connector, as a literal: submission.ts imports the projection, which imports this module. */
 const EMAIL = 'connector-smtp'
 
@@ -234,7 +243,8 @@ export type UndoActionResult = UndoResult & { readonly status?: 403 | 409 }
  * the instance's own or not a manual action (MVP.md 5.4), an event already
  * undone, an action under a later standing action (the undo reverses the
  * newest change only, so no state is invented), an actor who neither made the
- * action nor owns the flow (`task.reassign`, I8), an undo after the flow's
+ * action, nor was the holder a takeover took it from (S10), nor owns the flow
+ * (`task.reassign`, I8), an undo after the flow's
  * period (WF-5), and any undo once the instance completed the flow's final
  * step (S16). It then appends the compensating event through `undo`, with the
  * instance's connector calls deciding which side effects already occurred
@@ -283,11 +293,14 @@ export function undoAction(
     }
   }
   const owner = authorize(context.grants, 'task.reassign', `flow:${context.flow}`)
-  if (event.actor !== actor && !owner) {
+  // A takeover is undone by the person it was taken from as well (S10, WF-5):
+  // Lee comes back and keeps his task without an administrator.
+  const takenFrom = event.type === TAKEN_OVER && event.payload.from === actor
+  if (event.actor !== actor && !owner && !takenFrom) {
     return {
       accepted: false,
       status: 403,
-      reason: `${actor} may not undo event ${eventId}: only ${event.actor ?? 'its actor'} or a flow owner may (WF-5)`,
+      reason: `${actor} may not undo event ${eventId}: only ${event.actor ?? 'its actor'}${takenFromHint(event)} or a flow owner may (WF-5)`,
     }
   }
   if (context.now - event.at > context.undoPeriod) {
