@@ -539,8 +539,37 @@ function fold(
       return advanced(reopened(instance, event))
     case TIMER_FIRED:
       return escalated(instance, event, log)
+    case CONNECTOR_CALL:
+      return recorded(instance, event)
     default:
       return instance
+  }
+}
+
+/**
+ * The event type of a recorded connector call, as a literal: timeline.ts
+ * imports the action modules that import this projection (an ESM cycle),
+ * and the event types are a public surface (MVP.md 9.1), so the literal
+ * cannot drift.
+ */
+const CONNECTOR_CALL = 'connector.called@1'
+
+/**
+ * Fold the worker's record of a connector call into the instance's calls
+ * (I13, A2, S16, #256): an undo of an action reads them to mark the side
+ * effects that already occurred as "Already sent" rather than reverse them.
+ * The version does not advance: a record changes no step state (I5). A
+ * record that does not name an operation, a time and an outcome is not a
+ * call and folds nothing.
+ */
+function recorded(instance: ProjectedInstance, event: Event): ProjectedInstance {
+  const { operation, time, outcome } = event.payload
+  if (typeof operation !== 'string' || typeof time !== 'number' || typeof outcome !== 'string') {
+    return instance
+  }
+  return {
+    ...instance,
+    connectorCalls: [...instance.connectorCalls, { operation, time, outcome }],
   }
 }
 

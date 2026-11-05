@@ -78,7 +78,7 @@ test('#53 the S16 golden path runs in api, cli and dry mode: the undo is a compe
   expect(tail.every((event) => event.payload.instanceId === INSTANCE_ID)).toBe(true)
 }, 60_000)
 
-test.fails('#53 A2 the undo marks the email that already went out "Already sent" and notifies the person it reached (S16)', () => {
+test('#53 A2 the undo marks the email that already went out "Already sent" and notifies the person it reached (S16)', () => {
   // The worker recorded the call for the assignment email to Priya before
   // the undo (I13), so the engine does not reverse it: it marks it and
   // notifies Priya in the same operation as the compensating event (I2).
