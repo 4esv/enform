@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.5",
-    "hono": "4.13.13",
+    "hono": "4.13.16",
     "nodemailer": "10.2.1",
     "openid-client": "6.8.8",
     "pdfkit": "0.20.2",
